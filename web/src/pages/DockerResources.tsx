@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { ReactNode, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { ago, bytes, del, get, post } from '../api'
 import { useCan } from '../auth'
@@ -8,6 +8,30 @@ import { FileBrowser } from '../components/files'
 
 type Tab = 'containers' | 'images' | 'volumes' | 'networks' | 'registries'
 
+// Disk-usage card: total, the reclaimable share as a bar, and prune actions pinned to the bottom
+// so every card in the row lines up.
+function DfCard({ icon, title, count, value, part, total, partText, danger, calm, actions }: {
+  icon: string; title: string; count: string; value: ReactNode; part: number; total: number; partText: string
+  danger?: boolean; calm?: boolean; actions?: ReactNode
+}) {
+  const pct = total > 0 ? Math.min(100, Math.round((part / total) * 100)) : 0
+  return (
+    <div className="card df-card">
+      <div className="df-head">
+        <span className="df-icon"><Icon name={icon} size={16} /></span>
+        <span className="df-title">{title}</span>
+        <span className="df-count">{count}</span>
+      </div>
+      <div className="big">{value}</div>
+      <div className="df-meter">
+        <div className="df-meter-text"><span>{partText}</span>{total > 0 && <span>{pct}%</span>}</div>
+        <div className={'track' + (danger ? ' err' : calm ? ' calm' : ' warn')}><div style={{ width: pct + '%' }} /></div>
+      </div>
+      {actions && <div className="df-actions">{actions}</div>}
+    </div>
+  )
+}
+
 export default function DockerResources() {
   const [params, setParams] = useSearchParams()
   const tab = (params.get('tab') as Tab) || 'containers'
@@ -15,34 +39,29 @@ export default function DockerResources() {
   const { data: df, reload: reloadDf } = useLoad(() => get<any>('/docker/df'), [])
   const [prune, setPrune] = useState<null | { kind: string; all: boolean; title: string; text: string }>(null)
   const toast = useToast()
+  const stopped = df ? df.containers - (df.containersRunning ?? 0) : 0
   const tabs: [Tab, string][] = [['containers', '容器'], ['images', '镜像'], ['volumes', '数据卷'], ['networks', '网络']]
   if (can.operator) tabs.push(['registries', '镜像仓库凭据'])
   return (
     <Page title="Docker 资源">
       {df && (
         <div className="grid">
-          <div className="card stat">
-            <span className="label">镜像</span>
-            <div className="big">{bytes(df.images)}</div>
-            <span className="label">可回收 {bytes(df.imagesReclaimable)}</span>
-            {can.admin && <div className="row"><button className="btn btn-sm" onClick={() => setPrune({ kind: 'images', all: false, title: '清理悬空镜像', text: '删除没有标签的悬空镜像。' })}>清理悬空</button><button className="btn btn-sm" onClick={() => setPrune({ kind: 'images', all: true, title: '清理未使用镜像', text: '删除所有未被容器使用的镜像，下次部署需要重新拉取。' })}>清理未使用</button></div>}
-          </div>
-          <div className="card stat">
-            <span className="label">数据卷</span>
-            <div className="big">{bytes(df.volumes)}</div>
-            <span className="label">未被使用 {bytes(df.volumesReclaimable)}</span>
-            {can.admin && <div className="row"><button className="btn btn-sm btn-danger" onClick={() => setPrune({ kind: 'volumes', all: true, title: '清理未使用数据卷', text: '删除所有未挂载到容器的数据卷，其中的数据将永久丢失。停止状态的项目的卷也可能被删除！' })}>清理未使用</button></div>}
-          </div>
-          <div className="card stat">
-            <span className="label">构建缓存</span>
-            <div className="big">{bytes(df.buildCache)}</div>
-            {can.admin && <div className="row"><button className="btn btn-sm" onClick={() => setPrune({ kind: 'build', all: false, title: '清理构建缓存', text: '删除未使用的构建缓存。' })}>清理</button></div>}
-          </div>
-          <div className="card stat">
-            <span className="label">容器</span>
-            <div className="big">{df.containers}</div>
-            {can.admin && <div className="row"><button className="btn btn-sm" onClick={() => setPrune({ kind: 'containers', all: false, title: '清理已停止容器', text: '删除所有已停止的容器。' })}>清理已停止</button></div>}
-          </div>
+          <DfCard icon="image" title="镜像" count={`${df.imageCount ?? 0} 个`} value={bytes(df.images)}
+            part={df.imagesReclaimable} total={df.images} partText={`可回收 ${bytes(df.imagesReclaimable)}`}
+            actions={can.admin && <>
+              <button className="btn btn-sm" onClick={() => setPrune({ kind: 'images', all: false, title: '清理悬空镜像', text: '删除没有标签的悬空镜像。' })}>清理悬空</button>
+              <button className="btn btn-sm" onClick={() => setPrune({ kind: 'images', all: true, title: '清理未使用镜像', text: '删除所有未被容器使用的镜像，下次部署需要重新拉取。' })}>清理未使用</button>
+            </>} />
+          <DfCard icon="volume" title="数据卷" count={`${df.volumeCount ?? 0} 个`} value={bytes(df.volumes)}
+            part={df.volumesReclaimable} total={df.volumes} partText={`未被使用 ${bytes(df.volumesReclaimable)}`} danger
+            actions={can.admin && <button className="btn btn-sm btn-danger" onClick={() => setPrune({ kind: 'volumes', all: true, title: '清理未使用数据卷', text: '删除所有未挂载到容器的数据卷，其中的数据将永久丢失。停止状态的项目的卷也可能被删除！' })}>清理未使用</button>} />
+          <DfCard icon="build" title="构建缓存" count={`${df.buildCacheCount ?? 0} 条`} value={bytes(df.buildCache)}
+            part={df.buildCacheReclaimable ?? df.buildCache} total={df.buildCache} partText={`可回收 ${bytes(df.buildCacheReclaimable ?? df.buildCache)}`}
+            actions={can.admin && <button className="btn btn-sm" onClick={() => setPrune({ kind: 'build', all: false, title: '清理构建缓存', text: '删除未使用的构建缓存。' })}>清理缓存</button>} />
+          <DfCard icon="docker" title="容器" count={`${df.containers} 个`} value={<>{df.containersRunning ?? 0}<small> / {df.containers} 运行中</small></>}
+            part={stopped} total={df.containers} calm
+            partText={`已停止 ${stopped} 个${df.containersReclaimable ? ` · 占用 ${bytes(df.containersReclaimable)}` : ''}`}
+            actions={can.admin && <button className="btn btn-sm" disabled={stopped === 0} onClick={() => setPrune({ kind: 'containers', all: false, title: '清理已停止容器', text: '删除所有已停止的容器。' })}>清理已停止</button>} />
         </div>
       )}
       <Tabs tabs={tabs} value={tab} onChange={(t) => setParams({ tab: t }, { replace: true })} />

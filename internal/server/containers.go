@@ -394,13 +394,28 @@ func (s *Server) handleDockerDF(w http.ResponseWriter, r *http.Request, u *User)
 			}
 		}
 	}
+	var buildUnused int64
 	for _, b := range df.BuildCache {
+		build += b.Size
 		if !b.InUse {
-			build += b.Size
+			buildUnused += b.Size
 		}
 	}
-	return ok(w, map[string]any{"images": images, "imagesReclaimable": imagesUnused, "volumes": volumes, "volumesReclaimable": volumesUnused,
-		"buildCache": build, "containers": len(df.Containers)})
+	var running int
+	var stoppedSize int64
+	for _, c := range df.Containers {
+		if c.State == "running" {
+			running++
+		} else {
+			stoppedSize += c.SizeRw
+		}
+	}
+	return ok(w, map[string]any{
+		"images": images, "imagesReclaimable": imagesUnused, "imageCount": len(df.Images),
+		"volumes": volumes, "volumesReclaimable": volumesUnused, "volumeCount": len(df.Volumes),
+		"buildCache": build, "buildCacheReclaimable": buildUnused, "buildCacheCount": len(df.BuildCache),
+		"containers": len(df.Containers), "containersRunning": running, "containersReclaimable": stoppedSize,
+	})
 }
 
 func (s *Server) handleListImages(w http.ResponseWriter, r *http.Request, u *User) error {

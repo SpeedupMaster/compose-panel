@@ -2,8 +2,8 @@ import { Children, createContext, CSSProperties, Fragment, isValidElement, Keybo
 import { createPortal } from 'react-dom'
 import {
   ChartLine, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Container, Copy, Database, Download, ExternalLink, File, Folder, GitBranch, Globe,
-  HardDriveDownload, KeyRound, Layers, LayoutDashboard, LayoutTemplate, Link, ListChecks, Lock, LogOut, Menu, Pencil, Play, Plug, Plus,
-  RefreshCw, Rocket, RotateCcw, ScrollText, Search, Settings, ShieldCheck, Square, SquareTerminal, Trash2, TriangleAlert, Upload, Users, X,
+  Hammer, HardDrive, HardDriveDownload, KeyRound, Layers, LayoutDashboard, LayoutTemplate, Link, ListChecks, Lock, LogOut, Menu, Pencil, Play, Plug, Plus,
+  Package, RefreshCw, Rocket, RotateCcw, ScrollText, Search, Settings, ShieldCheck, Square, SquareTerminal, Trash2, TriangleAlert, Upload, Users, X,
   type LucideIcon,
 } from 'lucide-react'
 import { ApiError, get, post, streamLines } from '../api'
@@ -854,6 +854,9 @@ export function Select({ value, onChange, children, disabled, style, className, 
 const icons: Record<string, LucideIcon> = {
   overview: LayoutDashboard,
   projects: Layers,
+  image: Package,
+  volume: HardDrive,
+  build: Hammer,
   docker: Container,
   databases: Database,
   backups: HardDriveDownload,
