@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ago, bytes, del, get, post } from '../api'
+import { ago, bytes, dateTime, del, get, post } from '../api'
 import { useCan } from '../auth'
 import { Confirm, Empty, ErrorBox, Field, Icon, Modal, Status, useJobLog, useLoad, useToast } from './ui'
 
@@ -48,7 +48,7 @@ export function BackupNowModal({ source, onClose, onDone }: { source?: BackupSou
       {source ? <div>备份对象：<b>{sourceText(source)}</b></div> : <SourcePicker value={src} onChange={setSrc} sources={sources} />}
       <Field label="存储位置">
         <select className="select" value={sid || ''} onChange={(e) => setStorageId(Number(e.target.value))}>
-          {(storages || []).map((s) => <option key={s.id} value={s.id}>{s.name}（{s.kind === 's3' ? 'S3' : '本地'}）</option>)}
+          {(storages || []).map((s) => <option key={s.id} value={s.id}>{s.name}（{({ s3: 'S3', local: '本地', sftp: 'SFTP', webdav: 'WebDAV' } as Record<string, string>)[s.kind] || s.kind}）</option>)}
         </select>
       </Field>
       <label className="check"><input type="checkbox" checked={encrypt} onChange={(e) => setEncrypt(e.target.checked)} />使用 age 加密</label>
@@ -117,12 +117,15 @@ export function RestoreModal({ backup, onClose }: { backup: any; onClose: () => 
   const [confirm, setConfirm] = useState('')
   const [err, setErr] = useState<unknown>()
   const [busy, setBusy] = useState(false)
-  const unsupported = s.kind === 'panel' || (s.kind === 'database' && backup.format === 'rdb')
+  const isRedis = s.kind === 'database' && backup.format === 'rdb'
+  const unsupported = s.kind === 'panel'
+  const { data: inst } = useLoad(async () => (isRedis ? (await get<any>(`/databases/${s.instanceId}`)).instance : null), [s.instanceId, isRedis])
+  const confirmName = isRedis ? inst?.name || '…' : s.database
   const submit = async () => {
     setBusy(true)
     setErr(undefined)
     try {
-      const r = await post(`/backups/${backup.id}/restore`, { mode, target, confirm })
+      const r = await post(`/backups/${backup.id}/restore`, { mode: isRedis ? 'overwrite' : mode, target, confirm })
       openJob(r.jobId, '恢复 ' + backup.label)
       onClose()
     } catch (e) {
@@ -135,7 +138,7 @@ export function RestoreModal({ backup, onClose }: { backup: any; onClose: () => 
     <Modal
       title="恢复备份"
       onClose={onClose}
-      footer={!unsupported && <><button className="btn" onClick={onClose}>取消</button><button className={'btn ' + (mode === 'overwrite' ? 'btn-danger solid' : 'btn-primary')} disabled={busy || (mode === 'overwrite' && confirm !== s.database)} onClick={submit}>{busy ? '提交中…' : '开始恢复'}</button></>}
+      footer={!unsupported && <><button className="btn" onClick={onClose}>取消</button><button className={'btn ' + (mode === 'overwrite' || isRedis ? 'btn-danger solid' : 'btn-primary')} disabled={busy || ((mode === 'overwrite' || isRedis) && confirm !== confirmName)} onClick={submit}>{busy ? '提交中…' : '开始恢复'}</button></>}
     >
       <dl className="kv">
         <dt>来源</dt><dd>{sourceText(s)}</dd>
@@ -144,7 +147,14 @@ export function RestoreModal({ backup, onClose }: { backup: any; onClose: () => 
         <dt>对象</dt><dd className="mono" style={{ fontSize: 12 }}>{backup.objectKey}</dd>
       </dl>
       {unsupported ? (
-        <div className="alert warn">这类备份不支持在线恢复，请下载后手动恢复（Redis：停止实例后替换 dump.rdb；面板数据：替换 panel.db 后重启面板）。</div>
+        <div className="alert warn">面板数据备份不支持在线恢复，请下载后替换 panel.db 并重启面板。</div>
+      ) : isRedis ? (
+        <>
+          <div className="alert err"><Icon name="alert" /><div>Redis 只能整个实例覆盖恢复：会短暂停止 <b>{confirmName}</b>，用备份的 RDB 替换全部数据并重建 AOF，然后重新启动。开始前面板会自动先备份一次当前数据。</div></div>
+          <Field label={<>输入实例名 <code className="mono">{confirmName}</code> 确认</>}>
+            <input className="input mono" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+          </Field>
+        </>
       ) : (
         <>
           {s.kind === 'database' && (
@@ -193,6 +203,7 @@ export function BackupTable({ list, reload, names }: { list: any[]; reload: () =
               <td>
                 <Status s={b.status} />
                 {b.encrypted && <span className="badge off" style={{ marginLeft: 6 }}><Icon name="lock" size={12} />加密</span>}
+                {b.verifiedAt > 0 && <span className="badge ok" style={{ marginLeft: 6 }} title={'恢复演练通过：' + dateTime(b.verifiedAt)}><Icon name="check" size={12} />已演练</span>}
                 {b.error && <div className="label ellipsis" style={{ maxWidth: 240, color: '#A41E14' }} title={b.error}>{b.error}</div>}
               </td>
               <td className="nowrap muted">{ago(b.startedAt)}</td>

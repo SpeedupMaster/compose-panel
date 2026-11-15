@@ -1,19 +1,22 @@
 import { useState } from 'react'
 import { ago, dateTime, get, post } from '../api'
 import { useCan } from '../auth'
+import { CronTasks } from './ProjectExtras'
 import { Card, Empty, ErrorBox, JobStatus, Loading, Page, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
 
 export default function Jobs() {
-  const [tab, setTab] = useState<'jobs' | 'schedules'>('jobs')
+  const [tab, setTab] = useState<'jobs' | 'cron' | 'schedules'>('jobs')
   return (
     <Page title="任务中心" sub="部署、备份、恢复等耗时操作都在这里排队执行">
-      <Tabs tabs={[['jobs', '任务'], ['schedules', '定时计划']]} value={tab} onChange={setTab} />
-      {tab === 'jobs' ? <JobList /> : <Schedules />}
+      <Tabs tabs={[['jobs', '任务'], ['cron', '容器定时任务'], ['schedules', '全部计划']]} value={tab} onChange={setTab} />
+      {tab === 'jobs' && <JobList />}
+      {tab === 'cron' && <CronTasks />}
+      {tab === 'schedules' && <Schedules />}
     </Page>
   )
 }
 
-const kinds: [string, string][] = [['', '全部类型'], ['deploy', '部署'], ['backup', '备份'], ['project', '项目操作'], ['database', '数据库'], ['system', '系统']]
+const kinds: [string, string][] = [['', '全部类型'], ['deploy', '部署'], ['backup', '备份'], ['project', '项目操作'], ['database', '数据库'], ['cron', '定时任务'], ['images', '镜像检查'], ['system', '系统']]
 
 function JobList() {
   const [status, setStatus] = useState('')
@@ -74,7 +77,7 @@ function Schedules() {
             {data.items.map((s: any) => (
               <tr key={s.key}>
                 <td>{s.name}{s.target && <div className="label">{s.target}</div>}</td>
-                <td>{s.kind === 'backup' ? '备份策略' : '系统'}</td>
+                <td>{({ backup: '备份策略', cron: '容器定时任务', drill: '恢复演练' } as Record<string, string>)[s.kind] || '系统'}</td>
                 <td className="mono">{s.spec}</td>
                 <td className="muted nowrap">{s.prev ? ago(s.prev) : '—'}</td>
                 <td className="muted nowrap">{s.next ? dateTime(s.next) : '—'}</td>

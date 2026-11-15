@@ -32,12 +32,13 @@ type EnvVar struct {
 }
 
 type ProjectOptions struct {
-	Pull          *bool    `json:"pull,omitempty"`
-	Wait          *bool    `json:"wait,omitempty"`
-	WaitTimeout   int      `json:"waitTimeout,omitempty"`
-	AutoRollback  *bool    `json:"autoRollback,omitempty"`
-	ConfigFiles   []string `json:"configFiles,omitempty"` // imported projects
-	SkipNetworks  bool     `json:"skipNetworks,omitempty"`
+	Pull         *bool    `json:"pull,omitempty"`
+	Wait         *bool    `json:"wait,omitempty"`
+	WaitTimeout  int      `json:"waitTimeout,omitempty"`
+	AutoRollback *bool    `json:"autoRollback,omitempty"`
+	ConfigFiles  []string `json:"configFiles,omitempty"` // imported projects
+	SkipNetworks bool     `json:"skipNetworks,omitempty"`
+	AutoUpdate   bool     `json:"autoUpdate,omitempty"` // redeploy when a newer image is found
 }
 
 func boolOr(p *bool, def bool) bool {
@@ -187,32 +188,32 @@ func validateEnv(env []EnvVar) error {
 // ---------- list / get ----------
 
 type projectSummary struct {
-	ID          int64    `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Kind        string   `json:"kind"`
-	Source      string   `json:"source"`
-	Status      string   `json:"status"` // running | partial | stopped | error | empty
-	Running     int      `json:"running"`
-	Total       int      `json:"total"`
-	Unhealthy   int      `json:"unhealthy"`
-	Domains     []string `json:"domains"`
+	ID          int64          `json:"id"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Kind        string         `json:"kind"`
+	Source      string         `json:"source"`
+	Status      string         `json:"status"` // running | partial | stopped | error | empty
+	Running     int            `json:"running"`
+	Total       int            `json:"total"`
+	Unhealthy   int            `json:"unhealthy"`
+	Domains     []string       `json:"domains"`
 	LastDeploy  *deploySummary `json:"lastDeploy"`
-	UpdatedAt   int64    `json:"updatedAt"`
+	UpdatedAt   int64          `json:"updatedAt"`
 }
 
 type deploySummary struct {
-	ID        int64  `json:"id"`
-	Number    int    `json:"number"`
-	Status    string `json:"status"`
-	Trigger   string `json:"trigger"`
-	Actor     string `json:"actor"`
-	CommitSHA string `json:"commitSha"`
-	CommitMsg string `json:"commitMsg"`
-	JobID     string `json:"jobId"`
-	Error     string `json:"error"`
-	CreatedAt int64  `json:"createdAt"`
-	FinishedAt int64 `json:"finishedAt"`
+	ID         int64  `json:"id"`
+	Number     int    `json:"number"`
+	Status     string `json:"status"`
+	Trigger    string `json:"trigger"`
+	Actor      string `json:"actor"`
+	CommitSHA  string `json:"commitSha"`
+	CommitMsg  string `json:"commitMsg"`
+	JobID      string `json:"jobId"`
+	Error      string `json:"error"`
+	CreatedAt  int64  `json:"createdAt"`
+	FinishedAt int64  `json:"finishedAt"`
 }
 
 func containerHealth(c docker.Container) string {
@@ -350,16 +351,16 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request, u *U
 }
 
 type containerDTO struct {
-	ID       string         `json:"id"`
-	Name     string         `json:"name"`
-	Service  string         `json:"service"`
-	Project  string         `json:"project"`
-	Image    string         `json:"image"`
-	State    string         `json:"state"`
-	Status   string         `json:"status"`
-	Health   string         `json:"health"`
-	Ports    []docker.Port  `json:"ports"`
-	Created  int64          `json:"created"`
+	ID      string        `json:"id"`
+	Name    string        `json:"name"`
+	Service string        `json:"service"`
+	Project string        `json:"project"`
+	Image   string        `json:"image"`
+	State   string        `json:"state"`
+	Status  string        `json:"status"`
+	Health  string        `json:"health"`
+	Ports   []docker.Port `json:"ports"`
+	Created int64         `json:"created"`
 }
 
 func toContainerDTO(c docker.Container) containerDTO {
@@ -421,6 +422,7 @@ type projectReq struct {
 	Env            []EnvVar       `json:"env"`
 	Options        ProjectOptions `json:"options"`
 	Deploy         bool           `json:"deploy"`
+	Files          []projectFile  `json:"files"` // extra files for inline projects (from templates)
 }
 
 func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request, u *User) error {
@@ -445,6 +447,9 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request, u *
 		return bad("Git 地址不能为空")
 	}
 	if err := validateEnv(req.Env); err != nil {
+		return err
+	}
+	if err := cleanProjectFiles(req.Files); err != nil {
 		return err
 	}
 	if req.GitBranch == "" {
@@ -483,6 +488,11 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request, u *
 		return err
 	}
 	id, _ := res.LastInsertId()
+	if req.Source == "inline" {
+		for _, f := range req.Files {
+			_, _ = s.db.Exec(`INSERT INTO project_files(project_id,path,content) VALUES(?,?,?)`, id, f.Path, f.Content)
+		}
+	}
 	if u.Projects != nil && u.Level < roleAdmin {
 		_, _ = s.db.Exec(`INSERT OR IGNORE INTO user_projects(user_id,project_id) VALUES(?,?)`, u.ID, id)
 	}
@@ -858,32 +868,4 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request, u *User) e
 	id, _ := res.LastInsertId()
 	s.audit(r, u, "project.import", req.Name, req.Workdir, nil)
 	return ok(w, map[string]any{"id": id})
-}
-
-// ---------- templates ----------
-
-type template struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Compose     string   `json:"compose"`
-	Env         []EnvVar `json:"env"`
-	Port        int      `json:"port"`
-	Service     string   `json:"service"`
-}
-
-func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request, u *User) error {
-	return ok(w, []template{
-		{ID: "whoami", Name: "whoami", Description: "最小示例：返回请求信息的 HTTP 服务", Service: "web", Port: 80,
-			Compose: "services:\n  web:\n    image: traefik/whoami:v1.10\n    restart: unless-stopped\n    mem_limit: 64m\n"},
-		{ID: "nginx", Name: "Nginx 静态站点", Description: "挂载 ./html 目录的 Nginx", Service: "web", Port: 80,
-			Compose: "services:\n  web:\n    image: nginx:1.27-alpine\n    restart: unless-stopped\n    mem_limit: 128m\n    volumes:\n      - ./html:/usr/share/nginx/html:ro\n"},
-		{ID: "uptime-kuma", Name: "Uptime Kuma", Description: "自托管的可用性监控", Service: "app", Port: 3001,
-			Compose: "services:\n  app:\n    image: louislam/uptime-kuma:1.23.16\n    restart: unless-stopped\n    mem_limit: 512m\n    volumes:\n      - data:/app/data\nvolumes:\n  data: {}\n"},
-		{ID: "gitea", Name: "Gitea", Description: "轻量 Git 服务（SQLite）", Service: "server", Port: 3000,
-			Compose: "services:\n  server:\n    image: gitea/gitea:1.22\n    restart: unless-stopped\n    mem_limit: 512m\n    environment:\n      USER_UID: \"1000\"\n      USER_GID: \"1000\"\n    volumes:\n      - data:/data\nvolumes:\n  data: {}\n"},
-		{ID: "wordpress", Name: "WordPress + MariaDB", Description: "博客，带独立数据库", Service: "wordpress", Port: 80,
-			Compose: "services:\n  wordpress:\n    image: wordpress:6.6-apache\n    restart: unless-stopped\n    mem_limit: 512m\n    environment:\n      WORDPRESS_DB_HOST: db\n      WORDPRESS_DB_USER: wordpress\n      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}\n      WORDPRESS_DB_NAME: wordpress\n    volumes:\n      - wp:/var/www/html\n    depends_on:\n      db:\n        condition: service_healthy\n  db:\n    image: mariadb:11.4\n    restart: unless-stopped\n    mem_limit: 512m\n    environment:\n      MARIADB_DATABASE: wordpress\n      MARIADB_USER: wordpress\n      MARIADB_PASSWORD: ${DB_PASSWORD}\n      MARIADB_RANDOM_ROOT_PASSWORD: \"1\"\n    volumes:\n      - db:/var/lib/mysql\n    healthcheck:\n      test: [\"CMD\", \"healthcheck.sh\", \"--connect\", \"--innodb_initialized\"]\n      interval: 10s\n      retries: 10\nvolumes:\n  wp: {}\n  db: {}\n",
-			Env: []EnvVar{{Key: "DB_PASSWORD", Value: auth.RandomPassword(24), Secret: true}}},
-	})
 }

@@ -216,12 +216,12 @@ type ContainerJSON struct {
 		}
 	}
 	Config struct {
-		Image      string
-		Tty        bool
-		Cmd        []string
-		Entrypoint []string
-		Env        []string
-		Labels     map[string]string
+		Image       string
+		Tty         bool
+		Cmd         []string
+		Entrypoint  []string
+		Env         []string
+		Labels      map[string]string
 		Healthcheck *struct {
 			Test []string
 		}

@@ -30,6 +30,10 @@ var Events = []struct {
 	{"deploy_failed", "部署失败"},
 	{"deploy_success", "部署成功"},
 	{"container_unhealthy", "容器异常"},
+	{"container_oom", "容器内存溢出（OOM）"},
+	{"image_update", "镜像有新版本"},
+	{"cron_failed", "定时任务失败"},
+	{"restore_drill", "恢复演练失败"},
 	{"backup_failed", "备份失败"},
 	{"cert_expiring", "证书即将过期"},
 	{"disk_high", "磁盘空间不足"},
@@ -177,6 +181,8 @@ func Send(ctx context.Context, hc *http.Client, kind string, c ChannelConfig, ev
 		return doHTTP(hc, req)
 	case "email":
 		return sendMail(c, ev)
+	case "dingtalk", "feishu", "bark":
+		return sendIM(ctx, hc, kind, c, ev)
 	}
 	return fmt.Errorf("unknown channel kind %q", kind)
 }

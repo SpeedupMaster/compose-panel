@@ -14,7 +14,15 @@ export default function Integrations() {
   )
 }
 
-type Target = { id?: number; name: string; kind: 'local' | 's3'; config: any }
+type Target = { id?: number; name: string; kind: 'local' | 's3' | 'sftp' | 'webdav'; config: any }
+const storageKind: Record<string, string> = { s3: 'S3 兼容', local: '本地磁盘', sftp: 'SFTP', webdav: 'WebDAV' }
+function storageLocation(t: any) {
+  const c = t.config || {}
+  if (t.kind === 's3') return `${c.endpoint}/${c.bucket}/${c.prefix || ''}`
+  if (t.kind === 'sftp') return `${c.username}@${c.host}:${c.port || 22}${c.path ? ' ' + c.path : ''}`
+  if (t.kind === 'webdav') return c.url
+  return c.path
+}
 
 function Storage() {
   const { data, error, reload } = useLoad(() => get<any[]>('/storage'), [])
@@ -31,8 +39,8 @@ function Storage() {
             {data.map(({ target: t, backups, size, policies }) => (
               <tr key={t.id}>
                 <td style={{ fontWeight: 600 }}>{t.name}</td>
-                <td>{t.kind === 's3' ? 'S3 兼容' : '本地磁盘'}</td>
-                <td className="mono" style={{ fontSize: 12 }}>{t.kind === 's3' ? `${t.config.endpoint}/${t.config.bucket}/${t.config.prefix || ''}` : t.config.path}</td>
+                <td>{storageKind[t.kind] || t.kind}</td>
+                <td className="mono" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{storageLocation(t)}</td>
                 <td>{backups} 份 · {bytes(size)}<div className="label">{policies} 个策略</div></td>
                 <td>{t.lastCheckAt ? <span className={'badge ' + (t.lastCheckOk ? 'ok' : 'err')} title={t.lastCheckMsg}>{t.lastCheckOk ? '正常' : '失败'} · {ago(t.lastCheckAt)}</span> : <span className="muted">未测试</span>}</td>
                 <td>
@@ -73,11 +81,36 @@ function StorageModal({ t, onClose, onSaved }: { t: Target; onClose: () => void;
       }
     >
       <Field label="名称"><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-      <div className="seg" role="group" aria-label="类型">
-        <button className={f.kind === 's3' ? 'on' : ''} onClick={() => setF({ ...f, kind: 's3' })}>S3 兼容（R2 / OSS / COS / MinIO / B2）</button>
-        <button className={f.kind === 'local' ? 'on' : ''} onClick={() => setF({ ...f, kind: 'local' })}>本地目录</button>
+      <div className="seg" role="group" aria-label="类型" style={{ flexWrap: 'wrap' }}>
+        {(['s3', 'sftp', 'webdav', 'local'] as const).map((k) => (
+          <button key={k} className={f.kind === k ? 'on' : ''} disabled={!!t.id && t.kind !== k} onClick={() => setF({ ...f, kind: k })}>{storageKind[k]}</button>
+        ))}
       </div>
-      {f.kind === 'local' ? (
+      {f.kind === 's3' && <span className="label">Cloudflare R2、阿里云 OSS、腾讯云 COS、MinIO、Backblaze B2 等</span>}
+      {f.kind === 'sftp' ? (
+        <div className="form-grid">
+          <Field label="主机"><input className="input mono" value={c.host || ''} onChange={(e) => setC({ host: e.target.value })} placeholder="backup.example.com" /></Field>
+          <Field label="端口"><input className="input mono" value={c.port || ''} onChange={(e) => setC({ port: Number(e.target.value) || 0 })} placeholder="22" inputMode="numeric" /></Field>
+          <Field label="用户名"><input className="input mono" value={c.username || ''} onChange={(e) => setC({ username: e.target.value })} autoComplete="off" /></Field>
+          <Field label="远程目录" hint="相对路径基于用户主目录"><input className="input mono" value={c.path || ''} onChange={(e) => setC({ path: e.target.value })} placeholder="backups/panel" /></Field>
+          <Field label="密码" hint={t.id ? '留空保持不变；可与私钥二选一' : '可与私钥二选一'}><input className="input mono" type="password" value={c.password === '••••••' ? '' : c.password || ''} onChange={(e) => setC({ password: e.target.value })} autoComplete="new-password" /></Field>
+          <Field label="主机指纹（推荐）" hint="SHA256:…，留空则不校验；可用 ssh-keyscan 主机 | ssh-keygen -lf - 获取"><input className="input mono" value={c.hostKey || ''} onChange={(e) => setC({ hostKey: e.target.value })} placeholder="SHA256:…" /></Field>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <Field label="私钥（OpenSSH 格式，可选）" hint={t.id && c.privateKey === '••••••' ? '已设置，留空保持不变' : '不支持带密码的私钥'}>
+              <textarea className="textarea mono" rows={4} value={c.privateKey === '••••••' ? '' : c.privateKey || ''} onChange={(e) => setC({ privateKey: e.target.value })} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" />
+            </Field>
+          </div>
+        </div>
+      ) : f.kind === 'webdav' ? (
+        <div className="form-grid">
+          <div style={{ gridColumn: '1 / -1' }}>
+            <Field label="WebDAV 地址" hint="目录的完整 URL，如 Nextcloud：https://cloud.example.com/remote.php/dav/files/me/backups/"><input className="input mono" value={c.url || ''} onChange={(e) => setC({ url: e.target.value })} /></Field>
+          </div>
+          <Field label="用户名"><input className="input mono" value={c.username || ''} onChange={(e) => setC({ username: e.target.value })} autoComplete="off" /></Field>
+          <Field label="密码 / 应用密码" hint={t.id ? '留空保持不变' : undefined}><input className="input mono" type="password" value={c.password === '••••••' ? '' : c.password || ''} onChange={(e) => setC({ password: e.target.value })} autoComplete="new-password" /></Field>
+          <label className="check"><input type="checkbox" checked={!!c.insecure} onChange={(e) => setC({ insecure: e.target.checked })} />跳过 TLS 证书校验（自签名证书）</label>
+        </div>
+      ) : f.kind === 'local' ? (
         <Field label="目录" hint="面板容器内的路径；默认备份目录已挂载在 /data/backups"><input className="input mono" value={c.path || ''} onChange={(e) => setC({ path: e.target.value })} /></Field>
       ) : (
         <div className="form-grid">
@@ -97,8 +130,8 @@ function StorageModal({ t, onClose, onSaved }: { t: Target; onClose: () => void;
   )
 }
 
-type Channel = { id?: number; name: string; kind: 'webhook' | 'telegram' | 'wecom' | 'email'; config: any; enabled: boolean }
-const kindName: Record<string, string> = { webhook: 'Webhook', telegram: 'Telegram', wecom: '企业微信机器人', email: '邮件 (SMTP)' }
+type Channel = { id?: number; name: string; kind: 'webhook' | 'telegram' | 'wecom' | 'dingtalk' | 'feishu' | 'bark' | 'email'; config: any; enabled: boolean }
+const kindName: Record<string, string> = { telegram: 'Telegram', wecom: '企业微信机器人', dingtalk: '钉钉机器人', feishu: '飞书机器人', bark: 'Bark（iOS 推送）', email: '邮件 (SMTP)', webhook: 'Webhook' }
 
 function Notify() {
   const { data, error, reload } = useLoad(() => get<any>('/notify'), [])
@@ -122,7 +155,7 @@ function Notify() {
   return (
     <>
       <Card title="通知渠道" actions={<button className="btn btn-sm btn-primary" onClick={() => setEdit({ name: '', kind: 'telegram', config: {}, enabled: true })}><Icon name="plus" size={16} />添加渠道</button>} pad={false}>
-        {data.channels.length === 0 ? <Empty>还没有通知渠道。部署失败、备份失败、证书过期等事件可以推送到 Telegram、企业微信、邮件或 Webhook。</Empty> : (
+        {data.channels.length === 0 ? <Empty>还没有通知渠道。部署失败、备份失败、容器崩溃、证书过期等事件可以推送到 Telegram、企业微信、钉钉、飞书、Bark、邮件或 Webhook。</Empty> : (
           <div className="table-wrap">
             <table>
               <thead><tr><th>名称</th><th>类型</th><th>最近发送</th><th></th></tr></thead>
@@ -193,6 +226,14 @@ function ChannelModal({ c, onClose, onSaved }: { c: Channel; onClose: () => void
         </>
       )}
       {f.kind === 'wecom' && <Field label="Webhook 地址" hint="群机器人的 webhook URL"><input className="input mono" value={cf.url || ''} onChange={(e) => setC({ url: e.target.value })} /></Field>}
+      {(f.kind === 'dingtalk' || f.kind === 'feishu') && (
+        <>
+          <Field label="Webhook 地址" hint={f.kind === 'dingtalk' ? 'https://oapi.dingtalk.com/robot/send?access_token=…' : 'https://open.feishu.cn/open-apis/bot/v2/hook/…'}><input className="input mono" value={cf.url || ''} onChange={(e) => setC({ url: e.target.value })} /></Field>
+          <Field label="加签密钥（可选）" hint={'机器人安全设置中的「加签」密钥。' + (keep || '')}><input className="input mono" type="password" value={cf.secret || ''} onChange={(e) => setC({ secret: e.target.value })} autoComplete="new-password" /></Field>
+          {f.kind === 'dingtalk' && <span className="label">如果机器人使用「自定义关键词」安全设置，请把关键词设为事件标题中会出现的文字，或改用加签。</span>}
+        </>
+      )}
+      {f.kind === 'bark' && <Field label="设备地址" hint="Bark App 中复制的地址，如 https://api.day.app/你的Key（自建服务器同理）"><input className="input mono" value={cf.url || ''} onChange={(e) => setC({ url: e.target.value })} /></Field>}
       {f.kind === 'webhook' && (
         <>
           <Field label="URL" hint="POST JSON：type、title、body、target、time"><input className="input mono" value={cf.url || ''} onChange={(e) => setC({ url: e.target.value })} /></Field>

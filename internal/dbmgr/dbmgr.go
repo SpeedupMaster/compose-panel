@@ -15,14 +15,14 @@ import (
 )
 
 type Engine struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Versions    []string `json:"versions"`
-	Port        int      `json:"port"`
-	RootUser    string   `json:"rootUser"`
-	Tools       string   `json:"tools"`
-	SQL         bool     `json:"sql"`
-	DumpExt     string   `json:"dumpExt"`
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	Versions []string `json:"versions"`
+	Port     int      `json:"port"`
+	RootUser string   `json:"rootUser"`
+	Tools    string   `json:"tools"`
+	SQL      bool     `json:"sql"`
+	DumpExt  string   `json:"dumpExt"`
 }
 
 var Engines = []Engine{
@@ -53,6 +53,8 @@ func Compose(engine, version, alias, exposure, dbNetwork string, port int, memLi
 	switch engine {
 	case "postgres":
 		fmt.Fprintf(&b, "    image: postgres:%s-alpine\n", version)
+		// pg_stat_statements powers the slow-query view; it ships with the image.
+		b.WriteString("    command: [\"postgres\", \"-c\", \"shared_preload_libraries=pg_stat_statements\"]\n")
 		b.WriteString("    environment:\n      POSTGRES_PASSWORD: ${DB_ROOT_PASSWORD}\n")
 		b.WriteString("    volumes:\n      - data:/var/lib/postgresql/data\n")
 		b.WriteString("    healthcheck:\n      test: [\"CMD-SHELL\", \"pg_isready -U postgres\"]\n      interval: 10s\n      timeout: 5s\n      retries: 5\n")

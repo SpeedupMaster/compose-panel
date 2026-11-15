@@ -7,6 +7,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/klauspost/compress v1.20.4
 	github.com/minio/minio-go/v7 v7.4.1
+	github.com/pkg/sftp v1.13.12
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.59.0
 	modernc.org/sqlite v1.62.0
@@ -19,6 +20,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/klauspost/crc32 v1.3.0 // indirect
+	github.com/kr/fs v0.1.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/minio/crc64nvme v1.1.1 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect

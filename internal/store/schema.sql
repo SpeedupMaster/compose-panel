@@ -235,3 +235,87 @@ CREATE TABLE IF NOT EXISTS audit_log (
   hash      TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS audit_ts ON audit_log(ts DESC);
+
+-- ---------- phase 2 ----------
+
+-- Per-minute resource samples (7 days). name is the container name, or "host".
+CREATE TABLE IF NOT EXISTS metrics (
+  ts       INTEGER NOT NULL,
+  name     TEXT NOT NULL,
+  project  TEXT NOT NULL DEFAULT '',
+  cpu      REAL NOT NULL DEFAULT 0,          -- percent
+  mem      INTEGER NOT NULL DEFAULT 0,       -- bytes used
+  mem_limit INTEGER NOT NULL DEFAULT 0,
+  net_rx   INTEGER NOT NULL DEFAULT 0,       -- cumulative counters
+  net_tx   INTEGER NOT NULL DEFAULT 0,
+  blk_r    INTEGER NOT NULL DEFAULT 0,
+  blk_w    INTEGER NOT NULL DEFAULT 0,
+  disk     INTEGER NOT NULL DEFAULT 0,       -- host only: used bytes
+  PRIMARY KEY (name, ts)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS metrics_ts ON metrics(ts);
+
+CREATE TABLE IF NOT EXISTS templates (
+  id          INTEGER PRIMARY KEY,
+  name        TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  compose     TEXT NOT NULL,
+  env         TEXT NOT NULL DEFAULT '',      -- encrypted JSON [{key,value,secret}]
+  files       TEXT NOT NULL DEFAULT '',      -- encrypted JSON [{path,content}]
+  service     TEXT NOT NULL DEFAULT '',
+  port        INTEGER NOT NULL DEFAULT 0,
+  created_by  TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS image_checks (
+  project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  service       TEXT NOT NULL,
+  image         TEXT NOT NULL,
+  local_digest  TEXT NOT NULL DEFAULT '',
+  remote_digest TEXT NOT NULL DEFAULT '',
+  status        TEXT NOT NULL,               -- current | update | local | error
+  error         TEXT NOT NULL DEFAULT '',
+  checked_at    INTEGER NOT NULL,
+  PRIMARY KEY (project_id, service)
+);
+
+CREATE TABLE IF NOT EXISTS cron_tasks (
+  id          INTEGER PRIMARY KEY,
+  name        TEXT NOT NULL,
+  project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  service     TEXT NOT NULL,
+  command     TEXT NOT NULL,
+  user        TEXT NOT NULL DEFAULT '',
+  schedule    TEXT NOT NULL,
+  timeout     INTEGER NOT NULL DEFAULT 600,  -- seconds
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  notify      INTEGER NOT NULL DEFAULT 1,    -- emit cron_failed on failure
+  last_run_at INTEGER NOT NULL DEFAULT 0,
+  last_status TEXT NOT NULL DEFAULT '',
+  last_job_id TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS restore_drills (
+  id          INTEGER PRIMARY KEY,
+  policy_id   INTEGER NOT NULL REFERENCES backup_policies(id) ON DELETE CASCADE,
+  schedule    TEXT NOT NULL,
+  check_sql   TEXT NOT NULL DEFAULT '',      -- query run against the restored copy
+  min_rows    INTEGER NOT NULL DEFAULT 0,    -- first cell of check_sql must be >= this
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS drill_runs (
+  id          INTEGER PRIMARY KEY,
+  drill_id    INTEGER REFERENCES restore_drills(id) ON DELETE SET NULL,
+  backup_id   INTEGER NOT NULL,
+  label       TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL,                 -- running | success | failed
+  report      TEXT NOT NULL DEFAULT '',
+  job_id      TEXT NOT NULL DEFAULT '',
+  started_at  INTEGER NOT NULL,
+  finished_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS drill_runs_started ON drill_runs(started_at DESC);

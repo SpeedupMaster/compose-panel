@@ -83,6 +83,29 @@ type Site struct {
 	MaxBody   int64
 	Headers   map[string]string
 	Websocket bool
+	// Phase 2
+	Upstreams      []string // several replicas → load balancing (overrides Upstream)
+	HealthPath     string   // active health check URI
+	Maintenance    bool
+	MaintenanceMsg string
+	AccessLog      bool
+}
+
+// AccessLogDir is where Caddy writes per-site JSON access logs (inside the Caddy container).
+const AccessLogDir = "/data/access-logs"
+
+// LoggerName is the access logger name of a site.
+func LoggerName(id int64) string { return fmt.Sprintf("site%d", id) }
+
+func maintenancePage(msg string) string {
+	if msg == "" {
+		msg = "系统维护中，请稍后再试。"
+	}
+	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+	return `<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
+		`<title>维护中</title><style>body{font-family:system-ui,-apple-system,sans-serif;background:#f6f7f9;color:#222;display:flex;min-height:100vh;margin:0;align-items:center;justify-content:center}` +
+		`.b{background:#fff;border-radius:12px;padding:40px 48px;box-shadow:0 2px 12px rgba(0,0,0,.06);max-width:520px;text-align:center}h1{font-size:22px;margin:0 0 12px}p{color:#555;line-height:1.6;margin:0}</style></head>` +
+		`<body><div class="b"><h1>🛠 维护中 · Under maintenance</h1><p>` + r.Replace(msg) + `</p></div></body></html>`
 }
 
 type LoadedCert struct {
@@ -147,7 +170,31 @@ func Build(sites []Site, o Options) map[string]any {
 			if s.Compress {
 				handlers = append(handlers, map[string]any{"handler": "encode", "encodings": map[string]any{"gzip": map[string]any{}, "zstd": map[string]any{}}, "prefer": []string{"zstd", "gzip"}})
 			}
-			rp := map[string]any{"handler": "reverse_proxy", "upstreams": []any{map[string]any{"dial": s.Upstream}}}
+			if s.Maintenance {
+				handlers = append(handlers, map[string]any{
+					"handler": "static_response", "status_code": 503, "body": maintenancePage(s.MaintenanceMsg),
+					"headers": map[string][]string{"Content-Type": {"text/html; charset=utf-8"}, "Retry-After": {"120"}, "Cache-Control": {"no-store"}},
+				})
+				break
+			}
+			ups := []any{}
+			dials := s.Upstreams
+			if len(dials) == 0 {
+				dials = []string{s.Upstream}
+			}
+			for _, d := range dials {
+				ups = append(ups, map[string]any{"dial": d})
+			}
+			rp := map[string]any{"handler": "reverse_proxy", "upstreams": ups}
+			if len(dials) > 1 {
+				rp["load_balancing"] = map[string]any{"selection_policy": map[string]any{"policy": "round_robin"}, "retries": 2, "try_duration": "5s"}
+			}
+			if s.HealthPath != "" {
+				rp["health_checks"] = map[string]any{
+					"active":  map[string]any{"uri": s.HealthPath, "interval": "10s", "timeout": "5s"},
+					"passive": map[string]any{"fail_duration": "30s", "max_fails": 2},
+				}
+			}
 			if len(s.Headers) > 0 {
 				set := map[string][]string{}
 				for k, v := range s.Headers {
@@ -181,18 +228,38 @@ func Build(sites []Site, o Options) map[string]any {
 		tlsApp["certificates"] = map[string]any{"load_pem": pems}
 	}
 	_ = manual
+	server := map[string]any{
+		"listen": []string{":443", ":80"},
+		"routes": routes,
+	}
+	logs := map[string]any{"default": map[string]any{"exclude": []string{"http.log.access"}}}
+	loggerNames := map[string]any{}
+	for _, s := range sites {
+		if !s.AccessLog || s.ID == 0 {
+			continue
+		}
+		name := LoggerName(s.ID)
+		for _, d := range s.Domains {
+			loggerNames[d] = name
+		}
+		logs[name] = map[string]any{
+			"writer": map[string]any{"output": "file", "filename": fmt.Sprintf("%s/site-%d.log", AccessLogDir, s.ID),
+				"roll_size_mb": 20, "roll_keep": 10, "roll_keep_days": 7},
+			"encoder": map[string]any{"format": "json"},
+			"include": []string{"http.log.access." + name},
+		}
+	}
+	if len(loggerNames) > 0 {
+		server["logs"] = map[string]any{"logger_names": loggerNames, "skip_unmapped_hosts": true}
+	}
 	return map[string]any{
+		"logging": map[string]any{"logs": logs},
 		// Over a unix socket Caddy only accepts an empty Host header unless
 		// origins are listed; Go always sends the URL host ("caddy").
 		"admin": map[string]any{"listen": "unix/" + o.AdminSocket, "origins": []string{"caddy"}},
 		"apps": map[string]any{
-			"http": map[string]any{"servers": map[string]any{
-				"main": map[string]any{
-					"listen": []string{":443", ":80"},
-					"routes": routes,
-				},
-			}},
-			"tls": tlsApp,
+			"http": map[string]any{"servers": map[string]any{"main": server}},
+			"tls":  tlsApp,
 		},
 	}
 }

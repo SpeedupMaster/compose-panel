@@ -42,12 +42,12 @@ type Run struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu      sync.Mutex
-	file    *os.File
-	buf     []byte // partial line
-	subs    map[chan []byte]struct{}
-	done    bool
-	Result  any
+	mu     sync.Mutex
+	file   *os.File
+	buf    []byte // partial line
+	subs   map[chan []byte]struct{}
+	done   bool
+	Result any
 }
 
 func (r *Run) Context() context.Context { return r.ctx }

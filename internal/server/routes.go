@@ -37,12 +37,23 @@ func (s *Server) routes(mux *http.ServeMux) {
 	h("POST /api/projects/{id}/deploy", O, s.handleDeploy)
 	h("POST /api/projects/{id}/action", O, s.handleProjectAction)
 	h("GET /api/projects/{id}/deployments", V, s.handleListDeployments)
+	h("GET /api/projects/{id}/metrics", V, s.handleProjectMetrics)
 	h("POST /api/projects/{id}/webhook/rotate", O, s.handleRotateWebhook)
 	h("POST /api/projects/{id}/deploy-key", O, s.handleRegenDeployKey)
 	h("POST /api/compose/validate", O, s.handleValidateCompose)
 	h("GET /api/deployments/{id}", V, s.handleGetDeployment)
 	h("POST /api/deployments/{id}/rollback", O, s.handleRollback)
 	h("GET /api/templates", V, s.handleTemplates)
+	h("DELETE /api/templates/{id}", O, s.handleDeleteTemplate)
+	h("POST /api/projects/{id}/template", O, s.handleSaveAsTemplate)
+	h("GET /api/projects/{id}/images", V, s.handleProjectImages)
+	h("POST /api/projects/{id}/images/check", O, s.handleCheckProjectImages)
+	h("GET /api/image-updates", V, s.handleImageUpdates)
+	h("GET /api/cron-tasks", V, s.handleListCronTasks)
+	h("POST /api/cron-tasks", O, s.handleSaveCronTask)
+	h("PUT /api/cron-tasks/{id}", O, s.handleSaveCronTask)
+	h("DELETE /api/cron-tasks/{id}", O, s.handleDeleteCronTask)
+	h("POST /api/cron-tasks/{id}/run", O, s.handleRunCronTask)
 	h("GET /api/import/scan", A, s.handleImportScan)
 	h("POST /api/import", A, s.handleImport)
 
@@ -53,6 +64,14 @@ func (s *Server) routes(mux *http.ServeMux) {
 	h("GET /api/containers/{id}/stats", V, s.handleContainerStats)
 	h("GET /api/containers/{id}/logs", V, s.handleContainerLogs)
 	h("GET /api/containers/{id}/terminal", O, s.handleTerminal)
+	h("GET /api/containers/{id}/metrics", V, s.handleContainerMetrics)
+	h("GET /api/containers/{id}/fs", O, s.handleContainerFS)
+	h("GET /api/containers/{id}/fs/download", O, s.handleContainerDownload)
+	h("PUT /api/containers/{id}/fs/upload", O, s.handleContainerUpload)
+	h("GET /api/docker/volumes/{name}/fs", A, s.handleVolumeFS)
+	h("GET /api/docker/volumes/{name}/fs/download", A, s.handleVolumeDownload)
+	h("PUT /api/docker/volumes/{name}/fs/upload", A, s.handleVolumeUpload)
+	h("GET /api/metrics/host", V, s.handleHostMetrics)
 	h("POST /api/containers/{id}/{action}", O, s.handleContainerAction)
 	h("GET /api/docker/df", V, s.handleDockerDF)
 	h("GET /api/docker/images", V, s.handleListImages)
@@ -85,6 +104,11 @@ func (s *Server) routes(mux *http.ServeMux) {
 	h("DELETE /api/databases/{id}/sessions/{pid}", O, s.handleDBKill)
 	h("GET /api/databases/{id}/tables", V, s.handleDBTables)
 	h("POST /api/databases/{id}/query", V, s.handleDBQuery)
+	h("GET /api/databases/{id}/tables/{table}", V, s.handleDBTableInfo)
+	h("GET /api/databases/{id}/tables/{table}/rows", V, s.handleDBTableRows)
+	h("GET /api/databases/{id}/slow-queries", V, s.handleDBSlowQueries)
+	h("GET /api/databases/{id}/export", A, s.handleDBExport)
+	h("POST /api/databases/{id}/import", O, s.handleDBImport)
 
 	// backups & storage
 	h("GET /api/backup-policies", V, s.handleListPolicies)
@@ -106,6 +130,11 @@ func (s *Server) routes(mux *http.ServeMux) {
 	h("DELETE /api/storage/{id}", A, s.handleDeleteStorage)
 	h("POST /api/storage/test", A, s.handleTestStorage)
 	h("POST /api/storage/{id}/test", O, s.handleTestStorage)
+	h("GET /api/restore-drills", V, s.handleListDrills)
+	h("POST /api/restore-drills", O, s.handleSaveDrill)
+	h("PUT /api/restore-drills/{id}", O, s.handleSaveDrill)
+	h("DELETE /api/restore-drills/{id}", O, s.handleDeleteDrill)
+	h("POST /api/restore-drills/{id}/run", O, s.handleRunDrill)
 
 	// proxy & certificates
 	h("GET /api/sites", V, s.handleListSites)
@@ -113,6 +142,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	h("PUT /api/sites/{id}", O, s.handleSaveSite)
 	h("DELETE /api/sites/{id}", O, s.handleDeleteSite)
 	h("POST /api/sites/precheck", O, s.handleSitePrecheck)
+	h("POST /api/sites/{id}/maintenance", O, s.handleSiteMaintenance)
+	h("GET /api/sites/{id}/access-logs", V, s.handleSiteAccessLogs)
 	h("GET /api/proxy/config", A, s.handleProxyConfig)
 	h("POST /api/proxy/reload", A, s.handleProxyReload)
 	h("GET /api/certificates", V, s.handleListCerts)
@@ -180,12 +211,8 @@ func (s *Server) handleSaveProjectFiles(w http.ResponseWriter, r *http.Request, 
 	if err := readJSON(r, &files); err != nil {
 		return err
 	}
-	for i, f := range files {
-		clean := strings.TrimPrefix(path.Clean("/"+strings.ReplaceAll(f.Path, "\\", "/")), "/")
-		if clean == "" || strings.HasPrefix(clean, ".panel") || clean == "compose.yml" || strings.Contains(clean, "..") {
-			return bad("文件路径无效：%s", f.Path)
-		}
-		files[i].Path = clean
+	if err := cleanProjectFiles(files); err != nil {
+		return err
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -203,4 +230,15 @@ func (s *Server) handleSaveProjectFiles(w http.ResponseWriter, r *http.Request, 
 	err = tx.Commit()
 	s.audit(r, u, "project.files", p.Name, "", err)
 	return done(w, err)
+}
+
+func cleanProjectFiles(files []projectFile) error {
+	for i, f := range files {
+		clean := strings.TrimPrefix(path.Clean("/"+strings.ReplaceAll(f.Path, "\\", "/")), "/")
+		if clean == "" || strings.HasPrefix(clean, ".panel") || clean == "compose.yml" || strings.Contains(clean, "..") {
+			return bad("文件路径无效：%s", f.Path)
+		}
+		files[i].Path = clean
+	}
+	return nil
 }

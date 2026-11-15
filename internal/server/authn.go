@@ -694,9 +694,9 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, u *Us
 		return errForbidden
 	}
 	var req struct {
-		Name    string `json:"name"`
-		Scope   string `json:"scope"`
-		Days    int    `json:"days"`
+		Name  string `json:"name"`
+		Scope string `json:"scope"`
+		Days  int    `json:"days"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		return err

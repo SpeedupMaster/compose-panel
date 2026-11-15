@@ -108,3 +108,47 @@ export function pct(a: number, b: number) {
   if (!b) return 0
   return Math.min(100, Math.round((a / b) * 100))
 }
+
+// Uploads a raw file body (PUT/POST) with progress; resolves with the JSON response.
+export function upload<T = any>(method: 'PUT' | 'POST', path: string, file: Blob, onProgress?: (pct: number) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open(method, '/api' + path)
+    xhr.withCredentials = true
+    xhr.setRequestHeader('X-Panel', '1')
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream')
+    if (onProgress) xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 100))
+    xhr.onload = () => {
+      let data: any = null
+      try {
+        data = xhr.responseText ? JSON.parse(xhr.responseText) : null
+      } catch {
+        data = { error: xhr.responseText }
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data as T)
+      else reject(new ApiError(xhr.status, (data && data.error) || xhr.statusText))
+    }
+    xhr.onerror = () => reject(new ApiError(0, '网络错误，上传失败'))
+    xhr.send(file)
+  })
+}
+
+export function qs(params: Record<string, string | number | boolean | undefined | null>) {
+  const q = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') q.set(k, String(v))
+  const s = q.toString()
+  return s ? '?' + s : ''
+}
+
+export function downloadCSV(name: string, columns: string[], rows: unknown[][]) {
+  const esc = (v: unknown) => {
+    const s = v === null || v === undefined ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v)
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
+  }
+  const text = '\uFEFF' + [columns, ...rows].map((r) => r.map(esc).join(',')).join('\r\n')
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }))
+  a.download = name
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+}

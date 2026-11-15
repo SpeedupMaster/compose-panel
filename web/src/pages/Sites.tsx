@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { del, get, post, put } from '../api'
 import { useCan } from '../auth'
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, useLoad, useToast } from '../components/ui'
+import { AccessLogs } from './SiteLogs'
 
 type Site = {
   id?: number
@@ -22,6 +23,12 @@ type Site = {
   maxBody: string
   headers: string
   enabled: boolean
+  maintenance: boolean
+  maintenanceMsg: string
+  maintenanceDeploy: boolean
+  accessLog: boolean
+  loadBalance: boolean
+  healthPath: string
 }
 
 export default function Sites() {
@@ -31,7 +38,9 @@ export default function Sites() {
   const [edit, setEdit] = useState<Site | null>(null)
   const [rm, setRm] = useState<any>(null)
   const [cfg, setCfg] = useState<any>(null)
-  const blank: Site = { domains: [], kind: 'proxy', projectId: 0, service: '', port: 80, upstream: '', hsts: true, compress: true, basicUser: '', ipAllow: '', maxBody: '', headers: '', enabled: true }
+  const [logs, setLogs] = useState<any>(null)
+  const [maint, setMaint] = useState<any>(null)
+  const blank: Site = { domains: [], kind: 'proxy', projectId: 0, service: '', port: 80, upstream: '', hsts: true, compress: true, basicUser: '', ipAllow: '', maxBody: '', headers: '', enabled: true, maintenance: false, maintenanceMsg: '', maintenanceDeploy: false, accessLog: true, loadBalance: false, healthPath: '' }
   return (
     <Page
       title="站点"
@@ -59,15 +68,18 @@ export default function Sites() {
                     <td>
                       {s.domains.map((d: string) => <div key={d}><a className="mono" href={'https://' + d} target="_blank" rel="noreferrer">{d}</a></div>)}
                       {!s.enabled && <span className="badge off">停用</span>}
+                      {s.maintenance && <span className="badge warn"><span className="dot" />维护中</span>}
                     </td>
                     <td>
                       {s.kind === 'redirect' ? <span>跳转 → <span className="mono">{s.upstream}</span></span> : s.projectId ? <><Link to={`/projects/${s.projectId}`}>{s.projectName}</Link> / <span className="mono">{s.service}:{s.port}</span></> : <span className="mono">{s.upstream}</span>}
                       <div className="label mono">{target}</div>
                     </td>
                     <td>{cert ? cert.source === 'internal' ? <span className="badge ok">本地 CA · 自动续期</span> : <span className={'badge ' + (cert.daysLeft <= 7 ? 'err' : cert.daysLeft <= 14 ? 'warn' : 'ok')}>{cert.source === 'uploaded' ? '上传' : "Let's Encrypt"} · 剩 {cert.daysLeft} 天</span> : <span className="badge off">待签发</span>}</td>
-                    <td className="label">{[s.hsts && 'HSTS', s.compress && '压缩', s.hasBasicAuth && '密码保护', s.ipAllow && 'IP 白名单', s.maxBody && `上限 ${s.maxBody}`].filter(Boolean).join(' · ') || '—'}</td>
+                    <td className="label">{[s.hsts && 'HSTS', s.compress && '压缩', s.hasBasicAuth && '密码保护', s.ipAllow && 'IP 白名单', s.maxBody && `上限 ${s.maxBody}`, s.loadBalance && '负载均衡', s.healthPath && `健康检查 ${s.healthPath}`, s.accessLog && '访问日志', s.maintenanceDeploy && '部署时维护'].filter(Boolean).join(' · ') || '—'}</td>
                     <td>
                       <div className="row" style={{ justifyContent: 'flex-end' }}>
+                        {s.kind !== 'redirect' && <button className="btn btn-sm" onClick={() => setLogs(s)}><Icon name="logs" size={16} />日志</button>}
+                        {can.operator && s.kind !== 'redirect' && <button className={'btn btn-sm' + (s.maintenance ? ' btn-primary' : '')} onClick={() => setMaint(s)}>{s.maintenance ? '结束维护' : '维护'}</button>}
                         {can.operator && <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ ...s, basicPassword: '' })}><Icon name="edit" size={16} /></button>}
                         {can.operator && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(s)}><Icon name="trash" size={16} /></button>}
                       </div>
@@ -80,6 +92,8 @@ export default function Sites() {
         )}
       </section>
       {edit && <SiteModal s={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reload() }} />}
+      {logs && <AccessLogs site={logs} onClose={() => setLogs(null)} />}
+      {maint && <MaintenanceModal s={maint} onClose={() => setMaint(null)} onDone={() => { setMaint(null); reload() }} />}
       {rm && <Confirm title="删除站点" danger confirmText="删除" onClose={() => setRm(null)} onConfirm={async () => { await del(`/sites/${rm.id}`); reload() }}>{rm.domains.join(', ')} 将不再被代理。</Confirm>}
       {cfg && (
         <Modal title="Caddy 配置（只读）" wide onClose={() => setCfg(null)}>
@@ -169,6 +183,25 @@ function SiteModal({ s, onClose, onSaved }: { s: Site; onClose: () => void; onSa
         <label className="check"><input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} />启用</label>
         <button className="link-btn" onClick={() => setAdv(!adv)}>{adv ? '收起高级选项' : '高级选项'}</button>
       </div>
+      {mode !== 'redirect' && (
+        <Card title="可用性与日志">
+          <div className="col" style={{ gap: 10 }}>
+            <label className="check"><input type="checkbox" checked={f.accessLog} onChange={(e) => setF({ ...f, accessLog: e.target.checked })} />记录访问日志（JSON，按 20MB 轮转，保留 7 天）</label>
+            {mode === 'project' && (
+              <>
+                <label className="check"><input type="checkbox" checked={f.loadBalance} onChange={(e) => setF({ ...f, loadBalance: e.target.checked })} />负载均衡：把请求轮询分发到该服务的所有副本（compose 中 deploy.replicas 或 scale）</label>
+                <label className="check"><input type="checkbox" checked={f.maintenanceDeploy} onChange={(e) => setF({ ...f, maintenanceDeploy: e.target.checked })} />部署期间自动显示维护页面</label>
+              </>
+            )}
+            <Field label="健康检查路径（可选）" hint="如 /healthz。设置后 Caddy 每 10 秒主动探测，不健康的副本不再接收请求">
+              <input className="input mono" style={{ maxWidth: 280 }} value={f.healthPath} onChange={(e) => setF({ ...f, healthPath: e.target.value })} placeholder="/healthz" />
+            </Field>
+            <Field label="维护页面提示（可选）" hint="手动维护或部署维护时显示给访客">
+              <input className="input" value={f.maintenanceMsg} onChange={(e) => setF({ ...f, maintenanceMsg: e.target.value })} placeholder="系统维护中，请稍后再试" />
+            </Field>
+          </div>
+        </Card>
+      )}
       {adv && (
         <Card title="高级">
           <div className="form-grid">
@@ -182,6 +215,45 @@ function SiteModal({ s, onClose, onSaved }: { s: Site; onClose: () => void; onSa
             <textarea className="textarea mono" rows={3} value={f.headers} onChange={(e) => setF({ ...f, headers: e.target.value })} />
           </Field>
         </Card>
+      )}
+      <ErrorBox error={err} />
+    </Modal>
+  )
+}
+
+function MaintenanceModal({ s, onClose, onDone }: { s: any; onClose: () => void; onDone: () => void }) {
+  const [msg, setMsg] = useState(s.maintenanceMsg || '')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<unknown>()
+  const toast = useToast()
+  const on = !s.maintenance
+  const submit = async () => {
+    setBusy(true)
+    setErr(undefined)
+    try {
+      const r = await post(`/sites/${s.id}/maintenance`, { on, message: msg })
+      if (r.warning) toast.err(r.warning)
+      else toast.ok(on ? '维护模式已开启' : '维护模式已关闭，恢复正常访问')
+      onDone()
+    } catch (e) {
+      setErr(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal
+      title={on ? '开启维护模式' : '结束维护模式'}
+      onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>取消</button><button className={on ? 'btn btn-danger solid' : 'btn btn-primary'} disabled={busy} onClick={submit}>{on ? '开启维护' : '恢复访问'}</button></>}
+    >
+      {on ? (
+        <>
+          <p style={{ margin: 0 }}><span className="mono">{s.domains.join(', ')}</span> 的所有请求将返回 503 维护页面，后端服务不受影响。</p>
+          <Field label="提示信息"><textarea className="textarea" rows={3} value={msg} onChange={(e) => setMsg(e.target.value)} placeholder="系统维护中，请稍后再试" /></Field>
+        </>
+      ) : (
+        <p style={{ margin: 0 }}>恢复 <span className="mono">{s.domains.join(', ')}</span> 的正常访问？</p>
       )}
       <ErrorBox error={err} />
     </Modal>

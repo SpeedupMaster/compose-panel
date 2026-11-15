@@ -316,7 +316,9 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request, u *User)
 	name := strings.TrimPrefix(c.Name, "/")
 	s.audit(r, u, "container.terminal", name, "打开终端", nil)
 	start := time.Now()
-	defer func() { s.audit(r, u, "container.terminal", name, fmt.Sprintf("关闭终端，时长 %s", time.Since(start).Round(time.Second)), nil) }()
+	defer func() {
+		s.audit(r, u, "container.terminal", name, fmt.Sprintf("关闭终端，时长 %s", time.Since(start).Round(time.Second)), nil)
+	}()
 
 	go func() {
 		defer cancel()
@@ -490,7 +492,7 @@ func (s *Server) handleListNetworks(w http.ResponseWriter, r *http.Request, u *U
 		out = append(out, map[string]any{"id": n.Id, "name": n.Name, "driver": n.Driver, "scope": n.Scope, "internal": n.Internal,
 			"subnet": subnet, "containers": members, "project": n.Labels["com.docker.compose.project"],
 			"system": n.Name == "bridge" || n.Name == "host" || n.Name == "none",
-			"panel": n.Name == s.cfg.ProxyNetwork || n.Name == s.cfg.DBNetwork})
+			"panel":  n.Name == s.cfg.ProxyNetwork || n.Name == s.cfg.DBNetwork})
 	}
 	return ok(w, out)
 }

@@ -5,9 +5,11 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { bytes, dateTime, get, post, streamLines } from '../api'
 import { useCan } from '../auth'
+import { MetricsPanel } from '../components/charts'
+import { FileBrowser } from '../components/files'
 import { Card, Confirm, ErrorBox, Icon, Loading, LogView, Meter, Page, Status, Tabs, useAction, useLoad } from '../components/ui'
 
-type Tab = 'logs' | 'terminal' | 'info'
+type Tab = 'logs' | 'terminal' | 'files' | 'metrics' | 'info'
 
 export default function ContainerPage() {
   const { id } = useParams()
@@ -46,12 +48,14 @@ export default function ContainerPage() {
       }
     >
       <Tabs
-        tabs={[['logs', '日志'], ...(can.operator ? [['terminal', '终端'] as [Tab, string]] : []), ['info', '详情与资源']]}
+        tabs={[['logs', '日志'], ...(can.operator ? [['terminal', '终端'] as [Tab, string], ['files', '文件'] as [Tab, string]] : []), ['metrics', '监控'], ['info', '详情与资源']]}
         value={tab}
         onChange={(t) => setParams({ tab: t }, { replace: true })}
       />
       {tab === 'logs' && <Logs id={id!} running={c.running} />}
       {tab === 'terminal' && (c.running ? <Term id={id!} /> : <div className="alert warn">容器未运行，无法打开终端。</div>)}
+      {tab === 'files' && <FileBrowser base={`/containers/${id}/fs`} canWrite={can.operator} note="上传会覆盖同名文件；文件变更记录到审计日志。" />}
+      {tab === 'metrics' && <MetricsPanel url={`/containers/${id}/metrics`} />}
       {tab === 'info' && <Info c={c} id={id!} />}
       {removing && (
         <Confirm title={`删除容器 ${c.name}`} danger confirmText="删除" onClose={() => setRemoving(false)} onConfirm={async () => { await post(`/containers/${id}/remove`); nav(-1) }}>

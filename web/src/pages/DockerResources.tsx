@@ -4,6 +4,7 @@ import { ago, bytes, del, get, post } from '../api'
 import { useCan } from '../auth'
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Status, Tabs, useLoad, useToast } from '../components/ui'
 import { portsText } from './ProjectDetail'
+import { FileBrowser } from '../components/files'
 
 type Tab = 'containers' | 'images' | 'volumes' | 'networks' | 'registries'
 
@@ -132,9 +133,15 @@ function Volumes() {
   const { data, error, reload } = useLoad(() => get<any[]>('/docker/volumes'), [])
   const can = useCan()
   const [rm, setRm] = useState<any>(null)
+  const [browse, setBrowse] = useState<string | null>(null)
   if (!data) return error ? <ErrorBox error={error} /> : <Loading />
   return (
     <section className="card">
+      {browse && (
+        <Modal title={<>数据卷 <span className="mono">{browse}</span></>} wide onClose={() => setBrowse(null)}>
+          <FileBrowser base={`/docker/volumes/${encodeURIComponent(browse)}/fs`} canWrite note="通过临时 alpine 容器读写；上传的文件会继承目录的属主。" />
+        </Modal>
+      )}
       {data.length === 0 ? <Empty>没有数据卷。</Empty> : (
         <div className="table-wrap">
           <table>
@@ -148,6 +155,7 @@ function Volumes() {
                   <td>{v.usedBy.length ? v.usedBy.join(', ') : <span className="badge off">未使用</span>}</td>
                   <td>
                     <div className="row" style={{ justifyContent: 'flex-end' }}>
+                      {can.admin && <button className="btn btn-sm" onClick={() => setBrowse(v.name)}><Icon name="folder" size={16} />文件</button>}
                       <Link className="btn btn-sm" to={`/backups?volume=${encodeURIComponent(v.name)}`}>备份</Link>
                       {can.admin && v.usedBy.length === 0 && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除数据卷" onClick={() => setRm(v)}><Icon name="trash" size={16} /></button>}
                     </div>

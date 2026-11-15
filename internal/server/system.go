@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -200,6 +201,7 @@ func (s *Server) reloadSchedules() {
 	if spec := s.setting("panel_backup_cron", ""); spec != "" {
 		add("system:panel-backup", scheduleMeta{Kind: "system", Name: "面板自身备份", Spec: spec, Target: "panel.db"}, func() { s.panelBackup("scheduler") })
 	}
+	s.addExtraSchedules(add)
 	c.Start()
 	s.cron = c
 }
@@ -268,7 +270,11 @@ func (s *Server) handleRunSchedule(w http.ResponseWriter, r *http.Request, u *Us
 	case key == "system:panel-backup":
 		jobID = s.panelBackup(u.Username)
 	default:
-		return errNotFound
+		id, handled := s.runExtraSchedule(key, u.Username)
+		if !handled {
+			return errNotFound
+		}
+		jobID = id
 	}
 	s.audit(r, u, "schedule.run", key, "手动触发", nil)
 	return ok(w, map[string]any{"jobId": jobID})
@@ -397,7 +403,7 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request, u *U
 		if c.BotToken != "" {
 			c.BotToken = c.BotToken[:min(6, len(c.BotToken))] + "••••••"
 		}
-		if kind == "wecom" && c.URL != "" {
+		if kind != "webhook" && c.URL != "" {
 			c.URL = maskURL(c.URL)
 		}
 		out = append(out, map[string]any{"id": id, "name": name, "kind": kind, "config": c, "enabled": enabled == 1, "lastStatus": status, "lastSentAt": last, "createdAt": created})
@@ -417,11 +423,19 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request, u *U
 	return ok(w, map[string]any{"channels": out, "rules": rules, "events": notify.Events})
 }
 
+var (
+	maskQueryRe = regexp.MustCompile(`((?:key|access_token|token)=)[^&]+`)
+	maskPathRe  = regexp.MustCompile(`/[A-Za-z0-9_-]{16,}(/?)$`)
+)
+
+// maskURL hides tokens in robot webhook URLs (query keys and long trailing path segments).
 func maskURL(u string) string {
-	if i := strings.Index(u, "key="); i >= 0 {
-		return u[:i+4] + "••••••"
+	base, query, hasQ := strings.Cut(u, "?")
+	base = maskPathRe.ReplaceAllString(base, "/••••••$1")
+	if hasQ {
+		return base + "?" + maskQueryRe.ReplaceAllString(query, "${1}••••••")
 	}
-	return u
+	return base
 }
 
 func (s *Server) handleSaveChannel(w http.ResponseWriter, r *http.Request, u *User) error {
@@ -455,7 +469,7 @@ func (s *Server) handleSaveChannel(w http.ResponseWriter, r *http.Request, u *Us
 		}
 	}
 	switch req.Kind {
-	case "webhook", "wecom":
+	case "webhook", "wecom", "dingtalk", "feishu", "bark":
 		if !strings.HasPrefix(req.Config.URL, "https://") && !strings.HasPrefix(req.Config.URL, "http://") {
 			return bad("请填写 URL")
 		}
@@ -552,7 +566,7 @@ func (s *Server) handleSaveRules(w http.ResponseWriter, r *http.Request, u *User
 
 // ---------- settings ----------
 
-var settingKeys = []string{"panel_domain", "acme_email", "timezone", "secure_headers", "session_ttl_hours", "image_prune_cron", "panel_backup_cron", "disk_alert_percent", "cert_alert_days", "public_ip"}
+var settingKeys = []string{"panel_domain", "acme_email", "timezone", "secure_headers", "session_ttl_hours", "image_prune_cron", "panel_backup_cron", "disk_alert_percent", "cert_alert_days", "public_ip", "image_check_cron"}
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request, u *User) error {
 	out := map[string]string{}
@@ -576,7 +590,7 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request, u *U
 			return bad("时区无效")
 		}
 	}
-	for _, k := range []string{"image_prune_cron", "panel_backup_cron"} {
+	for _, k := range []string{"image_prune_cron", "panel_backup_cron", "image_check_cron"} {
 		if v := req[k]; v != "" {
 			if _, err := cronParser.Parse(v); err != nil {
 				return bad("%s 的 Cron 表达式无效", k)

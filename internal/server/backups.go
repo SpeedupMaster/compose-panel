@@ -551,10 +551,11 @@ type backupRow struct {
 	JobID       string       `json:"jobId"`
 	StartedAt   int64        `json:"startedAt"`
 	FinishedAt  int64        `json:"finishedAt"`
+	VerifiedAt  int64        `json:"verifiedAt"` // last successful restore drill
 }
 
 func (s *Server) listBackups(where string, args ...any) []backupRow {
-	rows, err := s.db.Query(`SELECT b.id, COALESCE(b.policy_id,0), b.source, b.label, b.storage_id, COALESCE(t.name,''), b.object_key, b.size, b.sha256, b.encrypted, b.format, b.status, b.error, b.tiers, b.job_id, b.started_at, b.finished_at
+	rows, err := s.db.Query(`SELECT b.id, COALESCE(b.policy_id,0), b.source, b.label, b.storage_id, COALESCE(t.name,''), b.object_key, b.size, b.sha256, b.encrypted, b.format, b.status, b.error, b.tiers, b.job_id, b.started_at, b.finished_at, b.verified_at
 		FROM backups b LEFT JOIN storage_targets t ON t.id=b.storage_id `+where, args...)
 	if err != nil {
 		return []backupRow{}
@@ -564,7 +565,7 @@ func (s *Server) listBackups(where string, args ...any) []backupRow {
 	for rows.Next() {
 		var b backupRow
 		var src string
-		if rows.Scan(&b.ID, &b.PolicyID, &src, &b.Label, &b.StorageID, &b.StorageName, &b.ObjectKey, &b.Size, &b.SHA256, &b.Encrypted, &b.Format, &b.Status, &b.Error, &b.Tiers, &b.JobID, &b.StartedAt, &b.FinishedAt) == nil {
+		if rows.Scan(&b.ID, &b.PolicyID, &src, &b.Label, &b.StorageID, &b.StorageName, &b.ObjectKey, &b.Size, &b.SHA256, &b.Encrypted, &b.Format, &b.Status, &b.Error, &b.Tiers, &b.JobID, &b.StartedAt, &b.FinishedAt, &b.VerifiedAt) == nil {
 			_ = json.Unmarshal([]byte(src), &b.Source)
 			out = append(out, b)
 		}
@@ -698,6 +699,13 @@ func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request, u *
 	src := b.Source
 	switch src.Kind {
 	case "database":
+		if d, err := s.getDB(src.InstanceID); err == nil && d.Engine == "redis" {
+			if req.Confirm != d.Name {
+				return bad("Redis 只能整库覆盖恢复，请输入实例名 %s 确认", d.Name)
+			}
+			req.Mode, req.Target = "overwrite", d.Name
+			break
+		}
 		if req.Mode == "overwrite" {
 			if req.Confirm != src.Database {
 				return bad("请输入库名 %s 确认覆盖", src.Database)
@@ -747,6 +755,22 @@ func (s *Server) runRestore(run *jobRun, b *backupRow, mode, target, actor strin
 			return err
 		}
 		cl := d.client()
+		if d.Engine == "redis" {
+			run.Logf("==> 覆盖前先备份当前数据")
+			if _, err := s.runBackup(run, backupRequest{Source: src, StorageID: b.StorageID, Encrypt: b.Encrypted, Actor: actor}); err != nil {
+				return fmt.Errorf("覆盖前备份失败，已中止：%w", err)
+			}
+			run.SetProgress(40)
+			rc, err := backup.OpenObject(ctx, st, b.ObjectKey, b.Encrypted, identity)
+			if err != nil {
+				return err
+			}
+			defer rc.Close()
+			if err := s.restoreRedis(run, d, rc); err != nil {
+				return fmt.Errorf("恢复失败：%w", err)
+			}
+			break
+		}
 		if mode == "overwrite" {
 			run.Logf("==> 覆盖前先备份当前数据")
 			if _, err := s.runBackup(run, backupRequest{Source: src, StorageID: b.StorageID, Encrypt: b.Encrypted, Actor: actor}); err != nil {
@@ -898,6 +922,10 @@ func (s *Server) handleListStorage(w http.ResponseWriter, r *http.Request, u *Us
 			continue
 		}
 		t.Config.SecretKey = maskSecret(t.Config.SecretKey)
+		t.Config.Password = maskSecret(t.Config.Password)
+		if t.Config.PrivateKey != "" {
+			t.Config.PrivateKey = "••••••"
+		}
 		var count int
 		var size int64
 		_ = s.db.QueryRow(`SELECT count(*), COALESCE(sum(size),0) FROM backups WHERE storage_id=? AND status='success'`, id).Scan(&count, &size)
@@ -930,9 +958,17 @@ func (s *Server) handleSaveStorage(w http.ResponseWriter, r *http.Request, u *Us
 		return bad("名称不能为空")
 	}
 	id, _ := pathID(r, "id")
-	if id > 0 && (req.Config.SecretKey == "" || req.Config.SecretKey == "••••••") {
-		if old, _, err := s.getStorage(id); err == nil && old != nil {
-			req.Config.SecretKey = old.Config.SecretKey
+	if id > 0 {
+		if old, _, err := s.getStorage(id); old != nil {
+			_ = err
+			keep := func(v *string, o string) {
+				if *v == "" || strings.Contains(*v, "••••••") {
+					*v = o
+				}
+			}
+			keep(&req.Config.SecretKey, old.Config.SecretKey)
+			keep(&req.Config.Password, old.Config.Password)
+			keep(&req.Config.PrivateKey, old.Config.PrivateKey)
 		}
 	}
 	if _, err := backup.Open(req.Kind, req.Config); err != nil {

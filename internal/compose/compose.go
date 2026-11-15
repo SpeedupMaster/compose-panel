@@ -75,13 +75,13 @@ type Config struct {
 }
 
 type ServiceConfig struct {
-	Image       string                    `json:"image"`
-	Build       any                       `json:"build"`
-	Restart     string                    `json:"restart"`
-	MemLimit    any                       `json:"mem_limit"`
-	Ports       []map[string]any          `json:"ports"`
-	Networks    map[string]any            `json:"networks"`
-	Healthcheck map[string]any            `json:"healthcheck"`
+	Image       string           `json:"image"`
+	Build       any              `json:"build"`
+	Restart     string           `json:"restart"`
+	MemLimit    any              `json:"mem_limit"`
+	Ports       []map[string]any `json:"ports"`
+	Networks    map[string]any   `json:"networks"`
+	Healthcheck map[string]any   `json:"healthcheck"`
 	Deploy      *struct {
 		Resources struct {
 			Limits map[string]any `json:"limits"`

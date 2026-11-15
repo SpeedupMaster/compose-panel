@@ -489,6 +489,7 @@ func (s *Server) handleDBQuery(w http.ResponseWriter, r *http.Request, u *User) 
 		Database string `json:"database"`
 		SQL      string `json:"sql"`
 		ReadOnly bool   `json:"readOnly"`
+		Confirm  bool   `json:"confirm"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		return err
@@ -503,22 +504,28 @@ func (s *Server) handleDBQuery(w http.ResponseWriter, r *http.Request, u *User) 
 	if !u.can(roleOperator) {
 		req.ReadOnly = true
 	}
-	ctx, cancel := s.dbCtx(r)
+	if !req.ReadOnly && !req.Confirm {
+		if reasons := dbmgr.Danger(req.SQL); len(reasons) > 0 {
+			return ok(w, map[string]any{"needConfirm": true, "reasons": reasons})
+		}
+	}
+	const timeoutSec = 30
+	ctx, cancel := context.WithTimeout(r.Context(), (timeoutSec+5)*time.Second)
 	defer cancel()
 	start := time.Now()
-	res, err := d.client().Query(ctx, req.Database, req.SQL, req.ReadOnly)
+	res, truncated, err := d.client().Console(ctx, req.Database, req.SQL, req.ReadOnly, 1000, timeoutSec)
 	mode := "读写"
 	if req.ReadOnly {
 		mode = "只读"
+	} else if req.Confirm {
+		mode = "读写（已确认危险语句）"
+	}
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("查询超时（%d 秒）", timeoutSec)
 	}
 	s.audit(r, u, "database.query", d.Name+"/"+req.Database, mode+" · "+truncate(strings.Join(strings.Fields(req.SQL), " "), 300), err)
 	if err != nil {
 		return ok(w, map[string]any{"error": err.Error(), "elapsedMs": time.Since(start).Milliseconds()})
-	}
-	truncated := false
-	if len(res.Rows) > 1000 {
-		res.Rows = res.Rows[:1000]
-		truncated = true
 	}
 	return ok(w, map[string]any{"columns": res.Columns, "rows": res.Rows, "truncated": truncated, "elapsedMs": time.Since(start).Milliseconds()})
 }

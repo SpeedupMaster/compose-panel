@@ -2,12 +2,12 @@ import { useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { bytes, del, get, post, put } from '../api'
 import { useCan } from '../auth'
-import { CodeArea } from '../components/editors'
 import { BackupNowModal, BackupTable } from '../components/backup'
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, SecretBox, Status, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
 import { engineLabel, exposureName } from './Databases'
+import { ImportExport, SlowQueries, SqlConsole, TableBrowser } from './DatabaseTools'
 
-type Tab = 'overview' | 'dbs' | 'users' | 'sessions' | 'sql' | 'backups' | 'settings'
+type Tab = 'overview' | 'dbs' | 'users' | 'sessions' | 'sql' | 'tables' | 'slow' | 'io' | 'backups' | 'settings'
 
 export default function DatabaseDetail() {
   const { id } = useParams()
@@ -20,7 +20,8 @@ export default function DatabaseDetail() {
   const isRedis = d.engine === 'redis'
   const tabs: [Tab, string][] = [['overview', '概览']]
   if (!isRedis) tabs.push(['dbs', '库'], ['users', '用户'])
-  if (sql) tabs.push(['sessions', '会话'], ['sql', 'SQL 控制台'])
+  if (sql) tabs.push(['tables', '表浏览'], ['sql', 'SQL 控制台'], ['sessions', '会话'], ['slow', '慢查询'])
+  if (!isRedis) tabs.push(['io', '导入导出'])
   tabs.push(['backups', '备份'], ['settings', '设置'])
   return (
     <Page
@@ -35,7 +36,10 @@ export default function DatabaseDetail() {
       {tab === 'dbs' && d.status === 'running' && <DbsTab id={id!} />}
       {tab === 'users' && d.status === 'running' && <UsersTab id={id!} />}
       {tab === 'sessions' && d.status === 'running' && <SessionsTab id={id!} />}
-      {tab === 'sql' && d.status === 'running' && <SqlTab id={id!} />}
+      {tab === 'sql' && d.status === 'running' && <SqlConsole id={id!} instance={d.name} />}
+      {tab === 'tables' && d.status === 'running' && <TableBrowser id={id!} />}
+      {tab === 'slow' && d.status === 'running' && <SlowQueries id={id!} engine={d.engine} />}
+      {tab === 'io' && d.status === 'running' && <ImportExport id={id!} engine={d.engine} sql={!!sql} />}
       {tab === 'backups' && <BackupsTab d={d} />}
       {tab === 'settings' && <SettingsTab data={data} onSaved={reload} />}
     </Page>
@@ -222,77 +226,6 @@ function SessionsTab({ id }: { id: string }) {
         </table>
       </div>
     </Card>
-  )
-}
-
-function SqlTab({ id }: { id: string }) {
-  const can = useCan()
-  const { data: dbs } = useLoad(() => get<any[]>(`/databases/${id}/dbs`), [id])
-  const [db, setDb] = useState('')
-  const cur = db || dbs?.[0]?.name || ''
-  const { data: tables } = useLoad(() => (cur ? get<any[]>(`/databases/${id}/tables?db=${encodeURIComponent(cur)}`) : Promise.resolve([])), [id, cur])
-  const [sql, setSql] = useState('SELECT 1;')
-  const [ro, setRo] = useState(true)
-  const [res, setRes] = useState<any>(null)
-  const [busy, setBusy] = useState(false)
-  const runQuery = async () => {
-    setBusy(true)
-    try {
-      setRes(await post(`/databases/${id}/query`, { database: cur, sql, readOnly: ro || !can.operator }))
-    } catch (e) {
-      setRes({ error: (e as Error).message })
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <div className="row" style={{ alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
-      <Card title="表">
-        <div className="col" style={{ width: 220, gap: 8 }}>
-          <select className="select" aria-label="库" value={cur} onChange={(e) => setDb(e.target.value)}>
-            {(dbs || []).map((x) => <option key={x.name}>{x.name}</option>)}
-          </select>
-          <div className="col" style={{ gap: 0, maxHeight: 460, overflow: 'auto' }}>
-            {(tables || []).map((t) => (
-              <button key={t.name} className="btn btn-ghost btn-sm" style={{ justifyContent: 'space-between' }} onClick={() => setSql(`SELECT * FROM ${t.name} LIMIT 100;`)}>
-                <span className="mono ellipsis">{t.name}</span><span className="label">{t.rows >= 0 ? t.rows : ''}</span>
-              </button>
-            ))}
-            {tables?.length === 0 && <span className="label">没有表</span>}
-          </div>
-        </div>
-      </Card>
-      <div className="col grow" style={{ minWidth: 320, gap: 12 }}>
-        <section className="card">
-          <div className="card-body col" style={{ gap: 10 }}>
-            <div onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') runQuery() }}>
-              <CodeArea label="SQL" value={sql} onChange={setSql} rows={8} />
-            </div>
-            <div className="row wrap">
-              <label className="check"><input type="checkbox" checked={ro || !can.operator} disabled={!can.operator} onChange={(e) => setRo(e.target.checked)} />只读事务</label>
-              <span className="label">Ctrl+Enter 执行 · 最多返回 1000 行</span>
-              <span className="spacer" />
-              <button className="btn btn-primary" disabled={busy || !cur} onClick={runQuery}><Icon name="play" size={16} />{busy ? '执行中…' : '执行'}</button>
-            </div>
-          </div>
-        </section>
-        {res && (
-          <section className="card" style={{ overflow: 'hidden' }}>
-            <div className="card-head"><span className="label">{res.error ? '执行出错' : `${res.rows?.length ?? 0} 行${res.truncated ? '（已截断）' : ''}`} · {res.elapsedMs ?? '—'} ms</span></div>
-            {res.error ? <pre className="alert err mono" style={{ margin: 12, whiteSpace: 'pre-wrap' }}>{res.error}</pre> : (
-              <div className="table-wrap" style={{ maxHeight: 480 }}>
-                <table>
-                  <thead><tr>{res.columns.map((c: string, i: number) => <th key={i}>{c}</th>)}</tr></thead>
-                  <tbody>
-                    {res.rows.map((r: string[], i: number) => <tr key={i}>{r.map((v, j) => <td key={j} className="mono" style={{ fontSize: 12, whiteSpace: 'pre' }}>{v}</td>)}</tr>)}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-        )}
-      </div>
-    </div>
   )
 }
 

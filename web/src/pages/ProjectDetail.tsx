@@ -6,8 +6,10 @@ import { CodeArea, EnvEditor, EnvVar, validateCompose, Validation, ValidationRes
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, JobStatus, Loading, Page, SecretBox, Status, Tabs, useAction, useJobLog, useLoad, useToast } from '../components/ui'
 import { triggerName } from './Overview'
 import { sourceName } from './Projects'
+import { CronTasks, ImagesTab, SaveTemplateModal } from './ProjectExtras'
+import { ProjectMetrics } from '../components/charts'
 
-type Tab = 'overview' | 'deployments' | 'config' | 'files' | 'settings'
+type Tab = 'overview' | 'metrics' | 'deployments' | 'config' | 'files' | 'images' | 'cron' | 'settings'
 
 export default function ProjectDetail() {
   const { id } = useParams()
@@ -17,6 +19,7 @@ export default function ProjectDetail() {
   const can = useCan()
   const openJob = useJobLog()
   const { busy, run } = useAction()
+  const [saveTpl, setSaveTpl] = useState(false)
 
   if (!data) return <Page title="项目" crumbs={<Link to="/projects">项目</Link>}>{error ? <ErrorBox error={error} /> : <Loading />}</Page>
   const p = data.project
@@ -37,9 +40,10 @@ export default function ProjectDetail() {
     }
   }
 
-  const tabs: [Tab, string][] = [['overview', '概览'], ['deployments', '部署记录'], ['config', isDB ? 'Compose' : 'Compose 与环境变量']]
+  const tabs: [Tab, string][] = [['overview', '概览'], ['metrics', '监控'], ['deployments', '部署记录'], ['config', isDB ? 'Compose' : 'Compose 与环境变量']]
   if (p.source === 'inline') tabs.push(['files', '附加文件'])
-  tabs.push(['settings', '设置'])
+  tabs.push(['images', '镜像更新'], ['cron', '定时任务'], ['settings', '设置'])
+  const services = [...new Set<string>(data.containers.map((c: any) => c.service).filter(Boolean))]
 
   return (
     <Page
@@ -62,7 +66,10 @@ export default function ProjectDetail() {
             {isDB ? (
               <Link className="btn btn-primary" to={`/databases`}>管理数据库</Link>
             ) : (
-              <button className="btn btn-primary" disabled={busy === 'deploy'} onClick={deploy}><Icon name="rocket" />{busy === 'deploy' ? '提交中…' : '部署'}</button>
+              <>
+                {p.source === 'inline' && <button className="btn" onClick={() => setSaveTpl(true)}>保存为模板</button>}
+                <button className="btn btn-primary" disabled={busy === 'deploy'} onClick={deploy}><Icon name="rocket" />{busy === 'deploy' ? '提交中…' : '部署'}</button>
+              </>
             )}
           </>
         )
@@ -70,10 +77,14 @@ export default function ProjectDetail() {
     >
       <Tabs tabs={tabs} value={tab} onChange={(t) => setParams(t === 'overview' ? {} : { tab: t }, { replace: true })} />
       {tab === 'overview' && <OverviewTab data={data} onAction={action} />}
+      {tab === 'metrics' && <ProjectMetrics projectId={id!} />}
       {tab === 'deployments' && <DeploymentsTab id={id!} />}
+      {tab === 'images' && <ImagesTab project={p} onDeploy={deploy} />}
+      {tab === 'cron' && <CronTasks projectId={p.id} services={services} />}
       {tab === 'config' && <ConfigTab project={p} onSaved={reload} />}
       {tab === 'files' && <FilesTab id={id!} />}
       {tab === 'settings' && <SettingsTab data={data} onSaved={reload} />}
+      {saveTpl && <SaveTemplateModal project={p} onClose={() => setSaveTpl(false)} />}
     </Page>
   )
 }
@@ -358,6 +369,7 @@ function SettingsTab({ data, onSaved }: { data: any; onSaved: () => void }) {
             <label className="check"><input type="checkbox" checked={form.options.pull !== false} disabled={!can.operator} onChange={(e) => setOpt({ pull: e.target.checked })} />部署前拉取最新镜像</label>
             <label className="check"><input type="checkbox" checked={form.options.wait !== false} disabled={!can.operator} onChange={(e) => setOpt({ wait: e.target.checked })} />等待容器健康（--wait）</label>
             <label className="check"><input type="checkbox" checked={form.options.autoRollback !== false} disabled={!can.operator} onChange={(e) => setOpt({ autoRollback: e.target.checked })} />失败时自动回滚到上一次成功部署</label>
+            <label className="check"><input type="checkbox" checked={!!form.options.autoUpdate} disabled={!can.operator} onChange={(e) => setOpt({ autoUpdate: e.target.checked })} />镜像有新版本时自动重新部署（按「系统设置」中的镜像检查计划）</label>
             <label className="check"><input type="checkbox" checked={!!form.options.skipNetworks} disabled={!can.operator} onChange={(e) => setOpt({ skipNetworks: e.target.checked })} />不自动接入代理网络（自行管理 networks）</label>
             <Field label="等待超时（秒）"><input className="input" style={{ maxWidth: 160 }} type="number" min={10} value={form.options.waitTimeout || 120} readOnly={!can.operator} onChange={(e) => setOpt({ waitTimeout: Number(e.target.value) })} /></Field>
           </div>

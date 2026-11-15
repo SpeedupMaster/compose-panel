@@ -181,3 +181,23 @@ tr.clickable:hover td { background: #FAFAF8; }
 
 .term { background: #121315; padding: 8px; height: 520px; border-radius: 0 0 8px 8px; }
 .term .xterm { height: 100%; }
+
+/* charts */
+.chart { position: relative; }
+.chart svg { display: block; }
+.chart-axis { font-size: 11px; fill: #8A8D93; font-family: var(--mono); }
+.chart-empty { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; }
+.chart-tip { position: absolute; top: 6px; width: 180px; background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: 12px; box-shadow: 0 6px 20px rgba(0,0,0,.08); pointer-events: none; display: flex; flex-direction: column; gap: 2px; }
+.chart-key { width: 10px; height: 3px; border-radius: 2px; flex: none; }
+.chart-legend { font-size: 12px; color: var(--muted); gap: 4px 14px; padding: 4px 0 0 58px; }
+
+/* file browser */
+.fs-path { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; font-family: var(--mono); font-size: 13px; }
+.fs-path button { background: none; border: 0; padding: 2px 4px; border-radius: 4px; cursor: pointer; color: var(--accent-hover); }
+.fs-path button:hover { background: #F0F0ED; }
+.fs-name { display: inline-flex; align-items: center; gap: 8px; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; color: inherit; font-family: var(--mono); font-size: 13px; }
+.fs-name:hover { color: var(--accent-hover); text-decoration: underline; }
+.progress { height: 4px; background: var(--line-soft); border-radius: 2px; overflow: hidden; }
+.progress > div { height: 100%; background: var(--accent); transition: width .2s; }
+.sql-grid td, .sql-grid th { padding: 6px 10px; font-family: var(--mono); font-size: 12.5px; white-space: nowrap; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+.sql-grid td.null { color: #9C9EA3; font-style: italic; }

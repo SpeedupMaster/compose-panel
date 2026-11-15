@@ -41,18 +41,20 @@ type Server struct {
 	notify *notify.Notifier
 	web    fs.FS
 
-	cronMu  sync.Mutex
-	cron    *cron.Cron
-	cronIDs map[string]cron.EntryID
+	cronMu   sync.Mutex
+	cron     *cron.Cron
+	cronIDs  map[string]cron.EntryID
 	cronMeta map[cron.EntryID]scheduleMeta
 
 	loginMu   sync.Mutex
 	loginFail map[string][]time.Time
 
-	auditMu   sync.Mutex
-	caddyMu   sync.Mutex
-	startedAt time.Time
-	setupToken string
+	auditMu     sync.Mutex
+	caddyMu     sync.Mutex
+	maintMu     sync.Mutex
+	deployMaint map[int64]bool // projects currently deploying behind a maintenance page
+	startedAt   time.Time
+	setupToken  string
 }
 
 type scheduleMeta struct {
@@ -107,6 +109,7 @@ func (s *Server) initDefaults() error {
 		"panel_backup_cron":  "0 3 * * *",
 		"disk_alert_percent": "85",
 		"cert_alert_days":    "14",
+		"image_check_cron":   "0 */6 * * *",
 	}
 	for k, v := range defaults {
 		if _, err := s.db.Exec(`INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)`, k, v); err != nil {
@@ -224,6 +227,8 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	s.startScheduler()
 	go s.monitorLoop(ctx)
+	go s.metricsLoop(ctx)
+	go s.eventsLoop(ctx)
 	go func() {
 		// Push proxy config once Caddy is reachable.
 		for i := 0; i < 30; i++ {

@@ -17,28 +17,35 @@ import (
 )
 
 type siteRow struct {
-	ID          int64    `json:"id"`
-	Domains     []string `json:"domains"`
-	Kind        string   `json:"kind"`
-	ProjectID   int64    `json:"projectId"`
-	ProjectName string   `json:"projectName"`
-	Service     string   `json:"service"`
-	Port        int      `json:"port"`
-	Upstream    string   `json:"upstream"`
-	HSTS        bool     `json:"hsts"`
-	Compress    bool     `json:"compress"`
-	BasicUser   string   `json:"basicUser"`
-	HasBasic    bool     `json:"hasBasicAuth"`
-	IPAllow     string   `json:"ipAllow"`
-	MaxBody     string   `json:"maxBody"`
-	Headers     string   `json:"headers"`
-	Enabled     bool     `json:"enabled"`
-	CreatedAt   int64    `json:"createdAt"`
-	basicHash   string
+	ID                int64    `json:"id"`
+	Domains           []string `json:"domains"`
+	Kind              string   `json:"kind"`
+	ProjectID         int64    `json:"projectId"`
+	ProjectName       string   `json:"projectName"`
+	Service           string   `json:"service"`
+	Port              int      `json:"port"`
+	Upstream          string   `json:"upstream"`
+	HSTS              bool     `json:"hsts"`
+	Compress          bool     `json:"compress"`
+	BasicUser         string   `json:"basicUser"`
+	HasBasic          bool     `json:"hasBasicAuth"`
+	IPAllow           string   `json:"ipAllow"`
+	MaxBody           string   `json:"maxBody"`
+	Headers           string   `json:"headers"`
+	Enabled           bool     `json:"enabled"`
+	CreatedAt         int64    `json:"createdAt"`
+	Maintenance       bool     `json:"maintenance"`
+	MaintenanceMsg    string   `json:"maintenanceMsg"`
+	MaintenanceDeploy bool     `json:"maintenanceDeploy"`
+	AccessLog         bool     `json:"accessLog"`
+	LoadBalance       bool     `json:"loadBalance"`
+	HealthPath        string   `json:"healthPath"`
+	basicHash         string
 }
 
 func (s *Server) listSites(where string, args ...any) ([]siteRow, error) {
-	rows, err := s.db.Query(`SELECT s.id, s.domains, s.kind, COALESCE(s.project_id,0), COALESCE(p.name,''), s.service, s.port, s.upstream, s.hsts, s.compress, s.basic_user, s.basic_hash, s.ip_allow, s.max_body, s.headers, s.enabled, s.created_at
+	rows, err := s.db.Query(`SELECT s.id, s.domains, s.kind, COALESCE(s.project_id,0), COALESCE(p.name,''), s.service, s.port, s.upstream, s.hsts, s.compress, s.basic_user, s.basic_hash, s.ip_allow, s.max_body, s.headers, s.enabled, s.created_at,
+		s.maintenance, s.maintenance_msg, s.maintenance_deploy, s.access_log, s.load_balance, s.health_path
 		FROM sites s LEFT JOIN projects p ON p.id=s.project_id `+where+` ORDER BY s.domains`, args...)
 	if err != nil {
 		return nil, err
@@ -48,7 +55,8 @@ func (s *Server) listSites(where string, args ...any) ([]siteRow, error) {
 	for rows.Next() {
 		var x siteRow
 		var domains string
-		if err := rows.Scan(&x.ID, &domains, &x.Kind, &x.ProjectID, &x.ProjectName, &x.Service, &x.Port, &x.Upstream, &x.HSTS, &x.Compress, &x.BasicUser, &x.basicHash, &x.IPAllow, &x.MaxBody, &x.Headers, &x.Enabled, &x.CreatedAt); err != nil {
+		if err := rows.Scan(&x.ID, &domains, &x.Kind, &x.ProjectID, &x.ProjectName, &x.Service, &x.Port, &x.Upstream, &x.HSTS, &x.Compress, &x.BasicUser, &x.basicHash, &x.IPAllow, &x.MaxBody, &x.Headers, &x.Enabled, &x.CreatedAt,
+			&x.Maintenance, &x.MaintenanceMsg, &x.MaintenanceDeploy, &x.AccessLog, &x.LoadBalance, &x.HealthPath); err != nil {
 			return nil, err
 		}
 		x.Domains = splitList(domains)
@@ -118,10 +126,16 @@ func (s *Server) buildCaddyConfig() (map[string]any, error) {
 		if up == "" {
 			continue
 		}
-		sites = append(sites, proxy.Site{
+		site := proxy.Site{
 			ID: x.ID, Domains: x.Domains, Kind: x.Kind, Upstream: up, HSTS: x.HSTS, Compress: x.Compress,
 			BasicUser: x.BasicUser, BasicHash: x.basicHash, IPAllow: splitList(x.IPAllow), MaxBody: parseSize(x.MaxBody), Headers: parseHeaders(x.Headers),
-		})
+			HealthPath: x.HealthPath, AccessLog: x.AccessLog, MaintenanceMsg: x.MaintenanceMsg,
+			Maintenance: x.Maintenance || (x.MaintenanceDeploy && s.inDeployMaintenance(x.ProjectID)),
+		}
+		if x.LoadBalance && x.ProjectName != "" && x.Service != "" {
+			site.Upstreams = s.replicaUpstreams(x)
+		}
+		sites = append(sites, site)
 	}
 	var certs []proxy.LoadedCert
 	crow, err := s.db.Query(`SELECT id, cert_pem, key_pem FROM certificates WHERE not_after>?`, time.Now().Unix())
@@ -158,21 +172,27 @@ func (s *Server) syncCaddy(ctx context.Context) error {
 var domainRe = regexp.MustCompile(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
 
 type siteReq struct {
-	Domains   []string `json:"domains"`
-	Kind      string   `json:"kind"`
-	ProjectID int64    `json:"projectId"`
-	Service   string   `json:"service"`
-	Port      int      `json:"port"`
-	Upstream  string   `json:"upstream"`
-	HSTS      bool     `json:"hsts"`
-	Compress  bool     `json:"compress"`
-	BasicUser string   `json:"basicUser"`
-	BasicPass string   `json:"basicPassword"`
-	ClearBasic bool    `json:"clearBasicAuth"`
-	IPAllow   string   `json:"ipAllow"`
-	MaxBody   string   `json:"maxBody"`
-	Headers   string   `json:"headers"`
-	Enabled   bool     `json:"enabled"`
+	Domains           []string `json:"domains"`
+	Kind              string   `json:"kind"`
+	ProjectID         int64    `json:"projectId"`
+	Service           string   `json:"service"`
+	Port              int      `json:"port"`
+	Upstream          string   `json:"upstream"`
+	HSTS              bool     `json:"hsts"`
+	Compress          bool     `json:"compress"`
+	BasicUser         string   `json:"basicUser"`
+	BasicPass         string   `json:"basicPassword"`
+	ClearBasic        bool     `json:"clearBasicAuth"`
+	IPAllow           string   `json:"ipAllow"`
+	MaxBody           string   `json:"maxBody"`
+	Headers           string   `json:"headers"`
+	Enabled           bool     `json:"enabled"`
+	Maintenance       bool     `json:"maintenance"`
+	MaintenanceMsg    string   `json:"maintenanceMsg"`
+	MaintenanceDeploy bool     `json:"maintenanceDeploy"`
+	AccessLog         bool     `json:"accessLog"`
+	LoadBalance       bool     `json:"loadBalance"`
+	HealthPath        string   `json:"healthPath"`
 }
 
 func (s *Server) checkSiteReq(req *siteReq, selfID int64) error {
@@ -236,6 +256,16 @@ func (s *Server) checkSiteReq(req *siteReq, selfID int64) error {
 	if req.MaxBody != "" && parseSize(req.MaxBody) == 0 {
 		return bad("请求体上限格式不正确（如 50MB）")
 	}
+	req.HealthPath = strings.TrimSpace(req.HealthPath)
+	if req.HealthPath != "" && !strings.HasPrefix(req.HealthPath, "/") {
+		return bad("健康检查路径应以 / 开头")
+	}
+	if req.LoadBalance && req.ProjectID == 0 {
+		return bad("负载均衡仅适用于指向项目服务的站点")
+	}
+	if len(req.MaintenanceMsg) > 500 {
+		return bad("维护提示最多 500 字")
+	}
 	return nil
 }
 
@@ -289,12 +319,16 @@ func (s *Server) handleSaveSite(w http.ResponseWriter, r *http.Request, u *User)
 	domains := strings.Join(req.Domains, ",")
 	var err error
 	if id > 0 {
-		_, err = s.db.Exec(`UPDATE sites SET domains=?, kind=?, project_id=?, service=?, port=?, upstream=?, hsts=?, compress=?, basic_user=?, basic_hash=?, ip_allow=?, max_body=?, headers=?, enabled=? WHERE id=?`,
-			domains, req.Kind, projectID, req.Service, req.Port, req.Upstream, boolInt(req.HSTS), boolInt(req.Compress), req.BasicUser, hash, req.IPAllow, req.MaxBody, req.Headers, boolInt(req.Enabled), id)
+		_, err = s.db.Exec(`UPDATE sites SET domains=?, kind=?, project_id=?, service=?, port=?, upstream=?, hsts=?, compress=?, basic_user=?, basic_hash=?, ip_allow=?, max_body=?, headers=?, enabled=?,
+			maintenance=?, maintenance_msg=?, maintenance_deploy=?, access_log=?, load_balance=?, health_path=? WHERE id=?`,
+			domains, req.Kind, projectID, req.Service, req.Port, req.Upstream, boolInt(req.HSTS), boolInt(req.Compress), req.BasicUser, hash, req.IPAllow, req.MaxBody, req.Headers, boolInt(req.Enabled),
+			boolInt(req.Maintenance), req.MaintenanceMsg, boolInt(req.MaintenanceDeploy), boolInt(req.AccessLog), boolInt(req.LoadBalance), req.HealthPath, id)
 	} else {
 		var res interface{ LastInsertId() (int64, error) }
-		res, err = s.db.Exec(`INSERT INTO sites(domains,kind,project_id,service,port,upstream,hsts,compress,basic_user,basic_hash,ip_allow,max_body,headers,enabled,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			domains, req.Kind, projectID, req.Service, req.Port, req.Upstream, boolInt(req.HSTS), boolInt(req.Compress), req.BasicUser, hash, req.IPAllow, req.MaxBody, req.Headers, boolInt(req.Enabled), time.Now().Unix())
+		res, err = s.db.Exec(`INSERT INTO sites(domains,kind,project_id,service,port,upstream,hsts,compress,basic_user,basic_hash,ip_allow,max_body,headers,enabled,created_at,
+			maintenance,maintenance_msg,maintenance_deploy,access_log,load_balance,health_path) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			domains, req.Kind, projectID, req.Service, req.Port, req.Upstream, boolInt(req.HSTS), boolInt(req.Compress), req.BasicUser, hash, req.IPAllow, req.MaxBody, req.Headers, boolInt(req.Enabled), time.Now().Unix(),
+			boolInt(req.Maintenance), req.MaintenanceMsg, boolInt(req.MaintenanceDeploy), boolInt(req.AccessLog), boolInt(req.LoadBalance), req.HealthPath)
 		if err == nil {
 			id, _ = res.LastInsertId()
 		}

@@ -107,6 +107,13 @@ func (s *Server) runDeploy(run *jobRun, projectID, depID, fromDeployment int64) 
 		state.compose, s.box.Seal(string(envJSON)), state.commitSHA, state.commitMsg, depID)
 
 	run.SetProgress(25)
+	if s.enterDeployMaintenance(ctx, p.ID) {
+		run.Logf("==> 已为站点开启部署维护页")
+		defer func() {
+			s.leaveDeployMaintenance(p.ID)
+			run.Logf("==> 已关闭部署维护页")
+		}()
+	}
 	if err := s.composeUp(run, p); err != nil {
 		run.Logf("==> 部署失败：%v", err)
 		if !boolOr(p.Options.AutoRollback, true) || fromDeployment > 0 {

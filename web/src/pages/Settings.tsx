@@ -56,6 +56,7 @@ function PanelSettings() {
         <div className="form-grid">
           <Field label="时区"><input className="input mono" value={f.timezone || ''} onChange={set('timezone')} placeholder="Asia/Shanghai" /></Field>
           <Field label="镜像清理计划" hint="cron，留空关闭"><input className="input mono" value={f.image_prune_cron || ''} onChange={set('image_prune_cron')} /></Field>
+          <Field label="镜像更新检查计划" hint="cron，留空关闭；对比镜像仓库 digest，开启自动更新的项目会自动重新部署"><input className="input mono" value={f.image_check_cron || ''} onChange={set('image_check_cron')} placeholder="0 */6 * * *" /></Field>
           <Field label="面板自身备份计划" hint="cron，保留最近 14 份"><input className="input mono" value={f.panel_backup_cron || ''} onChange={set('panel_backup_cron')} /></Field>
           <Field label="磁盘告警阈值（%）"><input className="input" type="number" min={50} max={99} value={f.disk_alert_percent || ''} onChange={set('disk_alert_percent')} /></Field>
           <Field label="证书提前告警（天）"><input className="input" type="number" min={1} value={f.cert_alert_days || ''} onChange={set('cert_alert_days')} /></Field>

@@ -1,16 +1,25 @@
 import { Link } from 'react-router-dom'
 import { ago, bytes, duration, get, pct } from '../api'
+import { MetricsPanel } from '../components/charts'
 import { Card, Empty, ErrorBox, JobStatus, Loading, Meter, Page, Status, useJobLog, useLoad } from '../components/ui'
 
 export default function Overview() {
   const { data: o, error } = useLoad(() => get<any>('/overview'), [], 15000)
   const openJob = useJobLog()
+  const { data: updates } = useLoad(() => get<any[]>('/image-updates'), [], 300000)
   if (!o) return <Page title="总览">{error ? <ErrorBox error={error} /> : <Loading />}</Page>
   const h = o.host || {}
-  const issues: { text: string; to: string }[] = []
+  const issues: { text: string; to: string; kind?: 'info' }[] = []
   if (!o.docker) issues.push({ text: '无法连接 Docker：' + (o.dockerError || ''), to: '/settings' })
   for (const c of o.unhealthy || []) issues.push({ text: `容器 ${c.name} ${c.health === 'unhealthy' ? '健康检查失败' : c.status}`, to: '/containers/' + c.id })
   for (const b of o.backups?.recentFailures || []) issues.push({ text: `备份失败：${b.label}（${ago(b.startedAt)}）`, to: '/backups' })
+  const byProject = new Map<number, { name: string; services: string[] }>()
+  for (const u of updates || []) {
+    const e = byProject.get(u.projectId) || { name: u.project as string, services: [] as string[] }
+    e.services.push(u.service)
+    byProject.set(u.projectId, e)
+  }
+  for (const [pid, e] of byProject) issues.push({ text: `项目 ${e.name} 有镜像更新：${e.services.join('、')}`, to: `/projects/${pid}?tab=images`, kind: 'info' })
   for (const c of o.certs || []) if (c.daysLeft <= 14) issues.push({ text: `证书 ${c.domains?.[0]} 将在 ${c.daysLeft} 天后过期`, to: '/certificates' })
 
   return (
@@ -22,7 +31,7 @@ export default function Overview() {
               <tbody>
                 {issues.slice(0, 8).map((i, k) => (
                   <tr key={k}>
-                    <td><span className="badge err"><span className="dot" />问题</span></td>
+                    <td>{i.kind === 'info' ? <span className="badge run"><span className="dot" />更新</span> : <span className="badge err"><span className="dot" />问题</span>}</td>
                     <td className="grow">{i.text}</td>
                     <td style={{ textAlign: 'right' }}><Link to={i.to}>查看</Link></td>
                   </tr>
@@ -59,6 +68,8 @@ export default function Overview() {
           <span className="label">24 小时备份：{o.backups.success} 成功 · {o.backups.failed} 失败 · {bytes(o.backups.size)}</span>
         </div>
       </div>
+
+      <MetricsPanel url="/metrics/host" host />
 
       <div className="grid-2">
         <Card title="项目" actions={<Link className="btn btn-sm" to="/projects">全部项目</Link>} pad={false}>
@@ -148,5 +159,5 @@ export default function Overview() {
 }
 
 export function triggerName(t: string) {
-  return ({ manual: '手动', webhook: 'Webhook', rollback: '回滚', create: '创建', api: 'API', import: '导入' } as Record<string, string>)[t] || t
+  return ({ manual: '手动', webhook: 'Webhook', rollback: '回滚', create: '创建', api: 'API', import: '导入', image_update: '镜像自动更新' } as Record<string, string>)[t] || t
 }

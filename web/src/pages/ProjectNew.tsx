@@ -1,16 +1,21 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { get, post } from '../api'
+import { del, get, post } from '../api'
+import { useCan } from '../auth'
 import { CodeArea, EnvEditor, EnvVar, validateCompose, Validation, ValidationResult } from '../components/editors'
-import { Card, ErrorBox, Field, Page, useJobLog, useLoad, useToast } from '../components/ui'
+import { Card, Confirm, ErrorBox, Field, Icon, Page, useJobLog, useLoad, useToast } from '../components/ui'
 
-type Template = { id: string; name: string; description: string; compose: string; env: EnvVar[] | null; service: string; port: number }
+type Template = { id: string; name: string; description: string; compose: string; env: EnvVar[] | null; files: { path: string; content: string }[] | null; vars: string[] | null; service: string; port: number; custom: boolean; category: string }
 
 export default function ProjectNew() {
   const nav = useNavigate()
   const toast = useToast()
   const openJob = useJobLog()
-  const { data: templates } = useLoad(() => get<Template[]>('/templates'))
+  const { data: templates, reload: reloadTemplates } = useLoad(() => get<Template[]>('/templates'))
+  const can = useCan()
+  const [tpl, setTpl] = useState<Template | null>(null)
+  const [files, setFiles] = useState<{ path: string; content: string }[]>([])
+  const [rmTpl, setRmTpl] = useState<Template | null>(null)
   const [source, setSource] = useState<'inline' | 'git'>('inline')
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -32,7 +37,9 @@ export default function ProjectNew() {
     setSource('inline')
     setCompose(t.compose)
     setEnv(t.env || [])
-    if (!name) setName(t.id)
+    setFiles(t.files || [])
+    setTpl(t)
+    if (!name) setName(t.custom ? t.name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') : t.id)
     setService(t.service || '')
     setPort(t.port ? String(t.port) : '')
     setV(null)
@@ -57,7 +64,7 @@ export default function ProjectNew() {
     }
     setBusy(true)
     try {
-      const res = await post('/projects', { name, description, source, compose: source === 'inline' ? compose : '', env, gitUrl, gitBranch, gitComposePath, autoDeploy, deploy, options: {} })
+      const res = await post('/projects', { name, description, source, compose: source === 'inline' ? compose : '', files: source === 'inline' ? files : [], env, gitUrl, gitBranch, gitComposePath, autoDeploy, deploy, options: {} })
       if (domain.trim()) {
         const svc = service || v?.services?.[0] || ''
         try {
@@ -100,14 +107,46 @@ export default function ProjectNew() {
       {source === 'inline' ? (
         <>
           {templates && templates.length > 0 && (
-            <Card title="从模板开始（可选）">
-              <div className="grid">
-                {templates.map((t) => (
-                  <button key={t.id} className="card" style={{ textAlign: 'left', padding: 14, cursor: 'pointer' }} onClick={() => applyTemplate(t)}>
-                    <div style={{ fontWeight: 600 }}>{t.name}</div>
-                    <div className="label">{t.description}</div>
-                  </button>
+            <Card title="从模板开始（可选）" actions={tpl && <span className="label">已选择：{tpl.name}</span>}>
+              <div className="col" style={{ gap: 16 }}>
+                {groupTemplates(templates).map(([cat, list]) => (
+                  <div key={cat} className="col" style={{ gap: 8 }}>
+                    <span className="label">{cat}</span>
+                    <div className="grid" style={{ gap: 10 }}>
+                      {list.map((t) => (
+                        <div key={t.id} className="card row" style={{ padding: 12, alignItems: 'flex-start', borderColor: tpl?.id === t.id ? 'var(--accent)' : undefined }}>
+                          <button className="grow" style={{ textAlign: 'left', background: 'none', border: 0, padding: 0, cursor: 'pointer' }} onClick={() => applyTemplate(t)}>
+                            <div style={{ fontWeight: 600 }}>{t.name}</div>
+                            <div className="label">{t.description || '—'}</div>
+                            {(t.vars?.length || 0) > 0 && <div className="label mono" style={{ marginTop: 4 }}>{t.vars!.map((v) => '${' + v + '}').join(' ')}</div>}
+                          </button>
+                          {t.custom && can.operator && (
+                            <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除模板" title="删除模板" onClick={() => setRmTpl(t)}><Icon name="trash" size={16} /></button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 ))}
+              </div>
+            </Card>
+          )}
+          {tpl && (tpl.vars?.length || 0) > 0 && (
+            <div className="alert run">
+              <Icon name="alert" />
+              <div>模板变量 {tpl.vars!.map((v) => <code key={v} className="mono" style={{ marginRight: 6 }}>{v}</code>)}已加入下方「环境变量」。敏感值已自动生成随机值，其余请按需填写。</div>
+            </div>
+          )}
+          {files.length > 0 && (
+            <Card title={`附加文件（${files.length}）`}>
+              <div className="col" style={{ gap: 6 }}>
+                {files.map((f, i) => (
+                  <div key={i} className="row">
+                    <Icon name="file" size={16} /><span className="mono grow">{f.path}</span>
+                    <button className="btn btn-sm btn-ghost" onClick={() => setFiles(files.filter((_, j) => j !== i))}>移除</button>
+                  </div>
+                ))}
+                <span className="label">创建后可在项目的「附加文件」中编辑。</span>
               </div>
             </Card>
           )}
@@ -166,6 +205,11 @@ export default function ProjectNew() {
       </Card>
 
       <ErrorBox error={err} />
+      {rmTpl && (
+        <Confirm title={`删除模板 ${rmTpl.name}`} danger confirmText="删除" onClose={() => setRmTpl(null)} onConfirm={async () => { await del(`/templates/${rmTpl.id.replace('custom-', '')}`); if (tpl?.id === rmTpl.id) setTpl(null); reloadTemplates() }}>
+          只删除模板，不影响已经用它创建的项目。
+        </Confirm>
+      )}
       <div className="row wrap">
         <label className="check"><input type="checkbox" checked={deploy} onChange={(e) => setDeploy(e.target.checked)} />创建后立即部署</label>
         <span className="spacer" />
@@ -174,4 +218,13 @@ export default function ProjectNew() {
       </div>
     </Page>
   )
+}
+
+function groupTemplates(list: Template[]): [string, Template[]][] {
+  const m = new Map<string, Template[]>()
+  for (const t of list) {
+    const c = t.category || '其他'
+    m.set(c, [...(m.get(c) || []), t])
+  }
+  return [...m.entries()]
 }

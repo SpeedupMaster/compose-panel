@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { ago, bytes, del, get, post, put } from '../api'
 import { useCan } from '../auth'
 import { BackupNowModal, BackupSource, BackupTable, SourcePicker, sourceText, useStorages } from '../components/backup'
+import { Drills } from './Drills'
 import { Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Status, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
 
 type Policy = {
@@ -24,7 +25,7 @@ const presets: [string, string][] = [['0 3 * * *', '每天 03:00'], ['0 */6 * * 
 
 export default function Backups() {
   const [params, setParams] = useSearchParams()
-  const [tab, setTab] = useState<'policies' | 'records'>('policies')
+  const [tab, setTab] = useState<'policies' | 'records' | 'drills'>('policies')
   const can = useCan()
   const { data: policies, error, reload } = useLoad(() => get<any[]>('/backup-policies'), [], 15000)
   const { data: sources } = useLoad(() => get<any>('/backup-sources'), [])
@@ -71,7 +72,7 @@ export default function Backups() {
         <div className="card stat"><span className="label">24 小时失败</span><div className="big" style={{ color: failed24 ? '#A41E14' : undefined }}>{failed24}</div></div>
         <div className="card stat"><span className="label">备份总量（最近 300 条）</span><div className="big">{bytes(total)}</div></div>
       </div>
-      <Tabs tabs={[['policies', '策略'], ['records', '备份记录']]} value={tab} onChange={setTab} />
+      <Tabs tabs={[['policies', '策略'], ['records', '备份记录'], ['drills', '恢复演练']]} value={tab} onChange={setTab} />
       <ErrorBox error={error} />
       {tab === 'policies' && (
         <section className="card">
@@ -122,6 +123,7 @@ export default function Backups() {
           {records ? <BackupTable list={records} reload={reloadRecords} names={names} /> : <Loading />}
         </section>
       )}
+      {tab === 'drills' && <Drills policies={policies || []} />}
       {edit && <PolicyModal p={edit} sources={sources} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reload() }} />}
       {now && <BackupNowModal onClose={() => setNow(false)} onDone={reloadRecords} />}
       {rm && <Confirm title={`删除策略 ${rm.name}`} danger confirmText="删除" onClose={() => setRm(null)} onConfirm={async () => { await del(`/backup-policies/${rm.id}`); reload() }}>已有的备份文件会保留，可在备份记录中单独删除。</Confirm>}
@@ -169,7 +171,7 @@ function PolicyModal({ p, sources, onClose, onSaved }: { p: Policy; sources: any
       </div>
       <Field label="存储位置">
         <select className="select" value={sid} onChange={(e) => setF({ ...f, storageId: Number(e.target.value) })}>
-          {(storages || []).map((s) => <option key={s.id} value={s.id}>{s.name}（{s.kind === 's3' ? 'S3' : '本地'}）</option>)}
+          {(storages || []).map((s) => <option key={s.id} value={s.id}>{s.name}（{({ s3: 'S3', local: '本地', sftp: 'SFTP', webdav: 'WebDAV' } as Record<string, string>)[s.kind] || s.kind}）</option>)}
         </select>
       </Field>
       <label className="check"><input type="checkbox" checked={f.encrypt} onChange={(e) => setF({ ...f, encrypt: e.target.checked })} />使用 age 加密（面板密钥）</label>

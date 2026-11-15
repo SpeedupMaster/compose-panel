@@ -34,6 +34,14 @@ type TargetConfig struct {
 	SecretKey string `json:"secretKey,omitempty"`
 	Insecure  bool   `json:"insecure,omitempty"` // http instead of https
 	PathStyle bool   `json:"pathStyle,omitempty"`
+	// sftp / webdav (Path is the remote directory for sftp)
+	Host       string `json:"host,omitempty"`
+	Port       int    `json:"port,omitempty"`
+	Username   string `json:"username,omitempty"`
+	Password   string `json:"password,omitempty"`
+	PrivateKey string `json:"privateKey,omitempty"`
+	HostKey    string `json:"hostKey,omitempty"` // optional SHA256 fingerprint pin
+	URL        string `json:"url,omitempty"`     // webdav collection URL
 }
 
 func ParseTargetConfig(s string) (TargetConfig, error) {
@@ -54,6 +62,10 @@ func Open(kind string, c TargetConfig) (Storage, error) {
 		return &Local{Root: c.Path}, nil
 	case "s3":
 		return NewS3(c)
+	case "sftp":
+		return NewSFTP(c)
+	case "webdav":
+		return NewWebDAV(c)
 	}
 	return nil, fmt.Errorf("unknown storage kind %q", kind)
 }
