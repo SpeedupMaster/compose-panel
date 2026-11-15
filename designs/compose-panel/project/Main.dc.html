@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>总览</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+body{margin:0;background:#F4F4F2;color:#18191B;font-family:'IBM Plex Sans','Noto Sans SC',system-ui,sans-serif;font-size:14px;line-height:1.5}
+a{color:#93370D}a:hover{color:#6E2A0A}
+.mono{font-family:'IBM Plex Mono','Noto Sans SC',ui-monospace,monospace;font-size:13px}
+.btn{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:6px;border:1px solid #D6D6D1;background:#fff;color:#18191B;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap;box-sizing:border-box}
+.btn:hover{background:#F7F7F5;color:#18191B}
+.btn-primary{background:#B54708;border-color:#B54708;color:#fff}.btn-primary:hover{background:#93370D;color:#fff}
+.btn-sm{height:30px;padding:0 10px;font-size:13px}
+.card{background:#fff;border:1px solid #E2E2DE;border-radius:8px}
+.badge{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E8F5EE;color:#17663E}.err{background:#FDECEA;color:#A41E14}.off{background:#EEEEEC;color:#4A4D52}.run{background:#EAF0FD;color:#1D44B8}.warn{background:#FBF3DD;color:#7A4F00}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;font-weight:500;color:#5F6268;text-align:left;padding:10px 16px;border-bottom:1px solid #E2E2DE;background:#FAFAF8;white-space:nowrap}
+td{padding:12px 16px;border-bottom:1px solid #EEEEEB;vertical-align:middle}
+tr:last-child td{border-bottom:0}
+.label{font-size:12px;color:#5F6268}
+.h1{font-size:22px;font-weight:600;margin:0;line-height:1.3}
+.st{font-size:15px;font-weight:600;margin:0}
+.track{height:6px;border-radius:3px;background:#EEEEEB;overflow:hidden}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh; background: #F4F4F2">
+  <div style="flex: 1 1 232px; background: #17181B">
+    <dc-import name="Sidebar" active="overview" hint-size="232px,900px"></dc-import>
+  </div>
+  <main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between; padding: 28px 32px 20px">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <h1 class="h1">总览</h1>
+        <div class="label">prod-01 · Docker 27.3.1 · Compose v2.29.7 · 已运行 41 天</div>
+      </div>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap">
+        <a class="btn" href="Jobs.dc.html">任务中心</a>
+        <a class="btn btn-primary" href="Projects.dc.html">新建项目</a>
+      </div>
+    </header>
+
+    <div style="padding: 0 32px 40px; display: flex; flex-direction: column; gap: 20px">
+      <section aria-label="主机资源" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 16px">
+        <div class="card" style="padding: 16px; display: flex; flex-direction: column; gap: 10px">
+          <div class="label">CPU · 8 核</div>
+          <div style="font-size: 26px; font-weight: 600">23%</div>
+          <div class="track"><div style="width: 23%; height: 100%; background: #1D44B8"></div></div>
+          <div class="label">负载 1.84 / 1.62 / 1.40</div>
+        </div>
+        <div class="card" style="padding: 16px; display: flex; flex-direction: column; gap: 10px">
+          <div class="label">内存</div>
+          <div style="font-size: 26px; font-weight: 600">9.2 <span style="font-size: 14px; font-weight: 400; color: #5F6268">/ 16 GB</span></div>
+          <div class="track"><div style="width: 58%; height: 100%; background: #1D44B8"></div></div>
+          <div class="label">容器占用 7.1 GB</div>
+        </div>
+        <div class="card" style="padding: 16px; display: flex; flex-direction: column; gap: 10px">
+          <div class="label">磁盘 /</div>
+          <div style="font-size: 26px; font-weight: 600">142 <span style="font-size: 14px; font-weight: 400; color: #5F6268">/ 320 GB</span></div>
+          <div class="track"><div style="width: 44%; height: 100%; background: #1D44B8"></div></div>
+          <a href="DockerResources.dc.html" style="font-size: 12px">可清理 18.4 GB</a>
+        </div>
+        <div class="card" style="padding: 16px; display: flex; flex-direction: column; gap: 10px">
+          <div class="label">网络</div>
+          <div style="font-size: 26px; font-weight: 600">12.4 <span style="font-size: 14px; font-weight: 400; color: #5F6268">MB/s 入</span></div>
+          <div class="label">出 3.1 MB/s · eth0</div>
+          <div class="label">80 / 443 由 Caddy 监听</div>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="attn" style="overflow: hidden">
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid #E2E2DE">
+          <h2 id="attn" class="st">需要处理 · 3</h2>
+          <span class="label">按严重程度排序</span>
+        </div>
+        <div style="display: flex; flex-direction: column">
+          <div style="display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; padding: 14px 16px; border-bottom: 1px solid #EEEEEB">
+            <span class="badge err"><span class="dot"></span>容器异常</span>
+            <div style="flex: 1 1 360px; min-width: 0">
+              <div style="font-weight: 500">n8n · 容器 n8n-worker-1 异常退出（exit 137，内存不足被终止）</div>
+              <div class="label">3 分钟前 · 已自动重启 4 次 · 内存限制 512 MB</div>
+            </div>
+            <a class="btn btn-sm" href="ContainerConsole.dc.html">查看日志</a>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; padding: 14px 16px; border-bottom: 1px solid #EEEEEB">
+            <span class="badge err"><span class="dot"></span>证书</span>
+            <div style="flex: 1 1 360px; min-width: 0">
+              <div style="font-weight: 500"><span class="mono">legacy.example.com</span> 证书 9 天后到期，最近一次续期失败</div>
+              <div class="label">原因：域名 A 记录指向 198.51.100.7，不是本机 203.0.113.10</div>
+            </div>
+            <a class="btn btn-sm" href="Certificates.dc.html">去处理</a>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; padding: 14px 16px">
+            <span class="badge warn"><span class="dot"></span>备份</span>
+            <div style="flex: 1 1 360px; min-width: 0">
+              <div style="font-weight: 500">mysql-legacy / crm 今天 03:30 的备份失败</div>
+              <div class="label">存储目标 r2-backup 连接超时，已重试 2 次</div>
+            </div>
+            <a class="btn btn-sm" href="Jobs.dc.html">查看任务</a>
+          </div>
+        </div>
+      </section>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+        <section class="card" aria-labelledby="proj" style="flex: 2 1 560px; min-width: 0; overflow: hidden">
+          <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 16px">
+            <h2 id="proj" class="st">项目 · 7</h2>
+            <a href="Projects.dc.html" style="font-size: 13px">全部项目</a>
+          </div>
+          <div style="overflow-x: auto">
+            <table>
+              <thead><tr><th>项目</th><th>状态</th><th>服务</th><th>域名</th><th>最近部署</th></tr></thead>
+              <tbody>
+                <tr><td><a href="ProjectDetail.dc.html" style="font-weight: 500">shop-api</a></td><td><span class="badge ok"><span class="dot"></span>运行中</span></td><td>3 / 3</td><td class="mono">api.example.com</td><td class="label">2 小时前 · 成功</td></tr>
+                <tr><td style="font-weight: 500">shop-web</td><td><span class="badge ok"><span class="dot"></span>运行中</span></td><td>1 / 1</td><td class="mono">www.example.com</td><td class="label">昨天 18:20 · 成功</td></tr>
+                <tr><td style="font-weight: 500">postgres-main</td><td><span class="badge ok"><span class="dot"></span>运行中</span></td><td>1 / 1</td><td class="label">—</td><td class="label">12 天前 · 成功</td></tr>
+                <tr><td style="font-weight: 500">mysql-legacy</td><td><span class="badge ok"><span class="dot"></span>运行中</span></td><td>1 / 1</td><td class="mono">legacy.example.com</td><td class="label">40 天前 · 成功</td></tr>
+                <tr><td style="font-weight: 500">umami</td><td><span class="badge ok"><span class="dot"></span>运行中</span></td><td>2 / 2</td><td class="mono">stats.example.com</td><td class="label">5 天前 · 成功</td></tr>
+                <tr><td style="font-weight: 500">n8n</td><td><span class="badge err"><span class="dot"></span>异常</span></td><td>1 / 2</td><td class="mono">flow.example.com</td><td class="label">3 天前 · 成功</td></tr>
+                <tr><td style="font-weight: 500">minio</td><td><span class="badge off"><span class="dot"></span>已停止</span></td><td>0 / 1</td><td class="mono">s3.example.com</td><td class="label">21 天前 · 成功</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <div style="flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+          <section class="card" aria-labelledby="bk" style="overflow: hidden">
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid #E2E2DE">
+              <h2 id="bk" class="st">最近备份</h2>
+              <a href="Backups.dc.html" style="font-size: 13px">全部备份</a>
+            </div>
+            <div style="display: flex; flex-direction: column">
+              <div style="display: flex; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #EEEEEB">
+                <div><div style="font-weight: 500">postgres-main / shop</div><div class="label">今天 03:00 · 412 MB · r2-backup</div></div>
+                <span class="badge ok">成功</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #EEEEEB">
+                <div><div style="font-weight: 500">mysql-legacy / crm</div><div class="label">今天 03:30 · r2-backup</div></div>
+                <span class="badge err">失败</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; gap: 12px; padding: 12px 16px">
+                <div><div style="font-weight: 500">umami / umami</div><div class="label">今天 06:00 · 38 MB · 本地</div></div>
+                <span class="badge ok">成功</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="card" aria-labelledby="dp" style="overflow: hidden">
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid #E2E2DE">
+              <h2 id="dp" class="st">最近部署</h2>
+              <a href="Deployments.dc.html" style="font-size: 13px">部署历史</a>
+            </div>
+            <div style="display: flex; flex-direction: column">
+              <div style="display: flex; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #EEEEEB">
+                <div><div style="font-weight: 500">shop-api #42</div><div class="label">2 小时前 · admin · 手动 · 48 秒</div></div>
+                <span class="badge ok">成功</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; gap: 12px; padding: 12px 16px">
+                <div><div style="font-weight: 500">shop-web #18</div><div class="label">昨天 18:20 · Webhook · 31 秒</div></div>
+                <span class="badge ok">成功</span>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1150}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

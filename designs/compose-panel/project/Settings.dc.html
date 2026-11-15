@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>系统设置</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+body{margin:0;background:#F4F4F2;color:#18191B;font-family:'IBM Plex Sans','Noto Sans SC',system-ui,sans-serif;font-size:14px;line-height:1.5}
+a{color:#93370D}a:hover{color:#6E2A0A}
+.mono{font-family:'IBM Plex Mono','Noto Sans SC',ui-monospace,monospace;font-size:13px}
+.btn{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:6px;border:1px solid #D6D6D1;background:#fff;color:#18191B;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap;box-sizing:border-box}
+.btn:hover{background:#F7F7F5;color:#18191B}
+.btn-primary{background:#B54708;border-color:#B54708;color:#fff}.btn-primary:hover{background:#93370D;color:#fff}
+.btn-sm{height:30px;padding:0 10px;font-size:13px}
+.card{background:#fff;border:1px solid #E2E2DE;border-radius:8px}
+.badge{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E8F5EE;color:#17663E}.warn{background:#FBF3DD;color:#7A4F00}.run{background:#EAF0FD;color:#1D44B8}
+.label{font-size:12px;color:#5F6268}
+.h1{font-size:22px;font-weight:600;margin:0;line-height:1.3}
+.st{font-size:16px;font-weight:600;margin:0}
+.input{height:36px;border:1px solid #C9C9C4;border-radius:6px;padding:0 10px;font:inherit;background:#fff;color:#18191B;box-sizing:border-box;width:100%}
+.field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.field label{font-size:13px;font-weight:500}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr));gap:16px}
+.sec{padding:20px;display:flex;flex-direction:column;gap:16px}
+.chk{display:flex;gap:8px;align-items:flex-start;font-size:13px}
+.chk input{margin-top:3px;accent-color:#B54708;width:16px;height:16px}
+.toc a{display:block;padding:8px 12px;border-radius:6px;color:#4A4D52;text-decoration:none}
+.toc a:hover{background:#EDEDEA;color:#18191B}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh">
+  <div style="flex: 1 1 232px; background: #17181B">
+    <dc-import name="Sidebar" active="settings" hint-size="232px,900px"></dc-import>
+  </div>
+  <main style="flex: 999 1 560px; min-width: 0; padding: 28px 32px 40px; display: flex; flex-direction: column; gap: 20px; box-sizing: border-box">
+    <header style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <h1 class="h1">设置</h1>
+        <div class="label">配置保存在 <span class="mono">/data/panel/panel.db</span>（SQLite WAL）· 敏感字段使用主密钥加密</div>
+      </div>
+      <button type="button" class="btn btn-primary">保存更改</button>
+    </header>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start">
+      <nav class="toc" aria-label="设置分区" style="flex: 1 1 180px; max-width: 220px; display: flex; flex-direction: column; gap: 2px; font-size: 14px">
+        <a href="#general" style="background: #EDEDEA; color: #18191B; font-weight: 600">常规</a>
+        <a href="#account">我的账户</a>
+        <a href="#security">安全</a>
+        <a href="#docker">Docker</a>
+        <a href="#proxy">反向代理</a>
+        <a href="#panel-backup">面板自身备份</a>
+        <a href="#import">导入现有工程</a>
+        <a href="#about">版本与更新</a>
+      </nav>
+
+      <div style="flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+        <section id="general" class="card sec" aria-labelledby="g1">
+          <h2 id="g1" class="st">常规</h2>
+          <div class="grid">
+            <div class="field"><label for="sn">服务器名称</label><input id="sn" class="input" value="prod-01"><span class="label">显示在侧栏与通知标题中</span></div>
+            <div class="field"><label for="pu">面板地址</label><input id="pu" class="input mono" value="https://panel.example.com"><span class="label">用于 Webhook 地址、邀请链接与通知中的跳转</span></div>
+            <div class="field"><label for="tz">时区</label><select id="tz" class="input"><option>Asia/Shanghai (UTC+8)</option><option>UTC</option></select><span class="label">影响计划任务与日志显示</span></div>
+            <div class="field"><label for="dd">项目数据目录</label><input id="dd" class="input mono" value="/data/projects"></div>
+          </div>
+        </section>
+
+        <section id="account" class="card sec" aria-labelledby="g2">
+          <h2 id="g2" class="st">我的账户 · admin</h2>
+          <div class="grid">
+            <div class="field"><label for="op">当前密码</label><input id="op" class="input" type="password" value="passwordpassword"></div>
+            <div class="field"><label for="np">新密码</label><input id="np" class="input" type="password" value=""><span class="label">至少 12 位</span></div>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; border-top: 1px solid #EEEEEB; padding-top: 14px">
+            <div><div style="font-weight: 500">两步验证 <span class="badge ok">已启用</span></div><div class="label">绑定于 2026-10-03 · 剩余恢复码 8 / 10</div></div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap"><button type="button" class="btn btn-sm">重新生成恢复码</button><button type="button" class="btn btn-sm">更换设备</button></div>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; border-top: 1px solid #EEEEEB; padding-top: 14px">
+            <div><div style="font-weight: 500">活跃会话 · 2</div><div class="label">本机 Chrome · 203.0.113.55（当前）；iPhone Safari · 198.51.100.8 · 3 天前</div></div>
+            <button type="button" class="btn btn-sm">退出其他会话</button>
+          </div>
+        </section>
+
+        <section id="security" class="card sec" aria-labelledby="g3">
+          <h2 id="g3" class="st">安全</h2>
+          <div class="grid">
+            <div class="field"><label for="st">会话有效期</label><select id="st" class="input"><option>7 天（勾选保持登录时）</option><option>24 小时</option></select></div>
+            <div class="field"><label for="it">闲置自动退出</label><select id="it" class="input"><option>2 小时</option><option>30 分钟</option><option>从不</option></select></div>
+            <div class="field"><label for="lk">登录失败锁定</label><input id="lk" class="input" value="5 次 / 15 分钟"></div>
+            <div class="field"><label for="ip">面板访问 IP 白名单</label><input id="ip" class="input mono" value="203.0.113.0/24, 198.51.100.20"><span class="label">留空表示不限制；由 Caddy 在入口处拦截</span></div>
+          </div>
+          <label class="chk"><input type="checkbox" checked><span>敏感操作（删除项目、删库、覆盖恢复、查看密文）需再次输入动态码</span></label>
+          <label class="chk"><input type="checkbox" checked><span>Web 终端会话录制并写入审计日志</span></label>
+        </section>
+
+        <section id="docker" class="card sec" aria-labelledby="g4">
+          <h2 id="g4" class="st">Docker</h2>
+          <div class="grid">
+            <div class="field"><label for="sock">Docker 连接</label><input id="sock" class="input mono" value="unix:///var/run/docker.sock"><span class="label"><span class="badge ok">已连接</span> Engine 27.3.1 · API 1.47</span></div>
+            <div class="field"><label for="cv">Compose</label><input id="cv" class="input mono" value="docker compose (v2.29.7)" readonly></div>
+            <div class="field"><label for="lr">新项目默认日志轮转</label><input id="lr" class="input mono" value="json-file · max-size 20m · max-file 5"><span class="label">未在 Compose 中声明 logging 时注入</span></div>
+            <div class="field"><label for="pn">共享代理网络名</label><input id="pn" class="input mono" value="panel-proxy"></div>
+          </div>
+        </section>
+
+        <section id="proxy" class="card sec" aria-labelledby="g5">
+          <h2 id="g5" class="st">反向代理</h2>
+          <div class="grid">
+            <div class="field"><label for="cad">Caddy 管理接口</label><input id="cad" class="input mono" value="unix//run/caddy/admin.sock"><span class="label"><span class="badge ok">已连接</span> 配置最近推送于 2 小时前</span></div>
+            <div class="field"><label for="df">未匹配域名的默认行为</label><select id="df" class="input"><option>返回 404</option><option>关闭连接</option><option>重定向到面板</option></select></div>
+          </div>
+          <label class="chk"><input type="checkbox" checked><span>为所有站点添加安全响应头（X-Content-Type-Options、Referrer-Policy）</span></label>
+          <label class="chk"><input type="checkbox"><span>启用 HTTP/3（需开放 UDP 443）</span></label>
+        </section>
+
+        <section id="panel-backup" class="card sec" aria-labelledby="g6">
+          <h2 id="g6" class="st">面板自身备份</h2>
+          <p style="margin: 0; color: #4A4D52">备份面板数据库（项目、站点、策略、用户、审计）与主密钥信封。主密钥丢失将无法解密已保存的环境变量与凭据。</p>
+          <div class="grid">
+            <div class="field"><label for="pbs">计划</label><select id="pbs" class="input"><option>每天 02:30 · 保留 14 份</option></select></div>
+            <div class="field"><label for="pbt">存储目标</label><select id="pbt" class="input"><option>r2-backup</option><option>local</option></select></div>
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap"><button type="button" class="btn btn-sm">立即导出</button><button type="button" class="btn btn-sm">下载主密钥恢复文件</button><button type="button" class="btn btn-sm">从备份迁移到新服务器…</button></div>
+        </section>
+
+        <section id="import" class="card sec" aria-labelledby="g7">
+          <h2 id="g7" class="st">导入现有 Compose 工程</h2>
+          <p style="margin: 0; color: #4A4D52">扫描到 2 个未被面板纳管的工程（按 <span class="mono">com.docker.compose.project</span> 标签）。导入只登记，不会重建容器。</p>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <label class="chk"><input type="checkbox" checked><span><span class="mono">portainer</span> · 1 个容器 · 工作目录 <span class="mono">/opt/portainer</span></span></label>
+            <label class="chk"><input type="checkbox"><span><span class="mono">old-blog</span> · 0 个运行容器 · 工作目录 <span class="mono">/root/old-blog</span> <span class="badge warn">compose 文件未找到</span></span></label>
+          </div>
+          <button type="button" class="btn btn-sm" style="align-self: flex-start">导入所选</button>
+        </section>
+
+        <section id="about" class="card sec" aria-labelledby="g8">
+          <h2 id="g8" class="st">版本与更新</h2>
+          <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between">
+            <div><div style="font-weight: 500">当前 v0.1.0 · <span class="badge run">v0.1.1 可用</span></div><div class="label">更新内容：修复 MariaDB 11.4 备份时的 SSL 警告；任务中心支持按项目筛选</div></div>
+            <div style="display: flex; gap: 8px"><button type="button" class="btn btn-sm">查看更新日志</button><button type="button" class="btn btn-sm btn-primary">更新并重启面板</button></div>
+          </div>
+          <p class="label" style="margin: 0">面板重启期间（约 3 秒）不影响任何正在运行的项目容器与 Caddy。</p>
+        </section>
+      </div>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1700}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

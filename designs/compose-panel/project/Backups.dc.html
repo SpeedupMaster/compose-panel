@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>备份</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+body{margin:0;background:#F4F4F2;color:#18191B;font-family:'IBM Plex Sans','Noto Sans SC',system-ui,sans-serif;font-size:14px;line-height:1.5}
+a{color:#93370D}a:hover{color:#6E2A0A}
+.mono{font-family:'IBM Plex Mono','Noto Sans SC',ui-monospace,monospace;font-size:13px}
+.btn{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:6px;border:1px solid #D6D6D1;background:#fff;color:#18191B;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap;box-sizing:border-box}
+.btn:hover{background:#F7F7F5;color:#18191B}
+.btn-primary{background:#B54708;border-color:#B54708;color:#fff}.btn-primary:hover{background:#93370D;color:#fff}
+.btn-sm{height:30px;padding:0 10px;font-size:13px}
+.card{background:#fff;border:1px solid #E2E2DE;border-radius:8px}
+.badge{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E8F5EE;color:#17663E}.err{background:#FDECEA;color:#A41E14}.off{background:#EEEEEC;color:#4A4D52}.run{background:#EAF0FD;color:#1D44B8}.warn{background:#FBF3DD;color:#7A4F00}
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;font-weight:500;color:#5F6268;text-align:left;padding:10px 14px;border-bottom:1px solid #E2E2DE;background:#FAFAF8;white-space:nowrap}
+td{padding:11px 14px;border-bottom:1px solid #EEEEEB;vertical-align:middle}
+tr:last-child td{border-bottom:0}
+.label{font-size:12px;color:#5F6268}
+.h1{font-size:22px;font-weight:600;margin:0;line-height:1.3}
+.st{font-size:15px;font-weight:600;margin:0}
+.tabs{display:flex;gap:4px;border-bottom:1px solid #E2E2DE;overflow-x:auto}
+.tabb{display:inline-flex;align-items:center;height:44px;padding:0 14px;border:0;border-bottom:2px solid transparent;background:none;font:inherit;cursor:pointer;white-space:nowrap}
+.input{height:36px;border:1px solid #C9C9C4;border-radius:6px;padding:0 10px;font:inherit;background:#fff;color:#18191B;box-sizing:border-box;width:100%}
+.field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.field label{font-size:13px;font-weight:500}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh">
+  <div style="flex: 1 1 232px; background: #17181B">
+    <dc-import name="Sidebar" active="backups" hint-size="232px,900px"></dc-import>
+  </div>
+  <main style="flex: 999 1 560px; min-width: 0; padding: 28px 32px 40px; display: flex; flex-direction: column; gap: 20px; box-sizing: border-box">
+    <header style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <h1 class="h1">备份</h1>
+        <div class="label">流式管道：dump → zstd 压缩 → age 加密 → SHA-256 校验 → 存储目标，不落临时文件</div>
+      </div>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap">
+        <a class="btn" href="Restore.dc.html">恢复…</a>
+        <button type="button" class="btn btn-primary">新建策略</button>
+      </div>
+    </header>
+
+    <section style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 16px">
+      <div class="card" style="padding: 14px 16px"><div class="label">最近 7 天成功率</div><div style="font-size: 22px; font-weight: 600">96.4% <span class="label">53 / 55</span></div></div>
+      <div class="card" style="padding: 14px 16px"><div class="label">已保存备份</div><div style="font-size: 22px; font-weight: 600">214 个 · 38.2 GB</div></div>
+      <div class="card" style="padding: 14px 16px"><div class="label">下次执行</div><div style="font-size: 22px; font-weight: 600">今天 18:00</div><div class="label">shop-api · uploads 目录</div></div>
+      <div class="card" style="padding: 14px 16px"><div class="label">最近一次恢复演练</div><div style="font-size: 22px; font-weight: 600">11 天前</div><div class="label">postgres-main/shop · 通过</div></div>
+    </section>
+
+    <div class="tabs" role="tablist" aria-label="备份视图">
+      <sc-for list="{{tabs}}" as="t" hint-placeholder-count="2">
+        <button type="button" role="tab" class="tabb" aria-selected="{{t.sel}}" onClick="{{t.pick}}" style="color: {{t.fg}}; font-weight: {{t.w}}; border-bottom-color: {{t.line}}">{{t.label}}</button>
+      </sc-for>
+    </div>
+
+    <sc-if value="{{isPol}}" hint-placeholder-val="{{true}}">
+      <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+        <section class="card" aria-label="策略列表" style="flex: 3 1 560px; min-width: 0; overflow: hidden">
+          <div style="overflow-x: auto"><table>
+            <thead><tr><th>策略</th><th>频率</th><th>保留</th><th>存储</th><th>上次</th><th>启用</th></tr></thead>
+            <tbody>
+              <sc-for list="{{policies}}" as="p" hint-placeholder-count="6">
+                <tr style="background: {{p.bg}}">
+                  <td><button type="button" onClick="{{p.pick}}" style="border: 0; background: none; padding: 0; font: inherit; color: #93370D; font-weight: 600; cursor: pointer; text-align: left">{{p.name}}</button><div class="label">{{p.kind}}</div></td>
+                  <td><div>{{p.freq}}</div><div class="label mono">{{p.cron}}</div></td>
+                  <td class="label">{{p.keep}}</td>
+                  <td class="mono">{{p.store}}</td>
+                  <td><span class="badge {{p.cls}}">{{p.last}}</span></td>
+                  <td><input type="checkbox" checked="{{p.on}}" aria-label="启用 {{p.name}}" style="width: 18px; height: 18px; accent-color: #B54708"></td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table></div>
+        </section>
+
+        <aside class="card" aria-labelledby="edit" style="flex: 2 1 340px; min-width: 0; padding: 16px; display: flex; flex-direction: column; gap: 14px">
+          <div style="display: flex; justify-content: space-between; align-items: center"><h2 id="edit" class="st">编辑策略</h2><span class="label mono">{{cur.name}}</span></div>
+          <div class="field"><label for="src">备份对象</label><select id="src" class="input"><option>{{cur.kind}}</option></select></div>
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+            <div class="field"><label for="fq">频率</label><select id="fq" class="input"><option>每天</option><option>每 6 小时</option><option>每周</option><option>自定义 Cron</option></select></div>
+            <div class="field"><label for="tm">时间</label><input id="tm" class="input mono" value="03:00"></div>
+          </div>
+          <fieldset style="border: 1px solid #E2E2DE; border-radius: 8px; padding: 10px 12px; margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(90px, 100%), 1fr)); gap: 10px">
+            <legend style="font-size: 13px; font-weight: 500; padding: 0 4px">保留（GFS）</legend>
+            <div class="field"><label for="kd" style="font-weight: 400" class="label">每日</label><input id="kd" class="input mono" value="7"></div>
+            <div class="field"><label for="kw" style="font-weight: 400" class="label">每周</label><input id="kw" class="input mono" value="4"></div>
+            <div class="field"><label for="km" style="font-weight: 400" class="label">每月</label><input id="km" class="input mono" value="6"></div>
+            <div class="field"><label for="ky" style="font-weight: 400" class="label">每年</label><input id="ky" class="input mono" value="1"></div>
+          </fieldset>
+          <div class="field"><label for="st">存储目标</label><select id="st" class="input"><option>r2-backup（Cloudflare R2）</option><option>local（/data/backups）</option></select><span class="label">可选第二目标做异地副本 · <a href="Integrations.dc.html">管理存储目标</a></span></div>
+          <div class="field"><label for="enc">加密</label><select id="enc" class="input"><option>age 公钥 · panel-backup-2026</option><option>不加密</option></select><span class="label">私钥不保存在服务器上，恢复时需粘贴或上传</span></div>
+          <div class="field"><label for="hk">执行前后钩子</label><input id="hk" class="input mono" value="pre: 无 · post: 通知 ops 频道"></div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap"><button type="button" class="btn btn-primary">保存</button><button type="button" class="btn">立即执行一次</button></div>
+        </aside>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{isRec}}" hint-placeholder-val="{{false}}">
+      <section class="card" style="overflow: hidden">
+        <div style="display: flex; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #E2E2DE; flex-wrap: wrap; align-items: center">
+          <select class="input" aria-label="按对象筛选" style="width: auto"><option>全部对象</option><option>postgres-main / shop</option><option>mysql-legacy / crm</option></select>
+          <select class="input" aria-label="按状态筛选" style="width: auto"><option>全部状态</option><option>失败</option></select>
+          <span class="label" style="margin-left: auto">标签 D=日 W=周 M=月，决定该备份被哪一层保留</span>
+        </div>
+        <div style="overflow-x: auto"><table>
+          <thead><tr><th>时间</th><th>对象</th><th>状态</th><th>大小</th><th>耗时</th><th>保留层</th><th>存储</th><th>SHA-256</th><th><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">操作</span></th></tr></thead>
+          <tbody>
+            <sc-for list="{{records}}" as="r" hint-placeholder-count="8">
+              <tr>
+                <td class="mono">{{r.t}}</td><td>{{r.o}}</td><td><span class="badge {{r.cls}}">{{r.s}}</span></td><td class="mono">{{r.size}}</td><td class="mono">{{r.d}}</td><td class="mono">{{r.tier}}</td><td class="mono">{{r.store}}</td><td class="mono label">{{r.sha}}</td>
+                <td style="white-space: nowrap"><sc-if value="{{r.okay}}" hint-placeholder-val="{{true}}"><a class="btn btn-sm" href="Restore.dc.html">恢复</a> <button type="button" class="btn btn-sm">下载</button></sc-if><sc-if value="{{r.bad}}" hint-placeholder-val="{{false}}"><a class="btn btn-sm" href="Jobs.dc.html">查看错误</a> <button type="button" class="btn btn-sm">重试</button></sc-if></td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table></div>
+      </section>
+    </sc-if>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1350}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = { tab: 'pol', sel: 0 }; }
+  renderVals() {
+    const t = this.state.tab;
+    const P = [
+      { name: 'postgres-main / 全部库', kind: '数据库 · pg_dump 每库一个文件', freq: '每天 03:00', cron: '0 3 * * *', keep: '7 日 · 4 周 · 6 月 · 1 年', store: 'r2-backup', cls: 'ok', last: '今天 成功', on: true },
+      { name: 'mysql-legacy / crm', kind: '数据库 · mysqldump --single-transaction', freq: '每天 03:30', cron: '30 3 * * *', keep: '7 日 · 4 周 · 3 月', store: 'r2-backup', cls: 'err', last: '今天 失败', on: true },
+      { name: 'umami / umami', kind: '数据库 · pg_dump', freq: '每天 06:00', cron: '0 6 * * *', keep: '14 日', store: 'local', cls: 'ok', last: '今天 成功', on: true },
+      { name: 'shop-api · uploads 目录', kind: '目录 · tar 增量', freq: '每 6 小时', cron: '0 */6 * * *', keep: '7 日 · 4 周', store: 'r2-backup', cls: 'ok', last: '1 小时前', on: true },
+      { name: 'shop-api_redis-data', kind: '卷 · 停容器前 BGSAVE', freq: '每天 04:00', cron: '0 4 * * *', keep: '7 日 · 4 周', store: 'r2-backup', cls: 'ok', last: '今天 成功', on: true },
+      { name: 'mongo-logs / events', kind: '数据库 · mongodump --archive', freq: '每周日 02:00', cron: '0 2 * * 0', keep: '4 周', store: 'r2-backup', cls: 'off', last: '已暂停', on: false }
+    ];
+    const sel = this.state.sel;
+    return {
+      isPol: t === 'pol', isRec: t === 'rec',
+      tabs: [['pol', '策略 · 6'], ['rec', '备份记录 · 214']].map(([id, label]) => ({ label, sel: id === t ? 'true' : 'false', fg: id === t ? '#18191B' : '#4A4D52', w: id === t ? 600 : 400, line: id === t ? '#B54708' : 'transparent', pick: () => this.setState({ tab: id }) })),
+      policies: P.map((p, i) => ({ ...p, bg: i === sel ? '#FDF6F1' : 'transparent', pick: () => this.setState({ sel: i }) })),
+      cur: P[sel],
+      records: [
+        { t: '11-14 18:00', o: 'shop-api · uploads', cls: 'run', s: '进行中 62%', size: '—', d: '—', tier: '—', store: 'r2-backup', sha: '—', okay: false, bad: false },
+        { t: '11-14 12:00', o: 'shop-api · uploads', cls: 'ok', s: '成功', size: '86 MB', d: '41s', tier: 'D', store: 'r2-backup', sha: '9f2c…a10e', okay: true, bad: false },
+        { t: '11-14 06:00', o: 'umami / umami', cls: 'ok', s: '成功', size: '38 MB', d: '12s', tier: 'D', store: 'local', sha: '1b7e…44d2', okay: true, bad: false },
+        { t: '11-14 04:00', o: 'shop-api_redis-data', cls: 'ok', s: '成功', size: '96 MB', d: '8s', tier: 'D', store: 'r2-backup', sha: 'c03a…7f91', okay: true, bad: false },
+        { t: '11-14 03:30', o: 'mysql-legacy / crm', cls: 'err', s: '失败', size: '—', d: '2m10s', tier: '—', store: 'r2-backup', sha: '—', okay: false, bad: true },
+        { t: '11-14 03:00', o: 'postgres-main / shop', cls: 'ok', s: '成功', size: '412 MB', d: '1m48s', tier: 'D', store: 'r2-backup', sha: 'e81d…0b3c', okay: true, bad: false },
+        { t: '11-10 03:00', o: 'postgres-main / shop', cls: 'ok', s: '成功', size: '405 MB', d: '1m44s', tier: 'D W', store: 'r2-backup', sha: '5a6f…c2e8', okay: true, bad: false },
+        { t: '11-01 03:00', o: 'postgres-main / shop', cls: 'ok', s: '成功', size: '398 MB', d: '1m41s', tier: 'D W M', store: 'r2-backup', sha: '07bd…91fa', okay: true, bad: false }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

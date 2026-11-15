@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>部署历史 · shop-api</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+body{margin:0;background:#F4F4F2;color:#18191B;font-family:'IBM Plex Sans','Noto Sans SC',system-ui,sans-serif;font-size:14px;line-height:1.5}
+a{color:#93370D}a:hover{color:#6E2A0A}
+.mono{font-family:'IBM Plex Mono','Noto Sans SC',ui-monospace,monospace;font-size:13px}
+.btn{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:6px;border:1px solid #D6D6D1;background:#fff;color:#18191B;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap;box-sizing:border-box}
+.btn:hover{background:#F7F7F5;color:#18191B}
+.btn-primary{background:#B54708;border-color:#B54708;color:#fff}.btn-primary:hover{background:#93370D;color:#fff}
+.btn-sm{height:30px;padding:0 10px;font-size:13px}
+.card{background:#fff;border:1px solid #E2E2DE;border-radius:8px}
+.badge{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E8F5EE;color:#17663E}.err{background:#FDECEA;color:#A41E14}.off{background:#EEEEEC;color:#4A4D52}.run{background:#EAF0FD;color:#1D44B8}.warn{background:#FBF3DD;color:#7A4F00}
+.label{font-size:12px;color:#5F6268}
+.h1{font-size:22px;font-weight:600;margin:0;line-height:1.3}
+.st{font-size:15px;font-weight:600;margin:0}
+.tabs{display:flex;gap:4px;border-bottom:1px solid #E2E2DE;overflow-x:auto}
+.tab{display:inline-flex;align-items:center;height:44px;padding:0 14px;color:#4A4D52;text-decoration:none;border-bottom:2px solid transparent;white-space:nowrap}
+.tab-on{color:#18191B;font-weight:600;border-bottom-color:#B54708}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh">
+  <div style="flex: 1 1 232px; background: #17181B">
+    <dc-import name="Sidebar" active="projects" hint-size="232px,900px"></dc-import>
+  </div>
+  <main style="flex: 999 1 560px; min-width: 0; padding: 20px 32px 40px; display: flex; flex-direction: column; gap: 20px; box-sizing: border-box">
+    <nav aria-label="面包屑" class="label"><a href="Projects.dc.html">项目</a> / <a href="ProjectDetail.dc.html">shop-api</a> / 部署历史</nav>
+    <header style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <h1 class="h1">shop-api</h1>
+        <div class="label">保留最近 30 次部署的 Compose 快照与日志 · 回滚会以快照重新部署，不回滚数据库与卷</div>
+      </div>
+      <a class="btn btn-primary" href="ComposeEditor.dc.html">新部署</a>
+    </header>
+    <nav class="tabs" aria-label="项目页面">
+      <a class="tab" href="ProjectDetail.dc.html">概览</a>
+      <a class="tab" href="ComposeEditor.dc.html">Compose 与环境变量</a>
+      <a class="tab tab-on" href="Deployments.dc.html" aria-current="page">部署历史</a>
+      <a class="tab" href="ContainerConsole.dc.html">日志与终端</a>
+      <a class="tab" href="ProxySites.dc.html">域名</a>
+      <a class="tab" href="Backups.dc.html">备份</a>
+    </nav>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+      <section class="card" aria-label="部署列表" style="flex: 1 1 300px; min-width: 0; overflow: hidden">
+        <sc-for list="{{deps}}" as="d" hint-placeholder-count="7">
+          <button type="button" onClick="{{d.pick}}" aria-pressed="{{d.pressed}}" style="width: 100%; text-align: left; border: 0; border-bottom: 1px solid #EEEEEB; border-left: 3px solid {{d.edge}}; background: {{d.bg}}; padding: 12px 14px; font: inherit; color: #18191B; cursor: pointer; display: flex; flex-direction: column; gap: 4px">
+            <span style="display: flex; justify-content: space-between; gap: 8px; align-items: center">
+              <span style="font-weight: 600">#{{d.id}} <span class="mono" style="font-weight: 400; color: #4A4D52">{{d.commit}}</span></span>
+              <span class="badge {{d.cls}}">{{d.status}}</span>
+            </span>
+            <span style="font-size: 13px">{{d.msg}}</span>
+            <span class="label">{{d.meta}}</span>
+          </button>
+        </sc-for>
+      </section>
+
+      <section class="card" aria-labelledby="dt" style="flex: 3 1 560px; min-width: 0; display: flex; flex-direction: column">
+        <div style="padding: 16px; display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid #E2E2DE">
+          <div style="display: flex; flex-direction: column; gap: 4px">
+            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap"><h2 id="dt" class="st">部署 #{{cur.id}}</h2><span class="badge {{cur.cls}}">{{cur.status}}</span></div>
+            <div class="label">{{cur.meta}} · 提交 <span class="mono">{{cur.commit}}</span> {{cur.msg}}</div>
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <button type="button" class="btn btn-sm">查看 Compose 快照</button>
+            <button type="button" class="btn btn-sm">与当前对比</button>
+            <sc-if value="{{cur.canRollback}}" hint-placeholder-val="{{true}}">
+              <button type="button" class="btn btn-sm" style="border-color: #B54708; color: #93370D">回滚到此版本</button>
+            </sc-if>
+          </div>
+        </div>
+
+        <ol style="list-style: none; margin: 0; padding: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(130px, 100%), 1fr)); gap: 8px">
+          <sc-for list="{{cur.steps}}" as="s" hint-placeholder-count="6">
+            <li style="border: 1px solid {{s.border}}; background: {{s.bg}}; border-radius: 6px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px">
+              <span style="font-size: 13px; font-weight: 600; color: {{s.fg}}">{{s.name}}</span>
+              <span class="label">{{s.time}}</span>
+            </li>
+          </sc-for>
+        </ol>
+
+        <div style="margin: 0 16px 16px; background: #1C1D20; border-radius: 6px; overflow: hidden">
+          <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #24262A; color: #A3A5AA; font-size: 12px; gap: 8px; flex-wrap: wrap">
+            <span>部署日志 · 实时（SSE）</span>
+            <span style="display: flex; gap: 12px"><button type="button" style="border: 0; background: none; color: #E6E6E3; font: inherit; font-size: 12px; cursor: pointer">复制</button><button type="button" style="border: 0; background: none; color: #E6E6E3; font: inherit; font-size: 12px; cursor: pointer">下载</button></span>
+          </div>
+          <div style="padding: 10px 0; overflow-x: auto">
+            <sc-for list="{{cur.log}}" as="l" hint-placeholder-count="14">
+              <div class="mono" style="white-space: pre; line-height: 21px; font-size: 12px; padding: 0 12px; color: {{l.c}}">{{l.t}}</div>
+            </sc-for>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1100}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = { sel: 42 }; }
+  renderVals() {
+    const ST = { done: ['#BFE3CF', '#F3FAF6', '#17663E'], fail: ['#F1B8B2', '#FEF5F4', '#A41E14'], skip: ['#E2E2DE', '#FAFAF8', '#5F6268'] };
+    const step = (name, time, k) => ({ name, time, border: ST[k][0], bg: ST[k][1], fg: ST[k][2] });
+    const G = '#C9CACD', OK = '#7FD6A4', ER = '#FF9A90', Y = '#F2C46D';
+    const okLog = [
+      ['10:41:02  拉取 git@github.com:[YOUR ORG]/shop-api.git main', G],
+      ['10:41:04  HEAD a91f3c2 修复订单导出时区', G],
+      ['10:41:04  docker compose -p shop-api config --quiet', G],
+      ['10:41:05  ✓ 配置有效', OK],
+      ['10:41:05  docker compose -p shop-api pull api worker', G],
+      ['10:41:29   api Pulled  24.1s', G],
+      ['10:41:29   worker Pulled  0.2s', G],
+      ['10:41:30  docker compose -p shop-api up -d --wait', G],
+      ['10:41:31   Container shop-api-redis-1  Running', G],
+      ['10:41:33   Container shop-api-api-1  Recreated', G],
+      ['10:41:33   Container shop-api-worker-1  Recreated', G],
+      ['10:41:46  ✓ api 健康检查通过（13.2s）', OK],
+      ['10:41:47  Caddy 配置已推送：api.example.com → shop-api-api-1:8080', G],
+      ['10:41:50  部署完成，用时 48 秒', OK]
+    ];
+    const failLog = [
+      ['09:12:30  docker compose -p shop-api pull api worker', G],
+      ['09:12:51  docker compose -p shop-api up -d --wait', G],
+      ['09:13:52  api 健康检查超时（60s）：GET /healthz → 503', ER],
+      ['09:13:52  最近 5 行容器日志：', Y],
+      ['           panic: missing env SMTP_HOST', ER],
+      ['09:13:53  自动回滚：以部署 #40 的快照重新执行 up -d', Y],
+      ['09:14:20  ✓ 回滚完成，服务恢复', OK]
+    ];
+    const D = [
+      { id: 42, commit: 'a91f3c2', msg: '修复订单导出时区', meta: '2 小时前 · admin · 手动 · 48 秒', cls: 'ok', status: '成功 · 当前', canRollback: false,
+        steps: [step('拉取代码', '2s', 'done'), step('校验配置', '1s', 'done'), step('拉取镜像', '24s', 'done'), step('启动容器', '3s', 'done'), step('健康检查', '13s', 'done'), step('更新代理', '1s', 'done')], log: okLog },
+      { id: 41, commit: '7c02be1', msg: '新增 worker 邮件队列', meta: '昨天 09:12 · Webhook · 1 分 50 秒', cls: 'err', status: '失败 · 已回滚', canRollback: true,
+        steps: [step('拉取代码', '2s', 'done'), step('校验配置', '1s', 'done'), step('拉取镜像', '21s', 'done'), step('启动容器', '3s', 'done'), step('健康检查', '超时 60s', 'fail'), step('自动回滚', '27s', 'done')], log: failLog },
+      { id: 40, commit: '3d9e0aa', msg: '升级 Go 1.23', meta: '3 天前 · Webhook · 52 秒', cls: 'ok', status: '成功', canRollback: true,
+        steps: [step('拉取代码', '2s', 'done'), step('校验配置', '1s', 'done'), step('拉取镜像', '27s', 'done'), step('启动容器', '4s', 'done'), step('健康检查', '12s', 'done'), step('更新代理', '1s', 'done')], log: okLog },
+      { id: 39, commit: 'e14b7d0', msg: '调整 Redis 持久化', meta: '5 天前 · ops-li · 手动 · 41 秒', cls: 'ok', status: '成功', canRollback: true,
+        steps: [step('拉取代码', '2s', 'done'), step('校验配置', '1s', 'done'), step('拉取镜像', '跳过', 'skip'), step('启动容器', '6s', 'done'), step('健康检查', '14s', 'done'), step('更新代理', '1s', 'done')], log: okLog },
+      { id: 38, commit: '5a2c19f', msg: '订单列表分页', meta: '8 天前 · Webhook · 46 秒', cls: 'ok', status: '成功', canRollback: true,
+        steps: [step('拉取代码', '2s', 'done'), step('校验配置', '1s', 'done'), step('拉取镜像', '22s', 'done'), step('启动容器', '3s', 'done'), step('健康检查', '13s', 'done'), step('更新代理', '1s', 'done')], log: okLog },
+      { id: 37, commit: 'b80f6e3', msg: '取消部署', meta: '9 天前 · admin · 手动', cls: 'off', status: '已取消', canRollback: false,
+        steps: [step('拉取代码', '2s', 'done'), step('校验配置', '1s', 'done'), step('拉取镜像', '已取消', 'skip'), step('启动容器', '—', 'skip'), step('健康检查', '—', 'skip'), step('更新代理', '—', 'skip')], log: okLog.slice(0, 6) }
+    ];
+    const sel = this.state.sel;
+    const cur = D.find(d => d.id === sel) || D[0];
+    return {
+      deps: D.map(d => ({ ...d, pressed: d.id === sel ? 'true' : 'false', bg: d.id === sel ? '#FDF6F1' : '#fff', edge: d.id === sel ? '#B54708' : 'transparent', pick: () => this.setState({ sel: d.id }) })),
+      cur: { ...cur, log: cur.log.map(l => ({ t: l[0], c: l[1] })) }
+    };
+  }
+}
+</script>
+</body>
+</html>

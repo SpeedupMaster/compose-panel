@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>项目列表</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+body{margin:0;background:#F4F4F2;color:#18191B;font-family:'IBM Plex Sans','Noto Sans SC',system-ui,sans-serif;font-size:14px;line-height:1.5}
+a{color:#93370D}a:hover{color:#6E2A0A}
+.mono{font-family:'IBM Plex Mono','Noto Sans SC',ui-monospace,monospace;font-size:13px}
+.btn{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:6px;border:1px solid #D6D6D1;background:#fff;color:#18191B;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap;box-sizing:border-box}
+.btn:hover{background:#F7F7F5;color:#18191B}
+.btn-primary{background:#B54708;border-color:#B54708;color:#fff}.btn-primary:hover{background:#93370D;color:#fff}
+.btn-sm{height:30px;padding:0 10px;font-size:13px}
+.card{background:#fff;border:1px solid #E2E2DE;border-radius:8px}
+.badge{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E8F5EE;color:#17663E}.err{background:#FDECEA;color:#A41E14}.off{background:#EEEEEC;color:#4A4D52}.run{background:#EAF0FD;color:#1D44B8}.warn{background:#FBF3DD;color:#7A4F00}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;font-weight:500;color:#5F6268;text-align:left;padding:10px 16px;border-bottom:1px solid #E2E2DE;background:#FAFAF8;white-space:nowrap}
+td{padding:12px 16px;border-bottom:1px solid #EEEEEB;vertical-align:middle}
+tr:last-child td{border-bottom:0}
+.label{font-size:12px;color:#5F6268}
+.h1{font-size:22px;font-weight:600;margin:0;line-height:1.3}
+.input{height:36px;border:1px solid #C9C9C4;border-radius:6px;padding:0 12px;font:inherit;background:#fff;color:#18191B;box-sizing:border-box}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:13px;font-weight:500}
+.chip{height:30px;padding:0 12px;border-radius:999px;border:1px solid #D6D6D1;background:#fff;font:inherit;font-size:13px;color:#4A4D52;cursor:pointer}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh">
+  <div style="flex: 1 1 232px; background: #17181B">
+    <dc-import name="Sidebar" active="projects" hint-size="232px,900px"></dc-import>
+  </div>
+  <main style="flex: 999 1 560px; min-width: 0; padding: 28px 32px 40px; display: flex; flex-direction: column; gap: 20px; box-sizing: border-box">
+    <header style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <h1 class="h1">项目</h1>
+        <div class="label">一个项目 = 一个 Compose 文件 + 环境变量 + 域名，对应一个 <span class="mono">docker compose -p</span> 工程</div>
+      </div>
+      <button type="button" class="btn btn-primary" onClick="{{openNew}}">
+        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+        新建项目
+      </button>
+    </header>
+
+    <sc-if value="{{showNew}}" hint-placeholder-val="{{false}}">
+      <section class="card" aria-labelledby="newp" style="padding: 20px; display: flex; flex-direction: column; gap: 18px; border-color: #B54708">
+        <div style="display: flex; justify-content: space-between; align-items: center">
+          <h2 id="newp" style="margin: 0; font-size: 16px; font-weight: 600">新建项目</h2>
+          <button type="button" aria-label="关闭" onClick="{{closeNew}}" style="width: 36px; height: 36px; border: 0; background: none; cursor: pointer; color: #4A4D52">
+            <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+          </button>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 12px">
+          <sc-for list="{{sources}}" as="s" hint-placeholder-count="3">
+            <button type="button" onClick="{{s.pick}}" style="text-align: left; padding: 14px; border-radius: 8px; border: 2px solid {{s.border}}; background: {{s.bg}}; font: inherit; cursor: pointer; display: flex; flex-direction: column; gap: 4px; color: #18191B">
+              <span style="font-weight: 600">{{s.title}}</span>
+              <span class="label">{{s.desc}}</span>
+            </button>
+          </sc-for>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 16px">
+          <div class="field"><label for="pn">项目名</label><input id="pn" class="input mono" value="blog"><span class="label">小写字母、数字、短横线；作为 Compose 工程名与目录名 <span class="mono">/data/projects/blog</span></span></div>
+          <sc-if value="{{isGit}}" hint-placeholder-val="{{false}}">
+            <div class="field"><label for="repo">仓库地址</label><input id="repo" class="input mono" value="git@github.com:[YOUR ORG]/blog.git"><span class="label">分支 main · Compose 路径 <span class="mono">deploy/compose.yml</span> · 使用部署密钥 deploy-key-1</span></div>
+          </sc-if>
+          <sc-if value="{{isTpl}}" hint-placeholder-val="{{false}}">
+            <div class="field"><label for="tpl">模板</label>
+              <select id="tpl" class="input"><option>WordPress + MariaDB</option><option>Ghost</option><option>Umami + PostgreSQL</option><option>n8n</option><option>Uptime Kuma</option><option>MinIO</option></select>
+              <span class="label">模板只生成 Compose 与环境变量，可在下一步修改</span>
+            </div>
+          </sc-if>
+        </div>
+        <sc-if value="{{isPaste}}" hint-placeholder-val="{{true}}">
+          <div class="field">
+            <label for="yml">compose.yml</label>
+            <textarea id="yml" class="mono" rows="9" style="border: 1px solid #C9C9C4; border-radius: 6px; padding: 12px; background: #1C1D20; color: #E6E6E3; line-height: 1.6; resize: vertical">services:
+  app:
+    image: ghost:5-alpine
+    restart: unless-stopped
+    environment:
+      url: https://${DOMAIN}
+      database__client: mysql
+    volumes:
+      - content:/var/lib/ghost/content
+volumes:
+  content:</textarea>
+            <span class="label" style="color: #17663E">已通过 docker compose config 校验 · 1 个服务 · 1 个卷 · 引用变量 DOMAIN</span>
+          </div>
+        </sc-if>
+        <div style="display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap">
+          <button type="button" class="btn" onClick="{{closeNew}}">取消</button>
+          <a class="btn" href="ComposeEditor.dc.html">创建，稍后部署</a>
+          <a class="btn btn-primary" href="ProjectDetail.dc.html">创建并部署</a>
+        </div>
+      </section>
+    </sc-if>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center">
+      <label for="q" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">搜索项目</label>
+      <input id="q" class="input" placeholder="搜索项目名、域名、镜像" style="flex: 1 1 260px; max-width: 360px">
+      <div role="group" aria-label="按状态筛选" style="display: flex; gap: 6px; flex-wrap: wrap">
+        <button type="button" class="chip" style="background: #18191B; color: #fff; border-color: #18191B">全部 7</button>
+        <button type="button" class="chip">运行中 5</button>
+        <button type="button" class="chip">异常 1</button>
+        <button type="button" class="chip">已停止 1</button>
+      </div>
+      <span class="label" style="margin-left: auto">按最近部署排序</span>
+    </div>
+
+    <section class="card" style="overflow: hidden">
+      <div style="overflow-x: auto">
+        <table>
+          <thead><tr><th>项目</th><th>状态</th><th>服务</th><th>来源</th><th>域名</th><th>CPU / 内存</th><th>最近部署</th><th><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">操作</span></th></tr></thead>
+          <tbody>
+            <sc-for list="{{rows}}" as="r" hint-placeholder-count="7">
+              <tr>
+                <td><a href="ProjectDetail.dc.html" style="font-weight: 600">{{r.name}}</a><div class="label">{{r.desc}}</div></td>
+                <td><span class="badge {{r.cls}}"><span class="dot"></span>{{r.status}}</span></td>
+                <td>{{r.svc}}</td>
+                <td><span class="label">{{r.src}}</span></td>
+                <td class="mono">{{r.domain}}</td>
+                <td class="mono">{{r.res}}</td>
+                <td><div>{{r.when}}</div><div class="label">{{r.who}}</div></td>
+                <td style="white-space: nowrap; text-align: right">
+                  <a class="btn btn-sm" href="Deployments.dc.html">部署</a>
+                  <a class="btn btn-sm" href="ContainerConsole.dc.html" aria-label="查看 {{r.name}} 日志">日志</a>
+                </td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <p class="label" style="margin: 0">已有 Compose 工程可通过「设置 › 导入现有工程」接管：扫描 docker 中带 com.docker.compose.project 标签的容器。</p>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = { open: true, src: 'paste' }; }
+  renderVals() {
+    const src = this.state.src;
+    const defs = [
+      { id: 'paste', title: '粘贴 Compose', desc: '直接粘贴或上传 compose.yml' },
+      { id: 'git', title: 'Git 仓库', desc: '从仓库拉取，支持 Webhook 自动部署' },
+      { id: 'tpl', title: '从模板', desc: '常见应用的预置 Compose' }
+    ];
+    return {
+      showNew: this.state.open,
+      openNew: () => this.setState({ open: true }),
+      closeNew: () => this.setState({ open: false }),
+      isPaste: src === 'paste', isGit: src === 'git', isTpl: src === 'tpl',
+      sources: defs.map(d => ({ ...d, border: d.id === src ? '#B54708' : '#E2E2DE', bg: d.id === src ? '#FDF6F1' : '#fff', pick: () => this.setState({ src: d.id }) })),
+      rows: [
+        { name: 'shop-api', desc: 'Go API + Redis + Worker', cls: 'ok', status: '运行中', svc: '3 / 3', src: 'Git · main', domain: 'api.example.com', res: '4% · 612 MB', when: '2 小时前', who: 'admin · #42' },
+        { name: 'shop-web', desc: 'Next.js 前台', cls: 'ok', status: '运行中', svc: '1 / 1', src: 'Git · main', domain: 'www.example.com', res: '1% · 288 MB', when: '昨天 18:20', who: 'Webhook · #18' },
+        { name: 'n8n', desc: '工作流自动化', cls: 'err', status: '异常', svc: '1 / 2', src: '模板', domain: 'flow.example.com', res: '9% · 498 MB', when: '3 天前', who: 'ops-li · #6' },
+        { name: 'umami', desc: '网站统计', cls: 'ok', status: '运行中', svc: '2 / 2', src: '模板', domain: 'stats.example.com', res: '1% · 214 MB', when: '5 天前', who: 'admin · #3' },
+        { name: 'postgres-main', desc: '数据库实例 · PostgreSQL 16', cls: 'ok', status: '运行中', svc: '1 / 1', src: '数据库', domain: '—', res: '3% · 1.4 GB', when: '12 天前', who: 'admin · #2' },
+        { name: 'minio', desc: '对象存储', cls: 'off', status: '已停止', svc: '0 / 1', src: '粘贴', domain: 's3.example.com', res: '—', when: '21 天前', who: 'admin · #4' },
+        { name: 'mysql-legacy', desc: '数据库实例 · MySQL 8.0', cls: 'ok', status: '运行中', svc: '1 / 1', src: '数据库', domain: 'legacy.example.com', res: '2% · 820 MB', when: '40 天前', who: 'admin · #1' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

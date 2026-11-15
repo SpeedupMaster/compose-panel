@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>容器控制台 · shop-api-api-1</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+body{margin:0;background:#F4F4F2;color:#18191B;font-family:'IBM Plex Sans','Noto Sans SC',system-ui,sans-serif;font-size:14px;line-height:1.5}
+a{color:#93370D}a:hover{color:#6E2A0A}
+.mono{font-family:'IBM Plex Mono','Noto Sans SC',ui-monospace,monospace;font-size:13px}
+.btn{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:6px;border:1px solid #D6D6D1;background:#fff;color:#18191B;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap;box-sizing:border-box}
+.btn:hover{background:#F7F7F5;color:#18191B}
+.btn-sm{height:30px;padding:0 10px;font-size:13px}
+.card{background:#fff;border:1px solid #E2E2DE;border-radius:8px}
+.badge{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E8F5EE;color:#17663E}.err{background:#FDECEA;color:#A41E14}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.label{font-size:12px;color:#5F6268}
+.h1{font-size:22px;font-weight:600;margin:0;line-height:1.3}
+.st{font-size:15px;font-weight:600;margin:0}
+.seg{display:inline-flex;border:1px solid #D6D6D1;border-radius:6px;overflow:hidden;background:#fff}
+.seg button{height:34px;padding:0 14px;border:0;border-right:1px solid #E2E2DE;background:transparent;font:inherit;font-size:13px;color:#4A4D52;cursor:pointer}
+.seg button:last-child{border-right:0}
+.input{height:32px;border:1px solid #3A3C42;border-radius:6px;padding:0 10px;font:inherit;font-size:13px;background:#24262A;color:#E6E6E3;box-sizing:border-box}
+.kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:8px 12px;font-size:13px;margin:0}
+.kv dt{color:#5F6268}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.spark{display:flex;align-items:flex-end;gap:2px;height:56px}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh">
+  <div style="flex: 1 1 232px; background: #17181B">
+    <dc-import name="Sidebar" active="projects" hint-size="232px,900px"></dc-import>
+  </div>
+  <main style="flex: 999 1 560px; min-width: 0; padding: 20px 32px 40px; display: flex; flex-direction: column; gap: 20px; box-sizing: border-box">
+    <nav aria-label="面包屑" class="label"><a href="Projects.dc.html">项目</a> / <a href="ProjectDetail.dc.html">shop-api</a> / 容器</nav>
+    <header style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between">
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
+          <label for="ctr" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">选择容器</label>
+          <select id="ctr" class="mono" style="height: 40px; font-size: 18px; font-weight: 600; border: 1px solid #D6D6D1; border-radius: 6px; padding: 0 10px; background: #fff">
+            <option>shop-api-api-1</option><option>shop-api-worker-1</option><option>shop-api-redis-1</option>
+          </select>
+          <span class="badge ok"><span class="dot"></span>健康 · 运行 2 小时</span>
+        </div>
+        <div class="label">ID <span class="mono">4be1c09f2d7a</span> · 镜像 <span class="mono">ghcr.io/[YOUR ORG]/shop-api:a91f3c2</span></div>
+      </div>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap">
+        <button type="button" class="btn">重启容器</button>
+        <button type="button" class="btn">停止</button>
+        <button type="button" class="btn">检查（inspect）</button>
+      </div>
+    </header>
+
+    <div class="seg" role="group" aria-label="控制台视图" style="align-self: flex-start">
+      <button type="button" onClick="{{vLogs}}" style="background: {{tLogs}}">日志</button>
+      <button type="button" onClick="{{vTerm}}" style="background: {{tTerm}}">终端</button>
+      <button type="button" onClick="{{vStats}}" style="background: {{tStats}}">资源与详情</button>
+    </div>
+
+    <sc-if value="{{isLogs}}" hint-placeholder-val="{{true}}">
+      <section aria-label="容器日志" style="background: #1C1D20; border-radius: 8px; overflow: hidden; border: 1px solid #2E3035">
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; background: #24262A">
+          <label for="lf" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">过滤日志</label>
+          <input id="lf" class="input" placeholder="过滤关键字或正则" value="order" style="flex: 1 1 220px; max-width: 320px">
+          <select class="input" aria-label="时间范围"><option>最近 15 分钟</option><option>最近 1 小时</option><option>自部署 #42 起</option></select>
+          <select class="input" aria-label="日志级别"><option>全部级别</option><option>仅 WARN 及以上</option></select>
+          <label style="display: flex; gap: 6px; align-items: center; color: #C9CACD; font-size: 13px"><input type="checkbox" checked style="accent-color: #B54708">跟随</label>
+          <label style="display: flex; gap: 6px; align-items: center; color: #C9CACD; font-size: 13px"><input type="checkbox" style="accent-color: #B54708">时间戳</label>
+          <span style="margin-left: auto; color: #A3A5AA; font-size: 12px">匹配 6 / 1,204 行 · WebSocket 已连接</span>
+        </div>
+        <div style="padding: 10px 0; overflow-x: auto; min-height: 520px">
+          <sc-for list="{{logs}}" as="l" hint-placeholder-count="18">
+            <div class="mono" style="white-space: pre; line-height: 22px; font-size: 12px; padding: 0 14px; color: {{l.c}}; background: {{l.bg}}">{{l.t}}</div>
+          </sc-for>
+        </div>
+        <div style="display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid #2E3035; flex-wrap: wrap">
+          <button type="button" class="btn btn-sm" style="background: #24262A; color: #E6E6E3; border-color: #3A3C42">暂停</button>
+          <button type="button" class="btn btn-sm" style="background: #24262A; color: #E6E6E3; border-color: #3A3C42">清屏</button>
+          <button type="button" class="btn btn-sm" style="background: #24262A; color: #E6E6E3; border-color: #3A3C42">下载最近 10,000 行</button>
+        </div>
+      </section>
+    </sc-if>
+
+    <sc-if value="{{isTerm}}" hint-placeholder-val="{{false}}">
+      <section aria-label="Web 终端" style="background: #101113; border-radius: 8px; overflow: hidden; border: 1px solid #2E3035">
+        <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 12px; background: #24262A; color: #C9CACD; font-size: 13px">
+          <span>docker exec -it</span>
+          <select class="input" aria-label="Shell"><option>/bin/sh</option><option>/bin/bash</option></select>
+          <select class="input" aria-label="用户"><option>以 app 用户</option><option>以 root</option></select>
+          <span style="margin-left: auto; color: #F2C46D; font-size: 12px">会话被完整记录到审计日志 · 闲置 15 分钟自动断开</span>
+        </div>
+        <div class="mono" style="padding: 14px; color: #E6E6E3; font-size: 13px; line-height: 22px; white-space: pre; overflow-x: auto; min-height: 520px">/app $ ls
+<span style="color: #8FB4FF">config</span>  shop  <span style="color: #8FB4FF">uploads</span>
+/app $ wget -qO- localhost:8080/healthz
+{"status":"ok","db":"ok","redis":"ok","version":"a91f3c2"}
+/app $ df -h /app/uploads
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda1       320G  142G  178G  45% /app/uploads
+/app $ <span style="background: #E6E6E3; color: #101113"> </span></div>
+      </section>
+    </sc-if>
+
+    <sc-if value="{{isStats}}" hint-placeholder-val="{{false}}">
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 20px">
+        <sc-for list="{{charts}}" as="c" hint-placeholder-count="4">
+          <section class="card" style="padding: 16px; display: flex; flex-direction: column; gap: 10px">
+            <div style="display: flex; justify-content: space-between; align-items: baseline"><h2 class="st">{{c.title}}</h2><span class="mono">{{c.now}}</span></div>
+            <div class="spark" role="img" aria-label="{{c.title}}最近 30 分钟趋势">
+              <sc-for list="{{c.bars}}" as="b" hint-placeholder-count="30"><div style="flex: 1; height: {{b.h}}; background: #8FA7E6; border-radius: 1px"></div></sc-for>
+            </div>
+            <div class="label">{{c.note}}</div>
+          </section>
+        </sc-for>
+        <section class="card" style="padding: 16px; display: flex; flex-direction: column; gap: 12px; grid-column: 1 / -1">
+          <h2 class="st">详情</h2>
+          <dl class="kv">
+            <dt>启动命令</dt><dd class="mono">/app/shop serve --addr :8080</dd>
+            <dt>重启策略</dt><dd>unless-stopped · 已重启 0 次</dd>
+            <dt>健康检查</dt><dd class="mono">wget -qO- http://localhost:8080/healthz · 每 30s · 连续 3 次失败判定异常</dd>
+            <dt>网络</dt><dd><span class="mono">shop-api_default 172.20.0.3</span> · <span class="mono">panel-proxy 172.30.0.12</span></dd>
+            <dt>挂载</dt><dd class="mono">/data/projects/shop-api/uploads → /app/uploads (rw)</dd>
+            <dt>资源限制</dt><dd>内存 512 MB · CPU 不限 · PID 不限</dd>
+            <dt>标签</dt><dd class="mono">com.docker.compose.project=shop-api · panel.managed=true</dd>
+          </dl>
+        </section>
+      </div>
+    </sc-if>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1250}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = { v: 'logs' }; }
+  renderVals() {
+    const v = this.state.v, on = '#F1E4DA', off = 'transparent';
+    const G = '#C9CACD', W = '#F2C46D', E = '#FF9A90', HL = 'rgba(181,71,8,0.22)';
+    const L = [
+      ['12:40:01.112 INFO  http GET /v1/products 200 12ms', G, ''],
+      ['12:40:02.548 INFO  http POST /v1/order 201 48ms user=1029', G, HL],
+      ['12:40:02.551 INFO  queue enqueue order.created id=88412', G, HL],
+      ['12:40:03.007 INFO  http GET /v1/cart 200 6ms', G, ''],
+      ['12:40:05.231 WARN  redis slow command HGETALL cart:1029 34ms', W, ''],
+      ['12:40:06.890 INFO  http GET /v1/order/88412 200 9ms', G, HL],
+      ['12:40:08.002 INFO  http GET /healthz 200 1ms', G, ''],
+      ['12:40:09.774 ERROR payment callback signature mismatch order=88409', E, HL],
+      ['12:40:09.775 INFO  http POST /v1/pay/callback 400 3ms', G, ''],
+      ['12:40:11.103 INFO  http GET /v1/products?page=2 200 15ms', G, ''],
+      ['12:40:13.640 INFO  http POST /v1/order 201 52ms user=877', G, HL],
+      ['12:40:13.644 INFO  queue enqueue order.created id=88413', G, HL],
+      ['12:40:15.009 INFO  http GET /v1/cart 200 5ms', G, ''],
+      ['12:40:18.002 INFO  http GET /healthz 200 1ms', G, ''],
+      ['12:40:20.415 INFO  http GET /v1/products 200 11ms', G, ''],
+      ['12:40:22.381 INFO  http GET /v1/user/me 200 4ms', G, '']
+    ];
+    const bars = (seed, base, amp) => Array.from({ length: 30 }, (_, i) => ({ h: Math.max(4, Math.round(base + amp * Math.sin(i * 0.7 + seed) + amp * 0.5 * Math.cos(i * 1.3 + seed))) + 'px' }));
+    return {
+      isLogs: v === 'logs', isTerm: v === 'term', isStats: v === 'stats',
+      tLogs: v === 'logs' ? on : off, tTerm: v === 'term' ? on : off, tStats: v === 'stats' ? on : off,
+      vLogs: () => this.setState({ v: 'logs' }), vTerm: () => this.setState({ v: 'term' }), vStats: () => this.setState({ v: 'stats' }),
+      logs: L.map(l => ({ t: l[0], c: l[1], bg: l[2] || 'transparent' })),
+      charts: [
+        { title: 'CPU', now: '2.1%', note: '峰值 6.8% · 12:22', bars: bars(1, 16, 8) },
+        { title: '内存', now: '184 / 512 MB', note: '限制的 36%', bars: bars(2, 30, 3) },
+        { title: '网络', now: '↓ 1.2 MB/s ↑ 340 KB/s', note: '累计 ↓ 8.4 GB ↑ 2.1 GB', bars: bars(3, 22, 12) },
+        { title: '磁盘 IO', now: '读 0 · 写 120 KB/s', note: '主要写入 /app/uploads', bars: bars(4, 10, 6) }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

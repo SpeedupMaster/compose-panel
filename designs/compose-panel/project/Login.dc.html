@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>登录</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+body{margin:0;background:#F4F4F2;color:#18191B;font-family:'IBM Plex Sans','Noto Sans SC',system-ui,sans-serif;font-size:14px;line-height:1.5}
+a{color:#93370D}a:hover{color:#6E2A0A}
+.mono{font-family:'IBM Plex Mono','Noto Sans SC',ui-monospace,monospace}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:44px;padding:0 16px;border-radius:6px;border:1px solid #D6D6D1;background:#fff;color:#18191B;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;box-sizing:border-box}
+.btn-primary{background:#B54708;border-color:#B54708;color:#fff}.btn-primary:hover{background:#93370D;color:#fff}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:13px;font-weight:500}
+.input{height:44px;border:1px solid #C9C9C4;border-radius:6px;padding:0 12px;font:inherit;background:#fff;color:#18191B;box-sizing:border-box;width:100%}
+.input:focus{outline:2px solid #B54708;outline-offset:1px;border-color:#B54708}
+.hint{font-size:12px;color:#5F6268}
+.seg{display:inline-flex;border:1px solid #D6D6D1;border-radius:6px;overflow:hidden;background:#fff}
+.seg button{height:32px;padding:0 12px;border:0;background:transparent;font:inherit;font-size:13px;color:#4A4D52;cursor:pointer}
+</style>
+</helmet>
+<div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 24px 16px 40px; box-sizing: border-box">
+  <div style="width: 100%; max-width: 1200px; display: flex; justify-content: flex-end">
+    <div class="seg" role="group" aria-label="原型画面切换">
+      <button type="button" onClick="{{goLogin}}" style="background: {{tabLogin}}">登录</button>
+      <button type="button" onClick="{{goTotp}}" style="background: {{tabTotp}}">两步验证</button>
+      <button type="button" onClick="{{goSetup}}" style="background: {{tabSetup}}">首次初始化</button>
+    </div>
+  </div>
+
+  <div style="flex: 1; width: 100%; display: flex; align-items: center; justify-content: center; padding-top: 40px">
+    <div style="width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 24px">
+      <div style="display: flex; align-items: center; gap: 12px">
+        <svg aria-hidden="true" width="36" height="36" viewBox="0 0 28 28" fill="none"><rect x="1" y="1" width="26" height="26" rx="6" fill="#B54708"></rect><path d="M7 11h14M7 15h14M7 19h9" stroke="#fff" stroke-width="2" stroke-linecap="round"></path></svg>
+        <div style="display: flex; flex-direction: column; line-height: 1.3">
+          <span style="font-weight: 600; font-size: 18px">Compose 面板</span>
+          <span class="mono" style="font-size: 12px; color: #5F6268">prod-01 · 203.0.113.10</span>
+        </div>
+      </div>
+
+      <sc-if value="{{isLogin}}" hint-placeholder-val="{{true}}">
+        <form style="background: #fff; border: 1px solid #E2E2DE; border-radius: 10px; padding: 28px; display: flex; flex-direction: column; gap: 18px">
+          <h1 style="margin: 0; font-size: 20px; font-weight: 600">登录</h1>
+          <div class="field"><label for="u">用户名</label><input id="u" class="input" autocomplete="username" value="admin"></div>
+          <div class="field">
+            <div style="display: flex; justify-content: space-between"><label for="p">密码</label><span class="hint">忘记密码请在服务器执行 <span class="mono">panel reset-password</span></span></div>
+            <input id="p" class="input" type="password" autocomplete="current-password" value="passwordpassword">
+          </div>
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 13px"><input type="checkbox" checked style="width: 16px; height: 16px; accent-color: #B54708">在此设备保持登录 7 天</label>
+          <button type="button" class="btn btn-primary" onClick="{{goTotp}}">登录</button>
+          <div style="background: #FBF3DD; color: #7A4F00; border-radius: 6px; padding: 10px 12px; font-size: 13px">连续 5 次失败将锁定该 IP 15 分钟。剩余尝试次数：5</div>
+        </form>
+      </sc-if>
+
+      <sc-if value="{{isTotp}}" hint-placeholder-val="{{false}}">
+        <form style="background: #fff; border: 1px solid #E2E2DE; border-radius: 10px; padding: 28px; display: flex; flex-direction: column; gap: 18px">
+          <div style="display: flex; flex-direction: column; gap: 4px">
+            <h1 style="margin: 0; font-size: 20px; font-weight: 600">两步验证</h1>
+            <p style="margin: 0; color: #4A4D52">打开身份验证器应用，输入 admin 账户的 6 位动态码。</p>
+          </div>
+          <div class="field">
+            <label for="code">动态码</label>
+            <input id="code" class="input mono" inputmode="numeric" autocomplete="one-time-code" value="482 913" style="font-size: 22px; letter-spacing: 6px; text-align: center; height: 56px">
+          </div>
+          <a class="btn btn-primary" href="Main.dc.html">验证并进入</a>
+          <div style="display: flex; justify-content: space-between; font-size: 13px">
+            <a href="#">使用恢复码</a>
+            <button type="button" onClick="{{goLogin}}" style="border: 0; background: none; padding: 0; color: #93370D; font: inherit; cursor: pointer">返回</button>
+          </div>
+        </form>
+      </sc-if>
+
+      <sc-if value="{{isSetup}}" hint-placeholder-val="{{false}}">
+        <form style="background: #fff; border: 1px solid #E2E2DE; border-radius: 10px; padding: 28px; display: flex; flex-direction: column; gap: 18px">
+          <div style="display: flex; flex-direction: column; gap: 4px">
+            <span class="hint">首次运行 · 第 1 步，共 2 步</span>
+            <h1 style="margin: 0; font-size: 20px; font-weight: 600">创建管理员账户</h1>
+            <p style="margin: 0; color: #4A4D52">此页面仅在系统没有任何用户时出现。初始化令牌已打印在服务启动日志中。</p>
+          </div>
+          <div class="field"><label for="tk">初始化令牌</label><input id="tk" class="input mono" value="[启动日志中的令牌]"><span class="hint">执行 <span class="mono">docker logs compose-panel | grep setup-token</span> 查看</span></div>
+          <div class="field"><label for="nu">用户名</label><input id="nu" class="input" value="admin"></div>
+          <div class="field"><label for="np">密码</label><input id="np" class="input" type="password" value="passwordpassword"><span class="hint">至少 12 位。强度：较强</span></div>
+          <div class="field"><label for="url">面板访问地址</label><input id="url" class="input mono" value="https://panel.example.com"><span class="hint">保存后会自动为该域名申请证书，并通过 Caddy 反代到面板</span></div>
+          <button type="button" class="btn btn-primary" onClick="{{goTotp}}">创建并继续：绑定两步验证</button>
+        </form>
+      </sc-if>
+
+      <p class="hint" style="margin: 0; text-align: center">v0.1.0 · 会话通过 HttpOnly Cookie 保存 · 所有登录记录写入审计日志</p>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = { step: 'login' }; }
+  renderVals() {
+    const s = this.state.step;
+    const on = '#F1E4DA', off = 'transparent';
+    return {
+      isLogin: s === 'login', isTotp: s === 'totp', isSetup: s === 'setup',
+      tabLogin: s === 'login' ? on : off, tabTotp: s === 'totp' ? on : off, tabSetup: s === 'setup' ? on : off,
+      goLogin: () => this.setState({ step: 'login' }),
+      goTotp: () => this.setState({ step: 'totp' }),
+      goSetup: () => this.setState({ step: 'setup' })
+    };
+  }
+}
+</script>
+</body>
+</html>

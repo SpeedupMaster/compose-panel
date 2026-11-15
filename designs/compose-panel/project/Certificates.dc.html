@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>证书</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+body{margin:0;background:#F4F4F2;color:#18191B;font-family:'IBM Plex Sans','Noto Sans SC',system-ui,sans-serif;font-size:14px;line-height:1.5}
+a{color:#93370D}a:hover{color:#6E2A0A}
+.mono{font-family:'IBM Plex Mono','Noto Sans SC',ui-monospace,monospace;font-size:13px}
+.btn{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:6px;border:1px solid #D6D6D1;background:#fff;color:#18191B;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap;box-sizing:border-box}
+.btn:hover{background:#F7F7F5;color:#18191B}
+.btn-primary{background:#B54708;border-color:#B54708;color:#fff}.btn-primary:hover{background:#93370D;color:#fff}
+.btn-sm{height:30px;padding:0 10px;font-size:13px}
+.card{background:#fff;border:1px solid #E2E2DE;border-radius:8px}
+.badge{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E8F5EE;color:#17663E}.err{background:#FDECEA;color:#A41E14}.off{background:#EEEEEC;color:#4A4D52}.run{background:#EAF0FD;color:#1D44B8}.warn{background:#FBF3DD;color:#7A4F00}
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;font-weight:500;color:#5F6268;text-align:left;padding:10px 14px;border-bottom:1px solid #E2E2DE;background:#FAFAF8;white-space:nowrap}
+td{padding:11px 14px;border-bottom:1px solid #EEEEEB;vertical-align:middle}
+tr:last-child td{border-bottom:0}
+.label{font-size:12px;color:#5F6268}
+.h1{font-size:22px;font-weight:600;margin:0;line-height:1.3}
+.st{font-size:15px;font-weight:600;margin:0}
+.input{height:36px;border:1px solid #C9C9C4;border-radius:6px;padding:0 10px;font:inherit;background:#fff;color:#18191B;box-sizing:border-box;width:100%}
+.field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.field label{font-size:13px;font-weight:500}
+.kv{display:grid;grid-template-columns:88px minmax(0,1fr);gap:6px 12px;font-size:13px;margin:0}
+.kv dt{color:#5F6268}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh">
+  <div style="flex: 1 1 232px; background: #17181B">
+    <dc-import name="Sidebar" active="certs" hint-size="232px,900px"></dc-import>
+  </div>
+  <main style="flex: 999 1 560px; min-width: 0; padding: 28px 32px 40px; display: flex; flex-direction: column; gap: 20px; box-sizing: border-box">
+    <header style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <h1 class="h1">证书</h1>
+        <div class="label">到期前 30 天自动续期 · 续期失败每 6 小时重试并通知 · 剩余 14 天时升级为告警</div>
+      </div>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap">
+        <button type="button" class="btn">上传证书</button>
+        <button type="button" class="btn btn-primary">申请证书</button>
+      </div>
+    </header>
+
+    <section style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 16px">
+      <div class="card" style="padding: 14px 16px"><div class="label">有效</div><div style="font-size: 22px; font-weight: 600">8</div></div>
+      <div class="card" style="padding: 14px 16px"><div class="label">30 天内到期</div><div style="font-size: 22px; font-weight: 600">1</div></div>
+      <div class="card" style="padding: 14px 16px; border-color: #F1B8B2"><div class="label">续期失败</div><div style="font-size: 22px; font-weight: 600; color: #A41E14">1</div></div>
+      <div class="card" style="padding: 14px 16px"><div class="label">ACME 账户</div><div style="font-size: 15px; font-weight: 600; padding-top: 4px">Let's Encrypt · 备用 ZeroSSL</div></div>
+    </section>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+      <section class="card" aria-label="证书列表" style="flex: 3 1 560px; min-width: 0; overflow: hidden">
+        <div style="overflow-x: auto"><table>
+          <thead><tr><th>域名</th><th>颁发者</th><th>验证方式</th><th>到期</th><th>状态</th></tr></thead>
+          <tbody>
+            <sc-for list="{{certs}}" as="c" hint-placeholder-count="8">
+              <tr style="background: {{c.bg}}">
+                <td><button type="button" onClick="{{c.pick}}" class="mono" style="border: 0; background: none; padding: 0; color: #93370D; font-weight: 500; cursor: pointer; text-align: left">{{c.d}}</button><sc-if value="{{c.san}}" hint-placeholder-val="{{false}}"><div class="label">{{c.san}}</div></sc-if></td>
+                <td>{{c.iss}}</td>
+                <td class="label">{{c.how}}</td>
+                <td><div class="mono">{{c.exp}}</div><div style="width: 90px; height: 4px; background: #EEEEEB; border-radius: 2px; overflow: hidden; margin-top: 4px"><div style="height: 100%; width: {{c.pct}}; background: {{c.bar}}"></div></div></td>
+                <td><span class="badge {{c.cls}}">{{c.st}}</span></td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table></div>
+      </section>
+
+      <aside class="card" aria-labelledby="cd" style="flex: 2 1 340px; min-width: 0; padding: 16px; display: flex; flex-direction: column; gap: 14px">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px"><h2 id="cd" class="st mono" style="font-size: 15px">{{cur.d}}</h2><span class="badge {{cur.cls}}">{{cur.st}}</span></div>
+        <sc-if value="{{cur.fail}}" hint-placeholder-val="{{false}}">
+          <div style="background: #FDECEA; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 6px">
+            <div style="font-weight: 600; color: #7A160E">最近一次续期失败 · 今天 06:12</div>
+            <div class="mono" style="font-size: 12px; color: #7A160E; overflow-wrap: anywhere">acme: error 403 urn:ietf:params:acme:error:unauthorized — Invalid response from http://legacy.example.com/.well-known/acme-challenge/…: 404</div>
+            <div style="font-size: 13px; color: #5C130B">原因判断：域名 A 记录指向 198.51.100.7，不是本机 203.0.113.10。修正 DNS 后点「立即续期」，或改用 DNS-01 验证。</div>
+          </div>
+        </sc-if>
+        <dl class="kv">
+          <dt>域名</dt><dd class="mono">{{cur.all}}</dd>
+          <dt>颁发者</dt><dd>{{cur.iss}}</dd>
+          <dt>有效期</dt><dd class="mono">{{cur.range}}</dd>
+          <dt>密钥</dt><dd>ECDSA P-256</dd>
+          <dt>验证</dt><dd>{{cur.how}}</dd>
+          <dt>使用站点</dt><dd class="mono">{{cur.d}}</dd>
+          <dt>指纹</dt><dd class="mono" style="font-size: 12px">SHA256 3B:9F:…:C2:71</dd>
+        </dl>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap"><button type="button" class="btn btn-sm btn-primary">立即续期</button><button type="button" class="btn btn-sm">下载 PEM</button><button type="button" class="btn btn-sm">吊销</button></div>
+        <div style="border-top: 1px solid #E2E2DE; padding-top: 12px; display: flex; flex-direction: column; gap: 6px">
+          <div class="label">续期历史</div>
+          <div style="display: flex; justify-content: space-between; font-size: 13px"><span class="mono">2026-11-14 06:12</span><span class="badge err">失败</span></div>
+          <div style="display: flex; justify-content: space-between; font-size: 13px"><span class="mono">2026-11-14 00:12</span><span class="badge err">失败</span></div>
+          <div style="display: flex; justify-content: space-between; font-size: 13px"><span class="mono">2026-08-23 03:40</span><span class="badge ok">成功</span></div>
+        </div>
+      </aside>
+    </div>
+
+    <section class="card" aria-labelledby="dns" style="padding: 16px; display: flex; flex-direction: column; gap: 14px">
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap"><h2 id="dns" class="st">ACME 与 DNS 验证</h2><span class="label">通配符证书需要 DNS-01；凭据加密保存，只授予 DNS 编辑权限</span></div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 16px">
+        <div class="field"><label for="em">ACME 账户邮箱</label><input id="em" class="input" value="[YOUR EMAIL]"><span class="label">用于接收 CA 的到期提醒</span></div>
+        <div class="field"><label for="ca">首选 CA</label><select id="ca" class="input"><option>Let's Encrypt</option><option>ZeroSSL</option><option>Google Trust Services</option></select></div>
+        <div class="field"><label for="dp">DNS 服务商</label><select id="dp" class="input"><option>Cloudflare · API Token 已配置</option><option>阿里云 DNS</option><option>腾讯云 DNSPod</option></select></div>
+      </div>
+    </section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1250}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = { sel: 0 }; }
+  renderVals() {
+    const C = [
+      { d: 'legacy.example.com', san: '', iss: "Let's Encrypt E6", how: 'HTTP-01', exp: '11-23 · 9 天', days: 9, cls: 'err', st: '续期失败', fail: true, all: 'legacy.example.com', range: '2026-08-23 → 2026-11-23' },
+      { d: '*.example.com', san: 'example.com', iss: "Let's Encrypt E5", how: 'DNS-01 · Cloudflare', exp: '01-29 · 76 天', days: 76, cls: 'ok', st: '有效', fail: false, all: '*.example.com, example.com', range: '2026-10-31 → 2027-01-29' },
+      { d: 'api.example.com', san: '', iss: "Let's Encrypt E6", how: 'HTTP-01', exp: '02-03 · 81 天', days: 81, cls: 'ok', st: '有效', fail: false, all: 'api.example.com', range: '2026-11-05 → 2027-02-03' },
+      { d: 'www.example.com', san: 'example.com', iss: "Let's Encrypt E6", how: 'HTTP-01', exp: '02-03 · 81 天', days: 81, cls: 'ok', st: '有效', fail: false, all: 'www.example.com, example.com', range: '2026-11-05 → 2027-02-03' },
+      { d: 'stats.example.com', san: '', iss: 'ZeroSSL ECC', how: 'HTTP-01 · 备用 CA', exp: '01-23 · 70 天', days: 70, cls: 'ok', st: '有效', fail: false, all: 'stats.example.com', range: '2026-10-25 → 2027-01-23' },
+      { d: 'panel.example.com', san: '', iss: "Let's Encrypt E5", how: 'HTTP-01', exp: '01-15 · 62 天', days: 62, cls: 'ok', st: '有效', fail: false, all: 'panel.example.com', range: '2026-10-17 → 2027-01-15' },
+      { d: 'intranet.corp', san: '', iss: '自签 / 上传', how: '手动上传', exp: '2027-06-30', days: 228, cls: 'warn', st: '不自动续期', fail: false, all: 'intranet.corp', range: '2026-07-01 → 2027-06-30' }
+    ];
+    const sel = this.state.sel;
+    return {
+      certs: C.map((c, i) => ({ ...c, bg: i === sel ? '#FDF6F1' : 'transparent', pct: Math.min(100, Math.round(c.days / 90 * 100)) + '%', bar: c.days < 14 ? '#A41E14' : c.days < 30 ? '#B8860B' : '#17663E', pick: () => this.setState({ sel: i }) })),
+      cur: C[sel]
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>实例详情 · postgres-main</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+body{margin:0;background:#F4F4F2;color:#18191B;font-family:'IBM Plex Sans','Noto Sans SC',system-ui,sans-serif;font-size:14px;line-height:1.5}
+a{color:#93370D}a:hover{color:#6E2A0A}
+.mono{font-family:'IBM Plex Mono','Noto Sans SC',ui-monospace,monospace;font-size:13px}
+.btn{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:6px;border:1px solid #D6D6D1;background:#fff;color:#18191B;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap;box-sizing:border-box}
+.btn:hover{background:#F7F7F5;color:#18191B}
+.btn-primary{background:#B54708;border-color:#B54708;color:#fff}.btn-primary:hover{background:#93370D;color:#fff}
+.btn-sm{height:30px;padding:0 10px;font-size:13px}
+.card{background:#fff;border:1px solid #E2E2DE;border-radius:8px}
+.badge{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E8F5EE;color:#17663E}.err{background:#FDECEA;color:#A41E14}.off{background:#EEEEEC;color:#4A4D52}.run{background:#EAF0FD;color:#1D44B8}.warn{background:#FBF3DD;color:#7A4F00}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;font-weight:500;color:#5F6268;text-align:left;padding:9px 14px;border-bottom:1px solid #E2E2DE;background:#FAFAF8;white-space:nowrap}
+td{padding:9px 14px;border-bottom:1px solid #EEEEEB;vertical-align:middle}
+tr:last-child td{border-bottom:0}
+.label{font-size:12px;color:#5F6268}
+.h1{font-size:22px;font-weight:600;margin:0;line-height:1.3}
+.st{font-size:15px;font-weight:600;margin:0}
+.tabs{display:flex;gap:4px;border-bottom:1px solid #E2E2DE;overflow-x:auto}
+.tabb{display:inline-flex;align-items:center;height:44px;padding:0 14px;border:0;border-bottom:2px solid transparent;background:none;font:inherit;cursor:pointer;white-space:nowrap}
+.metric{display:flex;flex-direction:column;gap:2px;padding:12px 16px;border-right:1px solid #EEEEEB;min-width:0}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh">
+  <div style="flex: 1 1 232px; background: #17181B">
+    <dc-import name="Sidebar" active="databases" hint-size="232px,900px"></dc-import>
+  </div>
+  <main style="flex: 999 1 560px; min-width: 0; padding: 20px 32px 40px; display: flex; flex-direction: column; gap: 20px; box-sizing: border-box">
+    <nav aria-label="面包屑" class="label"><a href="Databases.dc.html">数据库</a> / postgres-main</nav>
+    <header style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between">
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap"><h1 class="h1">postgres-main</h1><span class="badge ok"><span class="dot"></span>运行中</span></div>
+        <div class="label">PostgreSQL 16.4 · 镜像 <span class="mono">postgres:16.4-alpine</span> · 卷 <span class="mono">postgres-main_pgdata</span></div>
+      </div>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap">
+        <button type="button" class="btn">重启</button>
+        <button type="button" class="btn">升级版本…</button>
+        <a class="btn btn-primary" href="Backups.dc.html">立即备份</a>
+      </div>
+    </header>
+
+    <section class="card" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); overflow: hidden">
+      <div class="metric"><span class="label">数据量</span><span style="font-size: 18px; font-weight: 600">9.6 GB</span></div>
+      <div class="metric"><span class="label">连接</span><span style="font-size: 18px; font-weight: 600">23 <span class="label">/ 100</span></span></div>
+      <div class="metric"><span class="label">缓存命中率</span><span style="font-size: 18px; font-weight: 600">99.2%</span></div>
+      <div class="metric"><span class="label">TPS</span><span style="font-size: 18px; font-weight: 600">148</span></div>
+      <div class="metric"><span class="label">最长事务</span><span style="font-size: 18px; font-weight: 600">2.4 s</span></div>
+      <div class="metric" style="border-right: 0"><span class="label">最近备份</span><span style="font-size: 18px; font-weight: 600">今天 03:00</span></div>
+    </section>
+
+    <section class="card" aria-labelledby="conn" style="padding: 14px 16px; display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center">
+      <h2 id="conn" class="st" style="flex: none">连接信息</h2>
+      <div style="display: flex; flex-direction: column; min-width: 0; flex: 1 1 300px"><span class="label">项目内部（同网络）</span><span class="mono" style="overflow-wrap: anywhere">postgres://shop:••••••@postgres-main:5432/shop</span></div>
+      <div style="display: flex; flex-direction: column; min-width: 0; flex: 1 1 220px"><span class="label">SSH 隧道</span><span class="mono">ssh -L 5432:127.0.0.1:5432 [YOUR SERVER]</span></div>
+      <div style="display: flex; gap: 8px"><button type="button" class="btn btn-sm">复制</button><button type="button" class="btn btn-sm">显示密码</button></div>
+    </section>
+
+    <div class="tabs" role="tablist" aria-label="实例管理">
+      <sc-for list="{{tabs}}" as="t" hint-placeholder-count="6">
+        <button type="button" role="tab" class="tabb" aria-selected="{{t.sel}}" onClick="{{t.pick}}" style="color: {{t.fg}}; font-weight: {{t.w}}; border-bottom-color: {{t.line}}">{{t.label}}</button>
+      </sc-for>
+    </div>
+
+    <sc-if value="{{isSql}}" hint-placeholder-val="{{true}}">
+      <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
+        <aside class="card" aria-label="对象浏览" style="flex: 1 1 220px; min-width: 0; padding: 10px; display: flex; flex-direction: column; gap: 2px; font-size: 13px">
+          <label for="dbsel" class="label" style="padding: 4px 6px">数据库</label>
+          <select id="dbsel" class="mono" style="height: 32px; border: 1px solid #D6D6D1; border-radius: 6px; margin-bottom: 8px"><option>shop</option><option>umami</option><option>n8n</option></select>
+          <div class="label" style="padding: 4px 6px">public · 12 张表</div>
+          <sc-for list="{{tables}}" as="tb" hint-placeholder-count="8">
+            <button type="button" style="display: flex; justify-content: space-between; gap: 8px; border: 0; background: {{tb.bg}}; padding: 6px 8px; border-radius: 4px; font: inherit; cursor: pointer; text-align: left; color: #18191B">
+              <span class="mono">{{tb.n}}</span><span class="label">{{tb.rows}}</span>
+            </button>
+          </sc-for>
+        </aside>
+        <div style="flex: 4 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+          <div style="background: #1C1D20; border-radius: 8px; overflow: hidden; border: 1px solid #2E3035">
+            <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; background: #24262A">
+              <button type="button" class="btn btn-sm btn-primary">运行 <span class="mono" style="font-size: 11px; opacity: .85">Ctrl+Enter</span></button>
+              <button type="button" class="btn btn-sm" style="background: #2E3035; color: #E6E6E3; border-color: #3A3C42">解释（EXPLAIN）</button>
+              <button type="button" class="btn btn-sm" style="background: #2E3035; color: #E6E6E3; border-color: #3A3C42">格式化</button>
+              <label style="display: flex; gap: 6px; align-items: center; color: #C9CACD; font-size: 13px; margin-left: auto"><input type="checkbox" checked style="accent-color: #B54708">只读事务</label>
+              <span style="color: #A3A5AA; font-size: 12px">以 shop 用户执行 · 超时 30s</span>
+            </div>
+            <div class="mono" style="padding: 12px 14px; color: #E6E6E3; line-height: 22px; white-space: pre; overflow-x: auto"><span style="color: #F2B38A">SELECT</span> o.id, o.status, o.total_cents / 100.0 <span style="color: #F2B38A">AS</span> total, u.email, o.created_at
+<span style="color: #F2B38A">FROM</span> orders o
+<span style="color: #F2B38A">JOIN</span> users u <span style="color: #F2B38A">ON</span> u.id = o.user_id
+<span style="color: #F2B38A">WHERE</span> o.created_at &gt; now() - interval <span style="color: #A8D8B0">'1 day'</span>
+<span style="color: #F2B38A">ORDER BY</span> o.created_at <span style="color: #F2B38A">DESC</span>
+<span style="color: #F2B38A">LIMIT</span> 50;</div>
+          </div>
+          <section class="card" aria-label="查询结果" style="overflow: hidden">
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid #E2E2DE; flex-wrap: wrap; gap: 8px">
+              <span style="font-size: 13px"><span class="badge ok">成功</span> 50 行 · 18 ms</span>
+              <span style="display: flex; gap: 8px"><button type="button" class="btn btn-sm">导出 CSV</button><button type="button" class="btn btn-sm">导出 JSON</button></span>
+            </div>
+            <div style="overflow-x: auto">
+              <table class="mono" style="font-size: 12px">
+                <thead><tr><th>id</th><th>status</th><th>total</th><th>email</th><th>created_at</th></tr></thead>
+                <tbody>
+                  <sc-for list="{{rows}}" as="r" hint-placeholder-count="6">
+                    <tr><td>{{r.id}}</td><td>{{r.st}}</td><td>{{r.t}}</td><td>{{r.e}}</td><td>{{r.c}}</td></tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <p class="label" style="margin: 0">写操作（INSERT / UPDATE / DELETE / DDL）需关闭「只读事务」并二次确认；所有语句写入审计日志。只读角色看不到此开关。</p>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{isDbs}}" hint-placeholder-val="{{false}}">
+      <section class="card" style="overflow: hidden">
+        <div style="overflow-x: auto"><table>
+          <thead><tr><th>数据库</th><th>所有者</th><th>编码</th><th>大小</th><th>被项目使用</th><th>备份</th><th><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">操作</span></th></tr></thead>
+          <tbody>
+            <tr><td class="mono">shop</td><td class="mono">shop</td><td>UTF8</td><td class="mono">7.2 GB</td><td><a href="ProjectDetail.dc.html">shop-api</a></td><td><span class="badge ok">每天 03:00</span></td><td style="white-space: nowrap"><button type="button" class="btn btn-sm">导出</button> <button type="button" class="btn btn-sm">删除</button></td></tr>
+            <tr><td class="mono">umami</td><td class="mono">umami</td><td>UTF8</td><td class="mono">1.9 GB</td><td>umami</td><td><span class="badge ok">每天 03:00</span></td><td style="white-space: nowrap"><button type="button" class="btn btn-sm">导出</button> <button type="button" class="btn btn-sm">删除</button></td></tr>
+            <tr><td class="mono">n8n</td><td class="mono">n8n</td><td>UTF8</td><td class="mono">512 MB</td><td>n8n</td><td><span class="badge warn">无策略</span></td><td style="white-space: nowrap"><button type="button" class="btn btn-sm">导出</button> <button type="button" class="btn btn-sm">删除</button></td></tr>
+          </tbody>
+        </table></div>
+        <div style="padding: 12px 14px; border-top: 1px solid #E2E2DE; display: flex; gap: 8px; flex-wrap: wrap"><button type="button" class="btn btn-sm">新建数据库</button><button type="button" class="btn btn-sm">导入 SQL / dump 文件</button></div>
+      </section>
+    </sc-if>
+
+    <sc-if value="{{isUsers}}" hint-placeholder-val="{{false}}">
+      <section class="card" style="overflow: hidden">
+        <div style="overflow-x: auto"><table>
+          <thead><tr><th>用户</th><th>权限</th><th>可访问库</th><th>连接上限</th><th><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">操作</span></th></tr></thead>
+          <tbody>
+            <tr><td class="mono">postgres</td><td><span class="badge err">超级用户</span></td><td>全部</td><td>不限</td><td><button type="button" class="btn btn-sm">重置密码</button></td></tr>
+            <tr><td class="mono">shop</td><td>读写</td><td class="mono">shop</td><td>50</td><td style="white-space: nowrap"><button type="button" class="btn btn-sm">重置密码</button> <button type="button" class="btn btn-sm">编辑授权</button></td></tr>
+            <tr><td class="mono">shop_readonly</td><td>只读</td><td class="mono">shop</td><td>5</td><td style="white-space: nowrap"><button type="button" class="btn btn-sm">重置密码</button> <button type="button" class="btn btn-sm">编辑授权</button></td></tr>
+            <tr><td class="mono">umami</td><td>读写</td><td class="mono">umami</td><td>20</td><td style="white-space: nowrap"><button type="button" class="btn btn-sm">重置密码</button> <button type="button" class="btn btn-sm">编辑授权</button></td></tr>
+          </tbody>
+        </table></div>
+        <div style="padding: 12px 14px; border-top: 1px solid #E2E2DE"><button type="button" class="btn btn-sm">新建用户</button> <span class="label">重置密码后可一键同步到引用它的项目环境变量并重新部署</span></div>
+      </section>
+    </sc-if>
+
+    <sc-if value="{{isSess}}" hint-placeholder-val="{{false}}">
+      <section class="card" style="overflow: hidden">
+        <div style="overflow-x: auto"><table>
+          <thead><tr><th>PID</th><th>用户 / 库</th><th>客户端</th><th>状态</th><th>时长</th><th>语句</th><th><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">操作</span></th></tr></thead>
+          <tbody>
+            <tr><td class="mono">18342</td><td class="mono">shop / shop</td><td class="mono">172.20.0.3</td><td><span class="badge warn">active</span></td><td class="mono">2.4 s</td><td class="mono" style="max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">UPDATE inventory SET qty = qty - 1 WHERE sku = $1</td><td><button type="button" class="btn btn-sm">终止</button></td></tr>
+            <tr><td class="mono">18120</td><td class="mono">umami / umami</td><td class="mono">172.22.0.4</td><td><span class="badge off">idle</span></td><td class="mono">41 s</td><td class="mono label">—</td><td><button type="button" class="btn btn-sm">终止</button></td></tr>
+            <tr><td class="mono">17991</td><td class="mono">shop / shop</td><td class="mono">172.20.0.4</td><td><span class="badge run">idle in tx</span></td><td class="mono">12 s</td><td class="mono" style="max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">SELECT * FROM orders WHERE id = $1 FOR UPDATE</td><td><button type="button" class="btn btn-sm">终止</button></td></tr>
+          </tbody>
+        </table></div>
+      </section>
+    </sc-if>
+
+    <sc-if value="{{isCfg}}" hint-placeholder-val="{{false}}">
+      <section class="card" style="padding: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 16px">
+        <div style="display: flex; flex-direction: column; gap: 6px"><label for="c1" style="font-size: 13px; font-weight: 500">max_connections</label><input id="c1" class="mono" value="100" style="height: 36px; border: 1px solid #C9C9C4; border-radius: 6px; padding: 0 10px"><span class="label">修改后需重启</span></div>
+        <div style="display: flex; flex-direction: column; gap: 6px"><label for="c2" style="font-size: 13px; font-weight: 500">shared_buffers</label><input id="c2" class="mono" value="256MB" style="height: 36px; border: 1px solid #C9C9C4; border-radius: 6px; padding: 0 10px"><span class="label">建议为内存上限的 25%</span></div>
+        <div style="display: flex; flex-direction: column; gap: 6px"><label for="c3" style="font-size: 13px; font-weight: 500">log_min_duration_statement</label><input id="c3" class="mono" value="500ms" style="height: 36px; border: 1px solid #C9C9C4; border-radius: 6px; padding: 0 10px"><span class="label">慢查询阈值，立即生效</span></div>
+      </section>
+    </sc-if>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1450}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = { tab: 'sql' }; }
+  renderVals() {
+    const t = this.state.tab;
+    const defs = [['sql', 'SQL 控制台'], ['dbs', '数据库 · 3'], ['users', '用户与权限 · 4'], ['sess', '会话 · 23'], ['cfg', '参数配置']];
+    return {
+      isSql: t === 'sql', isDbs: t === 'dbs', isUsers: t === 'users', isSess: t === 'sess', isCfg: t === 'cfg',
+      tabs: defs.map(([id, label]) => ({ label, sel: id === t ? 'true' : 'false', fg: id === t ? '#18191B' : '#4A4D52', w: id === t ? 600 : 400, line: id === t ? '#B54708' : 'transparent', pick: () => this.setState({ tab: id }) })),
+      tables: [['orders', '1.2M', true], ['order_items', '3.8M'], ['users', '86K'], ['products', '2.4K'], ['inventory', '2.4K'], ['payments', '1.1M'], ['coupons', '310'], ['schema_migrations', '64']].map(x => ({ n: x[0], rows: x[1], bg: x[2] ? '#F1E4DA' : 'transparent' })),
+      rows: [
+        { id: 88413, st: 'paid', t: '129.00', e: 'l***@example.com', c: '2026-11-14 12:40:13' },
+        { id: 88412, st: 'paid', t: '58.50', e: 'w***@example.com', c: '2026-11-14 12:40:02' },
+        { id: 88411, st: 'pending', t: '312.00', e: 'c***@example.com', c: '2026-11-14 12:37:45' },
+        { id: 88410, st: 'paid', t: '19.90', e: 'z***@example.com', c: '2026-11-14 12:31:08' },
+        { id: 88409, st: 'failed', t: '76.00', e: 'h***@example.com', c: '2026-11-14 12:29:51' },
+        { id: 88408, st: 'refunded', t: '45.00', e: 'y***@example.com', c: '2026-11-14 12:20:17' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

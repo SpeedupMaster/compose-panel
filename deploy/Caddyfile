@@ -1,0 +1,9 @@
+# Bootstrap config only. The panel pushes the real configuration (sites,
+# certificates, the panel's own domain) through the admin socket below.
+# "origins caddy" matches the Host header the panel sends over the socket.
+{
+	admin unix//run/caddy/admin.sock {
+		origins caddy
+	}
+	persist_config off
+}

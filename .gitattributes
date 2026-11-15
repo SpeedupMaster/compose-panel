@@ -1,0 +1,6 @@
+# Everything here runs on Linux (shell scripts, Dockerfile, Caddyfile, Go):
+# keep LF on every checkout, whatever core.autocrlf says.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.woff2 binary

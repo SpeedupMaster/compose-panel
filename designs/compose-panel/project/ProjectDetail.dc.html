@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>项目详情 · shop-api</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+body{margin:0;background:#F4F4F2;color:#18191B;font-family:'IBM Plex Sans','Noto Sans SC',system-ui,sans-serif;font-size:14px;line-height:1.5}
+a{color:#93370D}a:hover{color:#6E2A0A}
+.mono{font-family:'IBM Plex Mono','Noto Sans SC',ui-monospace,monospace;font-size:13px}
+.btn{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:6px;border:1px solid #D6D6D1;background:#fff;color:#18191B;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap;box-sizing:border-box}
+.btn:hover{background:#F7F7F5;color:#18191B}
+.btn-primary{background:#B54708;border-color:#B54708;color:#fff}.btn-primary:hover{background:#93370D;color:#fff}
+.btn-danger{color:#A41E14;border-color:#F1B8B2}
+.btn-sm{height:30px;padding:0 10px;font-size:13px}
+.card{background:#fff;border:1px solid #E2E2DE;border-radius:8px}
+.badge{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E8F5EE;color:#17663E}.err{background:#FDECEA;color:#A41E14}.off{background:#EEEEEC;color:#4A4D52}.run{background:#EAF0FD;color:#1D44B8}.warn{background:#FBF3DD;color:#7A4F00}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;font-weight:500;color:#5F6268;text-align:left;padding:10px 16px;border-bottom:1px solid #E2E2DE;background:#FAFAF8;white-space:nowrap}
+td{padding:12px 16px;border-bottom:1px solid #EEEEEB;vertical-align:middle}
+tr:last-child td{border-bottom:0}
+.label{font-size:12px;color:#5F6268}
+.h1{font-size:22px;font-weight:600;margin:0;line-height:1.3}
+.st{font-size:15px;font-weight:600;margin:0}
+.tabs{display:flex;gap:4px;border-bottom:1px solid #E2E2DE;overflow-x:auto}
+.tab{display:inline-flex;align-items:center;height:44px;padding:0 14px;color:#4A4D52;text-decoration:none;border-bottom:2px solid transparent;white-space:nowrap}
+.tab:hover{color:#18191B}
+.tab-on{color:#18191B;font-weight:600;border-bottom-color:#B54708}
+.kv{display:grid;grid-template-columns:96px minmax(0,1fr);gap:8px 12px;font-size:13px}
+.kv dt{color:#5F6268}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh">
+  <div style="flex: 1 1 232px; background: #17181B">
+    <dc-import name="Sidebar" active="projects" hint-size="232px,900px"></dc-import>
+  </div>
+  <main style="flex: 999 1 560px; min-width: 0; padding: 20px 32px 40px; display: flex; flex-direction: column; gap: 20px; box-sizing: border-box">
+    <nav aria-label="面包屑" class="label"><a href="Projects.dc.html">项目</a> / shop-api</nav>
+    <header style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; justify-content: space-between">
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+          <h1 class="h1">shop-api</h1>
+          <span class="badge ok"><span class="dot"></span>运行中 · 3/3</span>
+        </div>
+        <div class="label">Git · <span class="mono">github.com/[YOUR ORG]/shop-api</span> @ main · 提交 <span class="mono">a91f3c2</span> · 部署 #42 于 2 小时前</div>
+      </div>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap">
+        <button type="button" class="btn">重启</button>
+        <button type="button" class="btn" onClick="{{askStop}}">停止</button>
+        <button type="button" class="btn">拉取镜像</button>
+        <a class="btn btn-primary" href="Deployments.dc.html">重新部署</a>
+      </div>
+    </header>
+
+    <sc-if value="{{confirmStop}}" hint-placeholder-val="{{false}}">
+      <div role="alertdialog" aria-labelledby="stopt" style="background: #FBF3DD; border: 1px solid #E8D29A; border-radius: 8px; padding: 14px 16px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center">
+        <div style="flex: 1 1 360px">
+          <div id="stopt" style="font-weight: 600; color: #5C3B00">停止 shop-api 的全部 3 个服务？</div>
+          <div style="font-size: 13px; color: #5C3B00">执行 <span class="mono">docker compose -p shop-api stop</span>。api.example.com 将返回 502，直到重新启动。卷和数据不受影响。</div>
+        </div>
+        <button type="button" class="btn" onClick="{{cancelStop}}">取消</button>
+        <button type="button" class="btn btn-primary" onClick="{{cancelStop}}">确认停止</button>
+      </div>
+    </sc-if>
+
+    <nav class="tabs" aria-label="项目页面">
+      <a class="tab tab-on" href="ProjectDetail.dc.html" aria-current="page">概览</a>
+      <a class="tab" href="ComposeEditor.dc.html">Compose 与环境变量</a>
+      <a class="tab" href="Deployments.dc.html">部署历史</a>
+      <a class="tab" href="ContainerConsole.dc.html">日志与终端</a>
+      <a class="tab" href="ProxySites.dc.html">域名</a>
+      <a class="tab" href="Backups.dc.html">备份</a>
+      <a class="tab" href="#settings">设置</a>
+    </nav>
+
+    <section class="card" aria-labelledby="svc" style="overflow: hidden">
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; flex-wrap: wrap; gap: 8px">
+        <h2 id="svc" class="st">服务</h2>
+        <span class="label">每 5 秒刷新 · 数据来自 Docker Engine API</span>
+      </div>
+      <div style="overflow-x: auto">
+        <table>
+          <thead><tr><th>服务</th><th>镜像</th><th>状态</th><th>端口</th><th>CPU</th><th>内存</th><th>重启</th><th><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">操作</span></th></tr></thead>
+          <tbody>
+            <tr>
+              <td><div style="font-weight: 600">api</div><div class="label mono">shop-api-api-1</div></td>
+              <td class="mono">ghcr.io/[YOUR ORG]/shop-api:a91f3c2</td>
+              <td><span class="badge ok"><span class="dot"></span>健康 · 2 小时</span></td>
+              <td class="mono">8080 → 代理</td><td class="mono">2.1%</td><td class="mono">184 / 512 MB</td><td>0</td>
+              <td style="white-space: nowrap"><a class="btn btn-sm" href="ContainerConsole.dc.html">日志</a> <a class="btn btn-sm" href="ContainerConsole.dc.html">终端</a></td>
+            </tr>
+            <tr>
+              <td><div style="font-weight: 600">worker</div><div class="label mono">shop-api-worker-1</div></td>
+              <td class="mono">ghcr.io/[YOUR ORG]/shop-api:a91f3c2</td>
+              <td><span class="badge ok"><span class="dot"></span>运行 · 2 小时</span></td>
+              <td class="label">—</td><td class="mono">1.4%</td><td class="mono">96 / 256 MB</td><td>0</td>
+              <td style="white-space: nowrap"><a class="btn btn-sm" href="ContainerConsole.dc.html">日志</a> <a class="btn btn-sm" href="ContainerConsole.dc.html">终端</a></td>
+            </tr>
+            <tr>
+              <td><div style="font-weight: 600">redis</div><div class="label mono">shop-api-redis-1</div></td>
+              <td class="mono">redis:7.4-alpine</td>
+              <td><span class="badge ok"><span class="dot"></span>健康 · 12 天</span></td>
+              <td class="label">仅内部</td><td class="mono">0.3%</td><td class="mono">332 MB</td><td>1</td>
+              <td style="white-space: nowrap"><a class="btn btn-sm" href="ContainerConsole.dc.html">日志</a> <a class="btn btn-sm" href="ContainerConsole.dc.html">终端</a></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 20px; align-items: start">
+      <section class="card" aria-labelledby="dom" style="padding: 16px; display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; justify-content: space-between; align-items: center">
+          <h2 id="dom" class="st">域名</h2>
+          <a href="ProxySites.dc.html" style="font-size: 13px">添加域名</a>
+        </div>
+        <div style="display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap">
+          <div><div class="mono" style="font-weight: 500">api.example.com</div><div class="label">→ api:8080 · HTTPS 强制 · HSTS</div></div>
+          <span class="badge ok">证书 81 天</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap">
+          <div><div class="mono" style="font-weight: 500">api-staging.example.com</div><div class="label">→ api:8080 · Basic Auth</div></div>
+          <span class="badge ok">证书 44 天</span>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="git" style="padding: 16px; display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; justify-content: space-between; align-items: center">
+          <h2 id="git" class="st">Git 与自动部署</h2>
+          <span class="badge run">Webhook 已启用</span>
+        </div>
+        <dl class="kv" style="margin: 0">
+          <dt>仓库</dt><dd class="mono">git@github.com:[YOUR ORG]/shop-api.git</dd>
+          <dt>分支</dt><dd class="mono">main</dd>
+          <dt>Compose</dt><dd class="mono">deploy/compose.yml</dd>
+          <dt>触发</dt><dd>推送到 main 时部署；忽略只改 docs/ 的提交</dd>
+          <dt>Webhook</dt><dd class="mono">https://panel.example.com/hooks/p/7f3a…</dd>
+          <dt>签名</dt><dd>HMAC-SHA256 · 最近一次 2 小时前 · 200</dd>
+        </dl>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap"><button type="button" class="btn btn-sm">复制 Webhook 地址</button><button type="button" class="btn btn-sm">重新生成密钥</button></div>
+      </section>
+
+      <section class="card" aria-labelledby="vol" style="padding: 16px; display: flex; flex-direction: column; gap: 12px">
+        <h2 id="vol" class="st">卷与网络</h2>
+        <dl class="kv" style="margin: 0">
+          <dt>卷</dt><dd><span class="mono">shop-api_redis-data</span> · 412 MB</dd>
+          <dt>绑定挂载</dt><dd><span class="mono">./uploads → /app/uploads</span> · 2.3 GB</dd>
+          <dt>网络</dt><dd><span class="mono">shop-api_default</span>、<span class="mono">panel-proxy</span>（共享代理网络，由平台自动加入）</dd>
+          <dt>依赖</dt><dd>通过 <span class="mono">postgres-main</span> 实例的库 <span class="mono">shop</span> 连接数据库</dd>
+        </dl>
+      </section>
+
+      <section class="card" aria-labelledby="bkp" style="padding: 16px; display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; justify-content: space-between; align-items: center">
+          <h2 id="bkp" class="st">备份</h2>
+          <a href="Backups.dc.html" style="font-size: 13px">管理策略</a>
+        </div>
+        <div style="display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap"><div><div style="font-weight: 500">卷快照 · shop-api_redis-data</div><div class="label">每天 04:00 · 保留 7 天 / 4 周 · r2-backup</div></div><span class="badge ok">今天成功</span></div>
+        <div style="display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap"><div><div style="font-weight: 500">目录 · ./uploads</div><div class="label">每 6 小时 · 增量 · r2-backup</div></div><span class="badge ok">1 小时前</span></div>
+      </section>
+    </div>
+
+    <section id="settings" class="card" aria-labelledby="danger" style="padding: 16px; display: flex; flex-direction: column; gap: 12px; border-color: #F1B8B2">
+      <h2 id="danger" class="st" style="color: #A41E14">危险操作</h2>
+      <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between">
+        <div style="flex: 1 1 360px"><div style="font-weight: 500">删除项目</div><div class="label">执行 <span class="mono">docker compose down</span>，移除容器、项目网络与代理站点。可选同时删除卷（不可恢复，删除前会自动做一次备份）。需输入项目名确认。</div></div>
+        <button type="button" class="btn btn-danger">删除项目…</button>
+      </div>
+    </section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1250}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = { stop: false }; }
+  renderVals() {
+    return {
+      confirmStop: this.state.stop,
+      askStop: () => this.setState({ stop: true }),
+      cancelStop: () => this.setState({ stop: false })
+    };
+  }
+}
+</script>
+</body>
+</html>

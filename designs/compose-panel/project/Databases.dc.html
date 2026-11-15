@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>数据库实例</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+body{margin:0;background:#F4F4F2;color:#18191B;font-family:'IBM Plex Sans','Noto Sans SC',system-ui,sans-serif;font-size:14px;line-height:1.5}
+a{color:#93370D}a:hover{color:#6E2A0A}
+.mono{font-family:'IBM Plex Mono','Noto Sans SC',ui-monospace,monospace;font-size:13px}
+.btn{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:6px;border:1px solid #D6D6D1;background:#fff;color:#18191B;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap;box-sizing:border-box}
+.btn:hover{background:#F7F7F5;color:#18191B}
+.btn-primary{background:#B54708;border-color:#B54708;color:#fff}.btn-primary:hover{background:#93370D;color:#fff}
+.btn-sm{height:30px;padding:0 10px;font-size:13px}
+.card{background:#fff;border:1px solid #E2E2DE;border-radius:8px}
+.badge{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E8F5EE;color:#17663E}.err{background:#FDECEA;color:#A41E14}.off{background:#EEEEEC;color:#4A4D52}.run{background:#EAF0FD;color:#1D44B8}.warn{background:#FBF3DD;color:#7A4F00}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.label{font-size:12px;color:#5F6268}
+.h1{font-size:22px;font-weight:600;margin:0;line-height:1.3}
+.st{font-size:15px;font-weight:600;margin:0}
+.input{height:36px;border:1px solid #C9C9C4;border-radius:6px;padding:0 10px;font:inherit;background:#fff;color:#18191B;box-sizing:border-box;width:100%}
+.field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.field label{font-size:13px;font-weight:500}
+.kv{display:grid;grid-template-columns:72px minmax(0,1fr);gap:4px 10px;font-size:13px;margin:0}
+.kv dt{color:#5F6268}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh">
+  <div style="flex: 1 1 232px; background: #17181B">
+    <dc-import name="Sidebar" active="databases" hint-size="232px,900px"></dc-import>
+  </div>
+  <main style="flex: 999 1 560px; min-width: 0; padding: 28px 32px 40px; display: flex; flex-direction: column; gap: 20px; box-sizing: border-box">
+    <header style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <h1 class="h1">数据库</h1>
+        <div class="label">每个实例是一个由平台生成的 Compose 项目；也可以纳管项目中已有的数据库容器</div>
+      </div>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap">
+        <button type="button" class="btn">纳管已有容器</button>
+        <button type="button" class="btn btn-primary" onClick="{{toggleNew}}">创建实例</button>
+      </div>
+    </header>
+
+    <sc-if value="{{showNew}}" hint-placeholder-val="{{true}}">
+      <section class="card" aria-labelledby="ni" style="padding: 20px; display: flex; flex-direction: column; gap: 18px; border-color: #B54708">
+        <h2 id="ni" class="st">创建数据库实例</h2>
+        <div role="radiogroup" aria-label="引擎" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 10px">
+          <sc-for list="{{engines}}" as="e" hint-placeholder-count="5">
+            <button type="button" role="radio" aria-checked="{{e.checked}}" onClick="{{e.pick}}" style="text-align: left; padding: 12px; border-radius: 8px; border: 2px solid {{e.border}}; background: {{e.bg}}; font: inherit; color: #18191B; cursor: pointer; display: flex; flex-direction: column; gap: 2px">
+              <span style="font-weight: 600">{{e.name}}</span>
+              <span class="label">{{e.tools}}</span>
+            </button>
+          </sc-for>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 16px">
+          <div class="field"><label for="iname">实例名</label><input id="iname" class="input mono" value="{{curName}}"></div>
+          <div class="field"><label for="iver">版本</label><select id="iver" class="input mono"><sc-for list="{{versions}}" as="v" hint-placeholder-count="3"><option>{{v.v}}</option></sc-for></select></div>
+          <div class="field"><label for="imem">内存上限</label><select id="imem" class="input"><option>512 MB</option><option selected>1 GB</option><option>2 GB</option><option>4 GB</option></select></div>
+          <div class="field"><label for="iroot">超级用户密码</label><input id="iroot" class="input mono" value="自动生成 32 位，加密保存"></div>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 16px">
+          <fieldset style="border: 1px solid #E2E2DE; border-radius: 8px; padding: 12px 14px; margin: 0; display: flex; flex-direction: column; gap: 8px">
+            <legend style="font-size: 13px; font-weight: 500; padding: 0 4px">访问方式</legend>
+            <label style="display: flex; gap: 8px; align-items: flex-start"><input type="radio" name="exp" checked style="margin-top: 4px; accent-color: #B54708"><span>仅内部网络<br><span class="label">项目通过 <span class="mono">{{curName}}:{{port}}</span> 访问，最安全</span></span></label>
+            <label style="display: flex; gap: 8px; align-items: flex-start"><input type="radio" name="exp" style="margin-top: 4px; accent-color: #B54708"><span>绑定到 127.0.0.1<br><span class="label">本机或 SSH 隧道可连，方便用桌面客户端</span></span></label>
+            <label style="display: flex; gap: 8px; align-items: flex-start"><input type="radio" name="exp" style="margin-top: 4px; accent-color: #B54708"><span>公网端口 + IP 白名单<br><span class="label">需要填写允许的来源 IP，强制 TLS</span></span></label>
+          </fieldset>
+          <fieldset style="border: 1px solid #E2E2DE; border-radius: 8px; padding: 12px 14px; margin: 0; display: flex; flex-direction: column; gap: 8px">
+            <legend style="font-size: 13px; font-weight: 500; padding: 0 4px">创建后</legend>
+            <label style="display: flex; gap: 8px; align-items: center"><input type="checkbox" checked style="accent-color: #B54708">创建默认库与同名用户</label>
+            <label style="display: flex; gap: 8px; align-items: center"><input type="checkbox" checked style="accent-color: #B54708">启用每日备份：03:00 · 保留 7 天 / 4 周 / 6 月 · r2-backup</label>
+            <label style="display: flex; gap: 8px; align-items: center"><input type="checkbox" style="accent-color: #B54708">数据目录使用绑定挂载而非命名卷</label>
+          </fieldset>
+        </div>
+        <div style="display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap">
+          <button type="button" class="btn" onClick="{{toggleNew}}">取消</button>
+          <a class="btn btn-primary" href="DatabaseDetail.dc.html">创建实例</a>
+        </div>
+      </section>
+    </sc-if>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 16px">
+      <sc-for list="{{instances}}" as="i" hint-placeholder-count="4">
+        <article class="card" style="padding: 16px; display: flex; flex-direction: column; gap: 12px">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px">
+            <div style="min-width: 0">
+              <a href="DatabaseDetail.dc.html" style="font-weight: 600; font-size: 16px">{{i.name}}</a>
+              <div class="label">{{i.engine}}</div>
+            </div>
+            <span class="badge {{i.cls}}"><span class="dot"></span>{{i.status}}</span>
+          </div>
+          <dl class="kv">
+            <dt>库</dt><dd>{{i.dbs}}</dd>
+            <dt>数据量</dt><dd class="mono">{{i.size}}</dd>
+            <dt>连接</dt><dd>{{i.conn}}</dd>
+            <dt>访问</dt><dd class="mono">{{i.access}}</dd>
+          </dl>
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; border-top: 1px solid #EEEEEB; padding-top: 10px; flex-wrap: wrap">
+            <span style="font-size: 13px"><span class="badge {{i.bcls}}">{{i.bstat}}</span> <span class="label">{{i.bnote}}</span></span>
+            <a class="btn btn-sm" href="DatabaseDetail.dc.html">管理</a>
+          </div>
+        </article>
+      </sc-for>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1350}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = { open: true, eng: 'pg' }; }
+  renderVals() {
+    const E = [
+      { id: 'pg', name: 'PostgreSQL', tools: 'pg_dump · psql', vers: ['16.4', '15.8', '17.0'], port: 5432, def: 'pg-blog' },
+      { id: 'my', name: 'MySQL', tools: 'mysqldump · mysql', vers: ['8.0.39', '8.4.2'], port: 3306, def: 'mysql-blog' },
+      { id: 'ma', name: 'MariaDB', tools: 'mariadb-dump', vers: ['11.4', '10.11'], port: 3306, def: 'mariadb-blog' },
+      { id: 'mg', name: 'MongoDB', tools: 'mongodump · mongosh', vers: ['7.0', '6.0'], port: 27017, def: 'mongo-blog' },
+      { id: 'rd', name: 'Redis', tools: 'RDB 快照 · redis-cli', vers: ['7.4', '7.2'], port: 6379, def: 'redis-cache' }
+    ];
+    const cur = E.find(e => e.id === this.state.eng);
+    return {
+      showNew: this.state.open,
+      toggleNew: () => this.setState({ open: !this.state.open }),
+      engines: E.map(e => ({ ...e, checked: e.id === cur.id ? 'true' : 'false', border: e.id === cur.id ? '#B54708' : '#E2E2DE', bg: e.id === cur.id ? '#FDF6F1' : '#fff', pick: () => this.setState({ eng: e.id }) })),
+      versions: cur.vers.map(v => ({ v })), curName: cur.def, port: cur.port,
+      instances: [
+        { name: 'postgres-main', engine: 'PostgreSQL 16.4', cls: 'ok', status: '运行中', dbs: 'shop、umami、n8n（3）', size: '9.6 GB', conn: '23 / 100', access: '仅内部 · postgres-main:5432', bcls: 'ok', bstat: '备份成功', bnote: '今天 03:00 · 412 MB' },
+        { name: 'mysql-legacy', engine: 'MySQL 8.0.39', cls: 'ok', status: '运行中', dbs: 'crm、wiki（2）', size: '3.1 GB', conn: '8 / 151', access: '127.0.0.1:3306', bcls: 'err', bstat: '备份失败', bnote: '今天 03:30 · 存储超时' },
+        { name: 'redis-cache', engine: 'Redis 7.4', cls: 'ok', status: '运行中', dbs: 'db0、db1', size: '612 MB 内存', conn: '41', access: '仅内部 · redis-cache:6379', bcls: 'off', bstat: '未备份', bnote: '仅作缓存' },
+        { name: 'mongo-logs', engine: 'MongoDB 7.0', cls: 'off', status: '已停止', dbs: 'events（1）', size: '4.8 GB', conn: '—', access: '仅内部 · mongo-logs:27017', bcls: 'ok', bstat: '备份成功', bnote: '6 天前 · 停止前自动备份' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>任务中心</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+body{margin:0;background:#F4F4F2;color:#18191B;font-family:'IBM Plex Sans','Noto Sans SC',system-ui,sans-serif;font-size:14px;line-height:1.5}
+a{color:#93370D}a:hover{color:#6E2A0A}
+.mono{font-family:'IBM Plex Mono','Noto Sans SC',ui-monospace,monospace;font-size:13px}
+.btn{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:6px;border:1px solid #D6D6D1;background:#fff;color:#18191B;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap;box-sizing:border-box}
+.btn:hover{background:#F7F7F5;color:#18191B}
+.btn-sm{height:30px;padding:0 10px;font-size:13px}
+.card{background:#fff;border:1px solid #E2E2DE;border-radius:8px}
+.badge{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E8F5EE;color:#17663E}.err{background:#FDECEA;color:#A41E14}.off{background:#EEEEEC;color:#4A4D52}.run{background:#EAF0FD;color:#1D44B8}.warn{background:#FBF3DD;color:#7A4F00}
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;font-weight:500;color:#5F6268;text-align:left;padding:10px 14px;border-bottom:1px solid #E2E2DE;background:#FAFAF8;white-space:nowrap}
+td{padding:10px 14px;border-bottom:1px solid #EEEEEB;vertical-align:middle}
+tr:last-child td{border-bottom:0}
+.label{font-size:12px;color:#5F6268}
+.h1{font-size:22px;font-weight:600;margin:0;line-height:1.3}
+.st{font-size:15px;font-weight:600;margin:0}
+.tabs{display:flex;gap:4px;border-bottom:1px solid #E2E2DE;overflow-x:auto}
+.tabb{display:inline-flex;align-items:center;height:44px;padding:0 14px;border:0;border-bottom:2px solid transparent;background:none;font:inherit;cursor:pointer;white-space:nowrap}
+.track{height:6px;border-radius:3px;background:#EEEEEB;overflow:hidden}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh">
+  <div style="flex: 1 1 232px; background: #17181B">
+    <dc-import name="Sidebar" active="jobs" hint-size="232px,900px"></dc-import>
+  </div>
+  <main style="flex: 999 1 560px; min-width: 0; padding: 28px 32px 40px; display: flex; flex-direction: column; gap: 20px; box-sizing: border-box">
+    <header style="display: flex; flex-direction: column; gap: 4px">
+      <h1 class="h1">任务中心</h1>
+      <div class="label">部署、备份、恢复、证书、清理等耗时操作都以任务执行 · 同一项目的任务串行，不同项目并发上限 3</div>
+    </header>
+
+    <section aria-labelledby="running" style="display: flex; flex-direction: column; gap: 10px">
+      <h2 id="running" class="st">正在运行 · 2</h2>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 16px">
+        <div class="card" style="padding: 14px 16px; display: flex; flex-direction: column; gap: 8px">
+          <div style="display: flex; justify-content: space-between; gap: 8px; align-items: center"><span style="font-weight: 600">备份 · shop-api uploads 目录</span><span class="badge run">62%</span></div>
+          <div class="track"><div style="width: 62%; height: 100%; background: #1D44B8"></div></div>
+          <div style="display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap"><span class="label">已上传 1.4 GB · 18 MB/s · 剩余约 50 秒 · 计划任务触发</span><button type="button" class="btn btn-sm">取消</button></div>
+        </div>
+        <div class="card" style="padding: 14px 16px; display: flex; flex-direction: column; gap: 8px">
+          <div style="display: flex; justify-content: space-between; gap: 8px; align-items: center"><span style="font-weight: 600">恢复 · postgres-main/shop → shop_restore_1114</span><span class="badge run">58%</span></div>
+          <div class="track"><div style="width: 58%; height: 100%; background: #1D44B8"></div></div>
+          <div style="display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap"><span class="label">已恢复 7 / 12 张表 · admin 手动触发</span><button type="button" class="btn btn-sm">取消</button></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="tabs" role="tablist" aria-label="任务视图">
+      <sc-for list="{{tabs}}" as="t" hint-placeholder-count="2">
+        <button type="button" role="tab" class="tabb" aria-selected="{{t.sel}}" onClick="{{t.pick}}" style="color: {{t.fg}}; font-weight: {{t.w}}; border-bottom-color: {{t.line}}">{{t.label}}</button>
+      </sc-for>
+    </div>
+
+    <sc-if value="{{isHist}}" hint-placeholder-val="{{true}}">
+      <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+        <section class="card" aria-label="任务历史" style="flex: 3 1 560px; min-width: 0; overflow: hidden">
+          <div style="display: flex; gap: 6px; padding: 10px 14px; border-bottom: 1px solid #E2E2DE; flex-wrap: wrap">
+            <button type="button" class="btn btn-sm" style="background: #18191B; color: #fff; border-color: #18191B">全部</button>
+            <button type="button" class="btn btn-sm">失败 3</button>
+            <button type="button" class="btn btn-sm">部署</button>
+            <button type="button" class="btn btn-sm">备份</button>
+            <button type="button" class="btn btn-sm">证书</button>
+            <button type="button" class="btn btn-sm">维护</button>
+          </div>
+          <div style="overflow-x: auto"><table>
+            <thead><tr><th>开始</th><th>任务</th><th>触发</th><th>耗时</th><th>状态</th></tr></thead>
+            <tbody>
+              <sc-for list="{{jobs}}" as="j" hint-placeholder-count="9">
+                <tr style="background: {{j.bg}}">
+                  <td class="mono">{{j.t}}</td>
+                  <td><button type="button" onClick="{{j.pick}}" style="border: 0; background: none; padding: 0; font: inherit; color: #93370D; cursor: pointer; text-align: left">{{j.name}}</button></td>
+                  <td class="label">{{j.by}}</td>
+                  <td class="mono">{{j.d}}</td>
+                  <td><span class="badge {{j.cls}}">{{j.s}}</span></td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table></div>
+        </section>
+        <aside class="card" aria-labelledby="jd" style="flex: 2 1 340px; min-width: 0; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+          <div style="display: flex; justify-content: space-between; gap: 8px; align-items: center"><h2 id="jd" class="st">{{cur.name}}</h2><span class="badge {{cur.cls}}">{{cur.s}}</span></div>
+          <div class="label">任务 ID <span class="mono">{{cur.id}}</span> · {{cur.t}} · {{cur.by}}</div>
+          <div style="background: #1C1D20; border-radius: 6px; padding: 10px 0; overflow-x: auto">
+            <sc-for list="{{cur.log}}" as="l" hint-placeholder-count="6">
+              <div class="mono" style="white-space: pre; font-size: 12px; line-height: 20px; padding: 0 12px; color: {{l.c}}">{{l.t}}</div>
+            </sc-for>
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap"><button type="button" class="btn btn-sm">重试</button><button type="button" class="btn btn-sm">下载完整日志</button></div>
+        </aside>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{isSched}}" hint-placeholder-val="{{false}}">
+      <section class="card" style="overflow: hidden">
+        <div style="overflow-x: auto"><table>
+          <thead><tr><th>计划任务</th><th>Cron</th><th>下次执行</th><th>上次结果</th><th>启用</th><th><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">操作</span></th></tr></thead>
+          <tbody>
+            <tr><td><div style="font-weight: 500">备份策略（6 条）</div><div class="label">由备份页管理</div></td><td class="mono label">各自配置</td><td class="mono">今天 18:00</td><td><span class="badge err">1 条失败</span></td><td><input type="checkbox" checked aria-label="启用备份策略" style="width: 18px; height: 18px; accent-color: #B54708"></td><td><a class="btn btn-sm" href="Backups.dc.html">管理</a></td></tr>
+            <tr><td><div style="font-weight: 500">证书续期检查</div><div class="label">到期前 30 天续期</div></td><td class="mono">0 */6 * * *</td><td class="mono">今天 18:12</td><td><span class="badge err">legacy 失败</span></td><td><input type="checkbox" checked aria-label="启用证书续期检查" style="width: 18px; height: 18px; accent-color: #B54708"></td><td><button type="button" class="btn btn-sm">立即执行</button></td></tr>
+            <tr><td><div style="font-weight: 500">镜像与构建缓存清理</div><div class="label">悬空镜像 + 7 天未用镜像 + 构建缓存</div></td><td class="mono">0 5 * * 0</td><td class="mono">周日 05:00</td><td><span class="badge ok">释放 6.2 GB</span></td><td><input type="checkbox" checked aria-label="启用镜像清理" style="width: 18px; height: 18px; accent-color: #B54708"></td><td><button type="button" class="btn btn-sm">立即执行</button></td></tr>
+            <tr><td><div style="font-weight: 500">镜像更新检查</div><div class="label">比对标签 digest，有更新时通知，不自动部署</div></td><td class="mono">0 9 * * *</td><td class="mono">明天 09:00</td><td><span class="badge warn">2 个可更新</span></td><td><input type="checkbox" checked aria-label="启用镜像更新检查" style="width: 18px; height: 18px; accent-color: #B54708"></td><td><button type="button" class="btn btn-sm">立即执行</button></td></tr>
+            <tr><td><div style="font-weight: 500">恢复演练</div><div class="label">随机抽一个数据库备份恢复到临时实例</div></td><td class="mono">0 4 1 * *</td><td class="mono">12-01 04:00</td><td><span class="badge ok">通过</span></td><td><input type="checkbox" checked aria-label="启用恢复演练" style="width: 18px; height: 18px; accent-color: #B54708"></td><td><button type="button" class="btn btn-sm">立即执行</button></td></tr>
+            <tr><td><div style="font-weight: 500">审计日志归档</div><div class="label">超过 180 天的记录压缩归档</div></td><td class="mono">0 2 * * *</td><td class="mono">明天 02:00</td><td><span class="badge ok">成功</span></td><td><input type="checkbox" checked aria-label="启用审计日志归档" style="width: 18px; height: 18px; accent-color: #B54708"></td><td><button type="button" class="btn btn-sm">立即执行</button></td></tr>
+          </tbody>
+        </table></div>
+      </section>
+    </sc-if>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1150}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = { tab: 'hist', sel: 0 }; }
+  renderVals() {
+    const t = this.state.tab, G = '#C9CACD', E = '#FF9A90', OK = '#7FD6A4', Y = '#F2C46D';
+    const J = [
+      { id: 'job_8f21c', t: '11-14 03:30', name: '备份 · mysql-legacy/crm', by: '计划任务', d: '2m10s', cls: 'err', s: '失败', log: [
+        ['03:30:00 mysqldump --single-transaction crm | zstd | age', G], ['03:30:41 已生成 188 MB', G], ['03:30:41 上传到 r2-backup/mysql-legacy/crm/…', G],
+        ['03:31:41 PUT 超时（60s），第 1 次重试', Y], ['03:32:10 PUT 超时（60s），第 2 次重试', Y], ['03:32:10 失败：dial tcp: i/o timeout', E]] },
+      { id: 'job_8f20a', t: '11-14 03:00', name: '备份 · postgres-main/shop', by: '计划任务', d: '1m48s', cls: 'ok', s: '成功', log: [
+        ['03:00:00 pg_dump -Fc shop | zstd -3 | age', G], ['03:01:42 上传完成 412 MB', G], ['03:01:48 sha256 e81d…0b3c 校验通过', OK], ['03:01:48 GFS 清理：删除 2 个过期备份', G]] },
+      { id: 'job_8f1ff', t: '11-14 06:12', name: '证书续期 · legacy.example.com', by: '计划任务', d: '14s', cls: 'err', s: '失败', log: [
+        ['06:12:01 ACME 订单已创建 · HTTP-01', G], ['06:12:14 403 unauthorized：challenge 返回 404', E], ['06:12:14 DNS A 记录为 198.51.100.7，非本机', Y]] },
+      { id: 'job_8f1e0', t: '11-14 10:41', name: '部署 · shop-api #42', by: 'admin', d: '48s', cls: 'ok', s: '成功', log: [
+        ['10:41:02 git pull main → a91f3c2', G], ['10:41:30 docker compose up -d --wait', G], ['10:41:46 健康检查通过', OK], ['10:41:50 完成', OK]] },
+      { id: 'job_8f1c4', t: '11-13 09:12', name: '部署 · shop-api #41', by: 'Webhook', d: '1m50s', cls: 'warn', s: '失败 · 已回滚', log: [
+        ['09:13:52 健康检查超时', E], ['09:13:53 自动回滚到 #40', Y], ['09:14:20 回滚完成', OK]] },
+      { id: 'job_8f1a2', t: '11-10 05:00', name: '清理 · 镜像与构建缓存', by: '计划任务', d: '22s', cls: 'ok', s: '成功', log: [
+        ['05:00:00 docker image prune --filter until=168h', G], ['05:00:18 docker builder prune -f', G], ['05:00:22 共释放 6.2 GB', OK]] },
+      { id: 'job_8f190', t: '11-03 04:00', name: '恢复演练 · postgres-main/shop', by: '计划任务', d: '4m02s', cls: 'ok', s: '通过', log: [
+        ['04:00:00 启动临时容器 postgres:16.4', G], ['04:03:40 pg_restore 完成', G], ['04:03:58 校验 SQL：orders 1,204,331 行', OK], ['04:04:02 已销毁临时容器', G]] }
+    ];
+    const sel = this.state.sel, c = J[sel];
+    return {
+      isHist: t === 'hist', isSched: t === 'sched',
+      tabs: [['hist', '任务历史'], ['sched', '计划任务 · 6']].map(([id, label]) => ({ label, sel: id === t ? 'true' : 'false', fg: id === t ? '#18191B' : '#4A4D52', w: id === t ? 600 : 400, line: id === t ? '#B54708' : 'transparent', pick: () => this.setState({ tab: id }) })),
+      jobs: J.map((j, i) => ({ ...j, bg: i === sel ? '#FDF6F1' : 'transparent', pick: () => this.setState({ sel: i }) })),
+      cur: { ...c, log: c.log.map(l => ({ t: l[0], c: l[1] })) }
+    };
+  }
+}
+</script>
+</body>
+</html>

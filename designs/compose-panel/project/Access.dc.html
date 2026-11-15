@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>用户与审计</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+body{margin:0;background:#F4F4F2;color:#18191B;font-family:'IBM Plex Sans','Noto Sans SC',system-ui,sans-serif;font-size:14px;line-height:1.5}
+a{color:#93370D}a:hover{color:#6E2A0A}
+.mono{font-family:'IBM Plex Mono','Noto Sans SC',ui-monospace,monospace;font-size:13px}
+.btn{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:6px;border:1px solid #D6D6D1;background:#fff;color:#18191B;font:inherit;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap;box-sizing:border-box}
+.btn:hover{background:#F7F7F5;color:#18191B}
+.btn-primary{background:#B54708;border-color:#B54708;color:#fff}.btn-primary:hover{background:#93370D;color:#fff}
+.btn-sm{height:30px;padding:0 10px;font-size:13px}
+.card{background:#fff;border:1px solid #E2E2DE;border-radius:8px}
+.badge{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.ok{background:#E8F5EE;color:#17663E}.err{background:#FDECEA;color:#A41E14}.off{background:#EEEEEC;color:#4A4D52}.run{background:#EAF0FD;color:#1D44B8}.warn{background:#FBF3DD;color:#7A4F00}
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;font-weight:500;color:#5F6268;text-align:left;padding:10px 14px;border-bottom:1px solid #E2E2DE;background:#FAFAF8;white-space:nowrap}
+td{padding:10px 14px;border-bottom:1px solid #EEEEEB;vertical-align:middle}
+tr:last-child td{border-bottom:0}
+.label{font-size:12px;color:#5F6268}
+.h1{font-size:22px;font-weight:600;margin:0;line-height:1.3}
+.st{font-size:15px;font-weight:600;margin:0}
+.tabs{display:flex;gap:4px;border-bottom:1px solid #E2E2DE;overflow-x:auto}
+.tabb{display:inline-flex;align-items:center;height:44px;padding:0 14px;border:0;border-bottom:2px solid transparent;background:none;font:inherit;cursor:pointer;white-space:nowrap}
+.input{height:36px;border:1px solid #C9C9C4;border-radius:6px;padding:0 10px;font:inherit;background:#fff;color:#18191B;box-sizing:border-box}
+.cell{text-align:center}
+.y{color:#17663E;font-weight:600}.n{color:#5F6268}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh">
+  <div style="flex: 1 1 232px; background: #17181B">
+    <dc-import name="Sidebar" active="access" hint-size="232px,900px"></dc-import>
+  </div>
+  <main style="flex: 999 1 560px; min-width: 0; padding: 28px 32px 40px; display: flex; flex-direction: column; gap: 20px; box-sizing: border-box">
+    <header style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <h1 class="h1">用户与审计</h1>
+        <div class="label">三种内置角色，可按项目授权 · 所有写操作与终端会话写入审计日志</div>
+      </div>
+      <button type="button" class="btn btn-primary">邀请用户</button>
+    </header>
+
+    <div class="tabs" role="tablist" aria-label="访问控制">
+      <sc-for list="{{tabs}}" as="t" hint-placeholder-count="4">
+        <button type="button" role="tab" class="tabb" aria-selected="{{t.sel}}" onClick="{{t.pick}}" style="color: {{t.fg}}; font-weight: {{t.w}}; border-bottom-color: {{t.line}}">{{t.label}}</button>
+      </sc-for>
+    </div>
+
+    <sc-if value="{{isUsers}}" hint-placeholder-val="{{false}}">
+      <section class="card" style="overflow: hidden">
+        <div style="overflow-x: auto"><table>
+          <thead><tr><th>用户</th><th>角色</th><th>项目范围</th><th>两步验证</th><th>最近登录</th><th>活跃会话</th><th><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">操作</span></th></tr></thead>
+          <tbody>
+            <tr><td><div style="font-weight: 600">admin</div><div class="label">[YOUR EMAIL]</div></td><td><span class="badge err">管理员</span></td><td>全部</td><td><span class="badge ok">已启用</span></td><td class="mono">今天 10:38 · 203.0.113.55</td><td>2</td><td><button type="button" class="btn btn-sm">编辑</button></td></tr>
+            <tr><td><div style="font-weight: 600">ops-li</div><div class="label">[TEAMMATE EMAIL]</div></td><td><span class="badge run">运维</span></td><td>shop-api, shop-web, n8n</td><td><span class="badge ok">已启用</span></td><td class="mono">昨天 21:04 · 198.51.100.20</td><td>1</td><td style="white-space: nowrap"><button type="button" class="btn btn-sm">编辑</button> <button type="button" class="btn btn-sm">强制下线</button></td></tr>
+            <tr><td><div style="font-weight: 600">dev-wang</div><div class="label">[TEAMMATE EMAIL]</div></td><td><span class="badge off">只读</span></td><td>shop-api</td><td><span class="badge warn">未启用</span></td><td class="mono">5 天前</td><td>0</td><td style="white-space: nowrap"><button type="button" class="btn btn-sm">编辑</button> <button type="button" class="btn btn-sm">停用</button></td></tr>
+            <tr><td><div style="font-weight: 600">[待接受邀请]</div><div class="label">[TEAMMATE EMAIL]</div></td><td><span class="badge run">运维</span></td><td>umami</td><td class="label">—</td><td class="label">邀请链接 47 小时后失效</td><td>—</td><td style="white-space: nowrap"><button type="button" class="btn btn-sm">复制链接</button> <button type="button" class="btn btn-sm">撤销</button></td></tr>
+          </tbody>
+        </table></div>
+        <div style="padding: 12px 14px; border-top: 1px solid #E2E2DE"><label style="display: flex; gap: 8px; align-items: center; font-size: 13px"><input type="checkbox" checked style="accent-color: #B54708">要求所有用户启用两步验证（未启用者登录后强制绑定）</label></div>
+      </section>
+    </sc-if>
+
+    <sc-if value="{{isRoles}}" hint-placeholder-val="{{false}}">
+      <section class="card" style="overflow: hidden">
+        <div style="overflow-x: auto"><table>
+          <thead><tr><th>权限</th><th class="cell">管理员</th><th class="cell">运维</th><th class="cell">只读</th></tr></thead>
+          <tbody>
+            <sc-for list="{{perms}}" as="p" hint-placeholder-count="10">
+              <tr><td>{{p.n}}</td><td class="cell {{p.ac}}">{{p.a}}</td><td class="cell {{p.oc}}">{{p.o}}</td><td class="cell {{p.rc}}">{{p.r}}</td></tr>
+            </sc-for>
+          </tbody>
+        </table></div>
+        <p class="label" style="margin: 0; padding: 12px 14px; border-top: 1px solid #E2E2DE">运维与只读角色的权限只在被授权的项目内生效；「项目内」表示仅限授权项目。</p>
+      </section>
+    </sc-if>
+
+    <sc-if value="{{isTokens}}" hint-placeholder-val="{{false}}">
+      <section class="card" style="overflow: hidden">
+        <div style="overflow-x: auto"><table>
+          <thead><tr><th>令牌</th><th>权限范围</th><th>创建者</th><th>最近使用</th><th>到期</th><th><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">操作</span></th></tr></thead>
+          <tbody>
+            <tr><td><div style="font-weight: 600">GitHub Actions 部署</div><div class="label mono">cpt_7Hq2…（仅显示前缀）</div></td><td class="mono">deploy:shop-api, deploy:shop-web</td><td>admin</td><td class="mono">2 小时前 · 140.82.112.4</td><td>2027-05-01</td><td><button type="button" class="btn btn-sm">撤销</button></td></tr>
+            <tr><td><div style="font-weight: 600">监控只读</div><div class="label mono">cpt_Lm91…</div></td><td class="mono">read:*</td><td>ops-li</td><td class="mono">1 分钟前</td><td>永不</td><td><button type="button" class="btn btn-sm">撤销</button></td></tr>
+          </tbody>
+        </table></div>
+        <div style="padding: 12px 14px; border-top: 1px solid #E2E2DE; display: flex; gap: 8px; flex-wrap: wrap; align-items: center"><button type="button" class="btn btn-sm">创建令牌</button><span class="label">令牌只在创建时显示一次，服务器仅保存哈希</span></div>
+      </section>
+    </sc-if>
+
+    <sc-if value="{{isAudit}}" hint-placeholder-val="{{true}}">
+      <section class="card" style="overflow: hidden">
+        <div style="display: flex; gap: 8px; padding: 12px 14px; border-bottom: 1px solid #E2E2DE; flex-wrap: wrap; align-items: center">
+          <label for="aq" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">搜索审计日志</label>
+          <input id="aq" class="input" placeholder="搜索操作、对象、IP" style="flex: 1 1 220px; max-width: 320px">
+          <select class="input" aria-label="用户"><option>全部用户</option><option>admin</option><option>ops-li</option><option>API 令牌</option></select>
+          <select class="input" aria-label="类别"><option>全部类别</option><option>部署</option><option>数据库</option><option>终端</option><option>安全</option></select>
+          <select class="input" aria-label="时间"><option>最近 7 天</option><option>最近 30 天</option></select>
+          <button type="button" class="btn btn-sm" style="margin-left: auto">导出 CSV</button>
+        </div>
+        <div style="overflow-x: auto"><table>
+          <thead><tr><th>时间</th><th>操作者</th><th>操作</th><th>对象</th><th>来源 IP</th><th>结果</th></tr></thead>
+          <tbody>
+            <sc-for list="{{audit}}" as="a" hint-placeholder-count="10">
+              <tr><td class="mono">{{a.t}}</td><td>{{a.who}}</td><td>{{a.act}}</td><td class="mono">{{a.obj}}</td><td class="mono">{{a.ip}}</td><td><span class="badge {{a.cls}}">{{a.res}}</span></td></tr>
+            </sc-for>
+          </tbody>
+        </table></div>
+        <p class="label" style="margin: 0; padding: 12px 14px; border-top: 1px solid #E2E2DE">审计记录只可追加，不能在面板中删除；每条记录带前一条的哈希，可用 <span class="mono">panel audit verify</span> 校验链完整性。</p>
+      </section>
+    </sc-if>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1300}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = { tab: 'audit' }; }
+  renderVals() {
+    const t = this.state.tab;
+    const Y = '可以', N = '—', P = '项目内';
+    const cls = v => v === N ? 'n' : 'y';
+    const perm = (n, a, o, r) => ({ n, a, o, r, ac: cls(a), oc: cls(o), rc: cls(r) });
+    return {
+      isUsers: t === 'users', isRoles: t === 'roles', isTokens: t === 'tokens', isAudit: t === 'audit',
+      tabs: [['users', '用户 · 4'], ['roles', '角色权限'], ['tokens', 'API 令牌 · 2'], ['audit', '审计日志']].map(([id, label]) => ({ label, sel: id === t ? 'true' : 'false', fg: id === t ? '#18191B' : '#4A4D52', w: id === t ? 600 : 400, line: id === t ? '#B54708' : 'transparent', pick: () => this.setState({ tab: id }) })),
+      perms: [
+        perm('查看项目、容器、日志', Y, P, P), perm('部署、重启、停止', Y, P, N), perm('编辑 Compose 与环境变量', Y, P, N),
+        perm('查看密文环境变量', Y, N, N), perm('Web 终端', Y, P, N), perm('SQL 控制台（只读）', Y, P, P),
+        perm('SQL 写操作、删库', Y, N, N), perm('备份执行与恢复', Y, P, N), perm('站点与证书', Y, P, N),
+        perm('存储目标、通知、系统设置', Y, N, N), perm('用户、令牌、审计导出', Y, N, N)
+      ],
+      audit: [
+        { t: '11-14 12:44:10', who: 'admin', act: '开始恢复', obj: 'postgres-main/shop → shop_restore_1114', ip: '203.0.113.55', cls: 'run', res: '进行中' },
+        { t: '11-14 12:31:02', who: 'admin', act: '终端会话（4 分 12 秒）', obj: 'shop-api-api-1', ip: '203.0.113.55', cls: 'ok', res: '已录制' },
+        { t: '11-14 12:20:47', who: 'admin', act: 'SQL 查询（只读）', obj: 'postgres-main/shop', ip: '203.0.113.55', cls: 'ok', res: '成功' },
+        { t: '11-14 10:41:00', who: 'admin', act: '部署', obj: 'shop-api #42', ip: '203.0.113.55', cls: 'ok', res: '成功' },
+        { t: '11-14 10:38:12', who: 'admin', act: '登录（密码 + TOTP）', obj: '—', ip: '203.0.113.55', cls: 'ok', res: '成功' },
+        { t: '11-14 08:02:55', who: '未知', act: '登录失败 ×5，IP 锁定 15 分钟', obj: 'admin', ip: '192.0.2.77', cls: 'err', res: '已拦截' },
+        { t: '11-13 21:06:30', who: 'ops-li', act: '修改环境变量', obj: 'n8n · N8N_ENCRYPTION_KEY', ip: '198.51.100.20', cls: 'ok', res: '成功' },
+        { t: '11-13 09:12:28', who: '令牌 · GitHub Actions', act: 'Webhook 部署', obj: 'shop-api #41', ip: '140.82.112.4', cls: 'warn', res: '已回滚' },
+        { t: '11-12 17:40:03', who: 'admin', act: '创建站点', obj: 'api-staging.example.com', ip: '203.0.113.55', cls: 'ok', res: '成功' },
+        { t: '11-12 17:22:19', who: 'admin', act: '邀请用户', obj: '[TEAMMATE EMAIL] · 运维', ip: '203.0.113.55', cls: 'ok', res: '成功' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>
