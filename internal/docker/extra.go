@@ -114,6 +114,9 @@ type ImageInspect struct {
 	RepoTags    []string
 	RepoDigests []string
 	Created     string
+	Config      struct {
+		ExposedPorts map[string]struct{}
+	}
 }
 
 func (c *Client) InspectImage(ctx context.Context, ref string) (*ImageInspect, error) {

@@ -102,7 +102,8 @@ export function EnvEditor({ env, onChange, readOnly }: { env: EnvVar[]; onChange
   )
 }
 
-export type Validation = { valid: boolean; error?: string; services?: string[]; warnings: string[] }
+export type SiteSuggestion = { service: string; port: number; portFrom: '' | 'label' | 'compose' | 'image' | 'known'; domains: string[]; ports: Record<string, number[]>; portsFrom: Record<string, string> }
+export type Validation = { valid: boolean; error?: string; services?: string[]; warnings: string[]; site?: SiteSuggestion | null }
 
 export async function validateCompose(compose: string, env: EnvVar[], name: string) {
   return post<Validation>('/compose/validate', { compose, env, name })

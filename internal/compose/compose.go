@@ -88,6 +88,10 @@ type ServiceConfig struct {
 		} `json:"resources"`
 	} `json:"deploy"`
 	Volumes []map[string]any `json:"volumes"`
+	// Used to suggest a site's service, port and domain from the compose file.
+	Labels      map[string]string  `json:"labels"`
+	Environment map[string]*string `json:"environment"`
+	Expose      []any              `json:"expose"`
 }
 
 func (s ServiceConfig) HasMemLimit() bool {

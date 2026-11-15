@@ -701,7 +701,7 @@ func (s *Server) handleValidateCompose(w http.ResponseWriter, r *http.Request, u
 	if err != nil {
 		return ok(w, map[string]any{"valid": false, "error": cleanComposeErr(err.Error(), dir), "warnings": []string{}})
 	}
-	return ok(w, map[string]any{"valid": true, "services": cfg.ServiceNames(), "warnings": composeWarnings(cfg)})
+	return ok(w, map[string]any{"valid": true, "services": cfg.ServiceNames(), "warnings": composeWarnings(cfg), "site": s.suggestSite(ctx, cfg)})
 }
 
 func cleanComposeErr(msg, dir string) string {

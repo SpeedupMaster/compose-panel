@@ -89,6 +89,9 @@ h1, h2, h3 { margin: 0; }
 .btn-ghost { border-color: transparent; background: transparent; }
 .btn-sm { height: 30px; padding: 0 10px; font-size: 13px; }
 .btn-icon { width: 32px; padding: 0; }
+.chip { height: 24px; padding: 0 9px; border-radius: 999px; border: 1px solid #D6D6D1; background: #fff; font-family: var(--mono); font-size: 12px; cursor: pointer; }
+.chip:hover { border-color: #AFAFA9; }
+.chip.on { background: var(--ink); border-color: var(--ink); color: #fff; }
 .link-btn { background: none; border: 0; padding: 0; color: var(--accent-hover); cursor: pointer; text-decoration: underline; }
 
 .input, .select, .textarea { width: 100%; min-height: 36px; padding: 7px 10px; border: 1px solid #CFCFCA; border-radius: 6px; background: #fff; }

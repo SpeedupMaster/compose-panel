@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { del, get, post } from '../api'
 import { useCan } from '../auth'
-import { CodeArea, EnvEditor, EnvVar, validateCompose, Validation, ValidationResult } from '../components/editors'
+import { CodeArea, EnvEditor, EnvVar, SiteSuggestion, validateCompose, Validation, ValidationResult } from '../components/editors'
 import { Card, Confirm, ErrorBox, Field, Icon, Page, Select, useJobLog, useLoad, useToast } from '../components/ui'
 
 type Template = { id: string; name: string; description: string; compose: string; env: EnvVar[] | null; files: { path: string; content: string }[] | null; vars: string[] | null; service: string; port: number; custom: boolean; category: string }
@@ -28,6 +28,8 @@ export default function ProjectNew() {
   const [domain, setDomain] = useState('')
   const [service, setService] = useState('')
   const [port, setPort] = useState('')
+  // Fields the user typed into themselves; compose detection never overwrites those.
+  const touched = useRef({ domain: false, service: false, port: false })
   const [deploy, setDeploy] = useState(true)
   const [v, setV] = useState<Validation | null>(null)
   const [busy, setBusy] = useState(false)
@@ -42,19 +44,41 @@ export default function ProjectNew() {
     if (!name) setName(t.custom ? t.name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') : t.id)
     setService(t.service || '')
     setPort(t.port ? String(t.port) : '')
+    // A template states its entry service and port; treat them like the user's own choice.
+    touched.current = { ...touched.current, service: !!t.service, port: !!t.port }
     setV(null)
   }
 
-  const validate = async () => {
+  // Fill domain / service / port from what the compose file says, leaving fields the user set alone.
+  const applySuggestion = (sg: SiteSuggestion | null | undefined, services: string[]) => {
+    const t = touched.current
+    const svc = t.service && services.includes(service) ? service : sg?.service || services[0] || ''
+    if (!t.service) setService(svc)
+    if (!t.port) {
+      const p = svc === sg?.service ? sg.port : sg?.ports?.[svc]?.[0] || 0
+      setPort(p ? String(p) : '')
+    }
+    if (!t.domain && sg?.domains?.length) setDomain(sg.domains.join(', '))
+  }
+
+  const validate = async (quiet = false) => {
     try {
       const r = await validateCompose(compose, env, name)
       setV(r)
-      if (r.valid && r.services?.length && !service) setService(r.services[0])
+      if (r.valid) applySuggestion(r.site, r.services || [])
       return r
     } catch (e) {
-      toast.err(e)
+      if (!quiet) toast.err(e)
     }
   }
+
+  // Re-check the compose file shortly after the user stops editing it.
+  useEffect(() => {
+    if (source !== 'inline' || !compose.trim()) return
+    const t = setTimeout(() => validate(true), 900)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compose, env, source])
 
   const submit = async () => {
     setErr(undefined)
@@ -83,6 +107,12 @@ export default function ProjectNew() {
       setBusy(false)
     }
   }
+
+  const site = v?.valid ? v.site : null
+  const autoPort = site && !touched.current.port && port !== '' && site.ports?.[service]?.[0] === Number(port)
+  const portHint = autoPort
+    ? ({ label: '已从代理标签/环境变量识别', compose: '已从 compose 的 expose/ports 识别', image: '已从镜像 EXPOSE 识别', known: '按该镜像的常用端口推测，请确认' } as Record<string, string>)[site.portsFrom?.[service] || ''] || undefined
+    : undefined
 
   return (
     <Page title="新建项目" crumbs={<><Link to="/projects">项目</Link> / 新建</>}>
@@ -150,7 +180,7 @@ export default function ProjectNew() {
               </div>
             </Card>
           )}
-          <Card title="compose.yml" actions={<button className="btn btn-sm" onClick={validate}>校验</button>}>
+          <Card title="compose.yml" actions={<button className="btn btn-sm" onClick={() => validate()}>校验</button>}>
             <div className="col" style={{ gap: 12 }}>
               <CodeArea label="compose.yml" value={compose} onChange={(x) => { setCompose(x); setV(null) }} />
               <ValidationResult v={v} />
@@ -186,20 +216,32 @@ export default function ProjectNew() {
 
       <Card title="域名（可选）">
         <div className="form-grid">
-          <Field label="域名" hint="多个用逗号分隔；会自动申请 HTTPS 证书">
-            <input className="input mono" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="app.example.com" />
+          <Field label="域名" hint={site?.domains?.length && domain === site.domains.join(', ') ? '已从 compose 的代理配置中识别；多个用逗号分隔，会自动申请 HTTPS 证书' : '多个用逗号分隔；会自动申请 HTTPS 证书'}>
+            <input className="input mono" value={domain} onChange={(e) => { touched.current.domain = true; setDomain(e.target.value) }} placeholder="app.example.com" />
           </Field>
-          <Field label="服务">
+          <Field label="服务" hint={site && service === site.service && !touched.current.service ? '已自动选择对外提供 Web 的服务' : undefined}>
             {v?.services?.length ? (
-              <Select value={service} onChange={(v) => setService(v)}>
+              <Select value={service} onChange={(x) => {
+                touched.current.service = true
+                setService(x)
+                const p = site?.ports?.[x]?.[0]
+                if (!touched.current.port) setPort(p ? String(p) : '')
+              }}>
                 {v.services.map((s) => <option key={s}>{s}</option>)}
               </Select>
             ) : (
-              <input className="input mono" value={service} onChange={(e) => setService(e.target.value)} placeholder="web" />
+              <input className="input mono" value={service} onChange={(e) => { touched.current.service = true; setService(e.target.value) }} placeholder="web" />
             )}
           </Field>
-          <Field label="容器端口">
-            <input className="input mono" value={port} onChange={(e) => setPort(e.target.value)} placeholder="80" inputMode="numeric" />
+          <Field label="容器端口" hint={portHint}>
+            <input className="input mono" value={port} onChange={(e) => { touched.current.port = true; setPort(e.target.value) }} placeholder={site && !site.ports?.[service]?.length ? '未识别，请填写' : '80'} inputMode="numeric" />
+            {(site?.ports?.[service]?.length || 0) > 1 && (
+              <div className="row wrap" style={{ gap: 6 }}>
+                {site!.ports[service].map((p) => (
+                  <button key={p} type="button" className={'chip' + (String(p) === port ? ' on' : '')} onClick={() => { touched.current.port = true; setPort(String(p)) }}>{p}</button>
+                ))}
+              </div>
+            )}
           </Field>
         </div>
       </Card>
