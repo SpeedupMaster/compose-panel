@@ -71,6 +71,18 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request, u *User)
 		where += " AND target=?"
 		args = append(args, v)
 	}
+	if q.Has("page") {
+		// Paged: {items, total, page, pageSize}. Without page, the plain list (older callers).
+		page := max(queryInt(r, "page", 1), 1)
+		size := min(max(queryInt(r, "pageSize", 20), 1), 200)
+		var total int
+		_ = s.db.QueryRow(`SELECT count(*) FROM jobs `+where, args...).Scan(&total)
+		if last := max((total+size-1)/size, 1); page > last {
+			page = last
+		}
+		items := s.queryJobs(where+" ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?", append(args, size, (page-1)*size)...)
+		return ok(w, map[string]any{"items": nonNil(items), "total": total, "page": page, "pageSize": size})
+	}
 	limit := min(max(queryInt(r, "limit", 100), 1), 500)
 	return ok(w, s.queryJobs(where+" ORDER BY created_at DESC LIMIT ?", append(args, limit)...))
 }

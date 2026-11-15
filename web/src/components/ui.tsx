@@ -1,7 +1,7 @@
 import { Children, createContext, CSSProperties, Fragment, isValidElement, KeyboardEvent as ReactKeyboardEvent, ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  ChartLine, Check, ChevronDown, Clock, Container, Copy, Database, Download, ExternalLink, File, Folder, GitBranch, Globe,
+  ChartLine, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Container, Copy, Database, Download, ExternalLink, File, Folder, GitBranch, Globe,
   HardDriveDownload, KeyRound, Layers, LayoutDashboard, LayoutTemplate, Link, ListChecks, Lock, LogOut, Menu, Pencil, Play, Plug, Plus,
   RefreshCw, Rocket, RotateCcw, ScrollText, Search, Settings, ShieldCheck, Square, SquareTerminal, Trash2, TriangleAlert, Upload, Users, X,
   type LucideIcon,
@@ -412,6 +412,47 @@ function fmtSize(n: number) {
   return (n < 10 ? n.toFixed(1) : Math.round(n)) + ' ' + u[i]
 }
 
+// Page numbers to show: first, last, and a window around the current page; 0 marks a gap.
+function pageList(page: number, pages: number): number[] {
+  const want = new Set([1, pages, page - 1, page, page + 1])
+  if (page <= 3) [2, 3, 4].forEach((p) => want.add(p))
+  if (page >= pages - 2) [pages - 1, pages - 2, pages - 3].forEach((p) => want.add(p))
+  const list = [...want].filter((p) => p >= 1 && p <= pages).sort((a, b) => a - b)
+  const out: number[] = []
+  list.forEach((p, i) => {
+    if (i > 0 && p - list[i - 1] === 2) out.push(p - 1) // a gap of one page: just show it
+    else if (i > 0 && p - list[i - 1] > 2) out.push(0)
+    out.push(p)
+  })
+  return out
+}
+
+// Table footer pager. page is 1-based.
+export function Pager({ page, pageSize, total, onPage, onPageSize, sizes = [20, 50, 100] }: {
+  page: number; pageSize: number; total: number; onPage: (p: number) => void; onPageSize?: (n: number) => void; sizes?: number[]
+}) {
+  const pages = Math.max(1, Math.ceil(total / pageSize))
+  const from = total === 0 ? 0 : (page - 1) * pageSize + 1
+  const to = Math.min(total, page * pageSize)
+  return (
+    <nav className="pager" aria-label="分页">
+      <span className="label">共 {total} 条{total > 0 && <> · 第 {from}–{to} 条</>}</span>
+      <div className="pager-ctrl">
+        {onPageSize && (
+          <Select className="sm" style={{ width: 104 }} aria-label="每页条数" value={String(pageSize)} onChange={(v) => onPageSize(Number(v))}>
+            {sizes.map((n) => <option key={n} value={n}>{n} 条/页</option>)}
+          </Select>
+        )}
+        <button className="btn btn-sm pager-btn" aria-label="上一页" disabled={page <= 1} onClick={() => onPage(page - 1)}><Icon name="chevron-left" size={16} /></button>
+        {pageList(page, pages).map((p, i) => p === 0
+          ? <span key={'gap' + i} className="pager-gap">…</span>
+          : <button key={p} className={'btn btn-sm pager-btn' + (p === page ? ' on' : '')} aria-current={p === page ? 'page' : undefined} onClick={() => onPage(p)}>{p}</button>)}
+        <button className="btn btn-sm pager-btn" aria-label="下一页" disabled={page >= pages} onClick={() => onPage(page + 1)}><Icon name="chevron-right" size={16} /></button>
+      </div>
+    </nav>
+  )
+}
+
 // Click-or-drop file picker. Controlled by `file`: passing null clears the native input too.
 export function FilePicker({ file, onChange, accept, hint, disabled, label = '文件' }: {
   file: File | null; onChange: (f: File | null) => void; accept?: string; hint?: ReactNode; disabled?: boolean; label?: string
@@ -704,6 +745,8 @@ const icons: Record<string, LucideIcon> = {
   link: Link,
   external: ExternalLink,
   'chevron-down': ChevronDown,
+  'chevron-left': ChevronLeft,
+  'chevron-right': ChevronRight,
 }
 
 export function Icon({ name, size = 18 }: { name: string; size?: number }) {

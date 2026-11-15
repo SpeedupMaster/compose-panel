@@ -154,6 +154,15 @@ h1, h2, h3 { margin: 0; }
 .seg button:focus-visible { outline: 2px solid #E8A16B; outline-offset: 0; }
 .seg button:disabled { opacity: .45; cursor: not-allowed; }
 
+/* Table footer pager. */
+.pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; padding: 10px 16px; border-top: 1px solid var(--line); }
+.pager-ctrl { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.pager-ctrl .select { margin-right: 8px; }
+.pager-btn { min-width: 30px; padding: 0 8px; font-variant-numeric: tabular-nums; }
+.pager-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pager-btn.on:hover { background: var(--accent-hover); }
+.pager-gap { min-width: 22px; text-align: center; color: var(--muted); }
+
 /* File picker: click or drop a file. */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .file-drop { position: relative; display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 12px 14px; border: 1px dashed #C9C8C2; border-radius: 8px; background: #FAFAF8; color: var(--muted); cursor: pointer; transition: border-color .12s, background .12s; }

@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { ago, dateTime, get, post } from '../api'
+import { ago, dateTime, get, post, qs } from '../api'
 import { useCan } from '../auth'
 import { CronTasks } from './ProjectExtras'
-import { Card, Empty, ErrorBox, JobStatus, Loading, Page, Select, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
+import { Card, Empty, ErrorBox, JobStatus, Loading, Page, Pager, Select, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
 
 export default function Jobs() {
   const [tab, setTab] = useState<'jobs' | 'cron' | 'schedules'>('jobs')
@@ -21,31 +21,37 @@ const kinds: [string, string][] = [['', '全部类型'], ['deploy', '部署'], [
 function JobList() {
   const [status, setStatus] = useState('')
   const [kind, setKind] = useState(() => new URLSearchParams(location.search).get('kind') || '')
-  const { data, error } = useLoad(() => get<any[]>(`/jobs?limit=200${status ? '&status=' + status : ''}${kind ? '&kind=' + kind : ''}`), [status, kind], 4000)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(() => Number(localStorage.getItem('jobs.pageSize')) || 20)
+  const { data, error } = useLoad(
+    () => get<{ items: any[]; total: number; page: number; pageSize: number }>('/jobs' + qs({ page, pageSize, status: status || undefined, kind: kind || undefined })),
+    [status, kind, page, pageSize], 4000)
+  const items = data?.items
   const openJob = useJobLog()
   return (
     <section className="card">
       <div className="card-head">
         <div className="row wrap">
-          <Select style={{ width: 140 }} aria-label="状态" value={status} onChange={(v) => setStatus(v)}>
+          <Select style={{ width: 140 }} aria-label="状态" value={status} onChange={(v) => { setStatus(v); setPage(1) }}>
             <option value="">全部状态</option>
             <option value="active">进行中/排队</option>
             <option value="success">成功</option>
             <option value="failed">失败</option>
             <option value="canceled">已取消</option>
           </Select>
-          <Select style={{ width: 140 }} aria-label="类型" value={kind} onChange={(v) => setKind(v)}>
+          <Select style={{ width: 140 }} aria-label="类型" value={kind} onChange={(v) => { setKind(v); setPage(1) }}>
             {kinds.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
           </Select>
         </div>
       </div>
       <ErrorBox error={error} />
-      {!data ? <Loading /> : data.length === 0 ? <Empty>没有任务。</Empty> : (
+      {!items ? <Loading /> : items.length === 0 ? <Empty>没有任务。</Empty> : (
+        <>
         <div className="table-wrap">
           <table>
             <thead><tr><th>任务</th><th>状态</th><th>发起人</th><th>创建</th><th>耗时</th></tr></thead>
             <tbody>
-              {data.map((j) => (
+              {items.map((j) => (
                 <tr key={j.id} className="clickable" onClick={() => openJob(j.id, j.title)}>
                   <td><div style={{ fontWeight: 500 }}>{j.title}</div><div className="label mono">{j.kind}</div></td>
                   <td><JobStatus s={j.status} />{j.error && <div className="label ellipsis" style={{ maxWidth: 320, color: '#A41E14' }} title={j.error}>{j.error}</div>}</td>
@@ -57,6 +63,9 @@ function JobList() {
             </tbody>
           </table>
         </div>
+        <Pager page={data!.page} pageSize={data!.pageSize} total={data!.total} onPage={setPage}
+          onPageSize={(n) => { localStorage.setItem('jobs.pageSize', String(n)); setPageSize(n); setPage(1) }} />
+        </>
       )}
     </section>
   )

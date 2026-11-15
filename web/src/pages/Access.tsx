@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ago, dateTime, del, get, post, put } from '../api'
 import { roleName, useAuth, useCan } from '../auth'
-import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, SecretBox, Select, Tabs, useLoad, useToast } from '../components/ui'
+import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Pager, SecretBox, Select, Tabs, useLoad, useToast } from '../components/ui'
 
 export default function Access() {
   const can = useCan()
@@ -170,18 +170,19 @@ function Tokens() {
 
 function Audit() {
   const [f, setF] = useState({ actor: '', action: '', q: '', result: '' })
-  const [page, setPage] = useState(0)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
   const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString()
-  const { data, error } = useLoad(() => get<any>(`/audit?limit=100&offset=${page * 100}&${qs}`), [qs, page])
+  const { data, error } = useLoad(() => get<any>(`/audit?limit=${pageSize}&offset=${(page - 1) * pageSize}&${qs}`), [qs, page, pageSize])
   const toast = useToast()
   return (
     <section className="card">
       <div className="card-head">
         <div className="row wrap">
-          <input className="input" style={{ width: 140 }} placeholder="用户" aria-label="用户" value={f.actor} onChange={(e) => { setF({ ...f, actor: e.target.value }); setPage(0) }} />
-          <input className="input" style={{ width: 160 }} placeholder="操作，如 project." aria-label="操作" value={f.action} onChange={(e) => { setF({ ...f, action: e.target.value }); setPage(0) }} />
-          <input className="input" style={{ width: 180 }} placeholder="搜索对象/详情" aria-label="搜索" value={f.q} onChange={(e) => { setF({ ...f, q: e.target.value }); setPage(0) }} />
-          <Select style={{ width: 110 }} aria-label="结果" value={f.result} onChange={(v) => { setF({ ...f, result: v }); setPage(0) }}>
+          <input className="input" style={{ width: 140 }} placeholder="用户" aria-label="用户" value={f.actor} onChange={(e) => { setF({ ...f, actor: e.target.value }); setPage(1) }} />
+          <input className="input" style={{ width: 160 }} placeholder="操作，如 project." aria-label="操作" value={f.action} onChange={(e) => { setF({ ...f, action: e.target.value }); setPage(1) }} />
+          <input className="input" style={{ width: 180 }} placeholder="搜索对象/详情" aria-label="搜索" value={f.q} onChange={(e) => { setF({ ...f, q: e.target.value }); setPage(1) }} />
+          <Select style={{ width: 110 }} aria-label="结果" value={f.result} onChange={(v) => { setF({ ...f, result: v }); setPage(1) }}>
             <option value="">全部</option>
             <option value="ok">成功</option>
             <option value="failed">失败</option>
@@ -213,11 +214,7 @@ function Audit() {
               </tbody>
             </table>
           </div>
-          <div className="row" style={{ padding: 12, justifyContent: 'flex-end' }}>
-            <span className="label">共 {data.total} 条</span>
-            <button className="btn btn-sm" disabled={page === 0} onClick={() => setPage(page - 1)}>上一页</button>
-            <button className="btn btn-sm" disabled={(page + 1) * 100 >= data.total} onClick={() => setPage(page + 1)}>下一页</button>
-          </div>
+          <Pager page={page} pageSize={pageSize} total={data.total} onPage={setPage} onPageSize={(n) => { setPageSize(n); setPage(1) }} sizes={[50, 100, 200]} />
         </>
       )}
     </section>
