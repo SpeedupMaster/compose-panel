@@ -732,6 +732,83 @@ func composeWarnings(cfg *compose.Config) []string {
 	return warn
 }
 
+type projectActionStep struct {
+	Log           string
+	Args          []string
+	ProgressAfter int
+	DumpUnhealthy bool
+}
+
+type projectActionPlan struct {
+	Title     string
+	Steps     []projectActionStep
+	SyncCaddy bool
+}
+
+var simpleActionTitles = map[string]string{
+	"start":   "启动",
+	"stop":    "停止",
+	"restart": "重启",
+	"pull":    "拉取镜像",
+}
+
+// buildProjectAction validates a project control action and constructs its compose command plan.
+func buildProjectAction(p *Project, action, service string) (projectActionPlan, error) {
+	service = strings.TrimSpace(service)
+	titleFor := func(base string) string {
+		if service != "" {
+			return base + " " + p.Name + "/" + service
+		}
+		return base + " " + p.Name
+	}
+
+	switch action {
+	case "start", "stop", "restart", "pull":
+		args := []string{action}
+		if service != "" {
+			args = append(args, service)
+		}
+		return projectActionPlan{
+			Title: titleFor(simpleActionTitles[action]),
+			Steps: []projectActionStep{{Args: args}},
+		}, nil
+	case "down":
+		if service != "" {
+			return projectActionPlan{}, bad("down 不支持单个服务")
+		}
+		return projectActionPlan{
+			Title: titleFor("下线"),
+			Steps: []projectActionStep{{Args: []string{"down", "--remove-orphans"}}},
+		}, nil
+	case "recreate":
+		if p.Kind == "database" {
+			return projectActionPlan{}, bad("数据库实例请在数据库页面管理镜像版本")
+		}
+		pullArgs := []string{"pull", "--ignore-buildable"}
+		upArgs := []string{"up", "-d", "--force-recreate"}
+		if service != "" {
+			pullArgs = append(pullArgs, service)
+			upArgs = append(upArgs, "--no-deps")
+		} else {
+			upArgs = append(upArgs, "--remove-orphans")
+		}
+		upArgs = append(upArgs, composeWaitArgs(p.Options)...)
+		if service != "" {
+			upArgs = append(upArgs, service)
+		}
+		return projectActionPlan{
+			Title:     titleFor("重建容器"),
+			SyncCaddy: true,
+			Steps: []projectActionStep{
+				{Log: "==> 强制拉取镜像", Args: pullArgs, ProgressAfter: 50},
+				{Log: "==> 重建并启动容器", Args: upArgs, ProgressAfter: 100, DumpUnhealthy: true},
+			},
+		}, nil
+	default:
+		return projectActionPlan{}, bad("未知操作")
+	}
+}
+
 func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request, u *User) error {
 	p, err := s.projectForUser(r, u)
 	if err != nil {
@@ -744,37 +821,41 @@ func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request, u *
 	if err := readJSON(r, &req); err != nil {
 		return err
 	}
-	var args []string
-	title := ""
-	switch req.Action {
-	case "start", "stop", "restart":
-		args = []string{req.Action}
-		title = map[string]string{"start": "启动", "stop": "停止", "restart": "重启"}[req.Action]
-	case "down":
-		args = []string{"down", "--remove-orphans"}
-		title = "下线"
-	case "pull":
-		args = []string{"pull"}
-		title = "拉取镜像"
-	default:
-		return bad("未知操作")
+	service := strings.TrimSpace(req.Service)
+	plan, err := buildProjectAction(p, req.Action, service)
+	if err != nil {
+		return err
 	}
-	if req.Service != "" {
-		if req.Action == "down" {
-			return bad("down 不支持单个服务")
-		}
-		args = append(args, req.Service)
-	}
-	jobID := s.jobs.Submit(jobSpec("project."+req.Action, title+" "+p.Name, p.Name, u.Username, "project:"+p.Name), func(run *jobRun) error {
+	jobID := s.jobs.Submit(jobSpec("project."+req.Action, plan.Title, p.Name, u.Username, "project:"+p.Name), func(run *jobRun) error {
+		ctx := run.Context()
 		if err := s.prepareWorkdir(run, p, nil); err != nil {
 			return err
 		}
 		cp := s.composeProject(p, true)
 		cleanup := s.registryConfig(&cp)
 		defer cleanup()
-		return cp.Run(run.Context(), run, args...)
+		for _, step := range plan.Steps {
+			if step.Log != "" {
+				run.Logf("%s", step.Log)
+			}
+			if err := cp.Run(ctx, run, step.Args...); err != nil {
+				if step.DumpUnhealthy {
+					s.dumpUnhealthy(run, p)
+				}
+				return err
+			}
+			if step.ProgressAfter > 0 {
+				run.SetProgress(step.ProgressAfter)
+			}
+		}
+		if plan.SyncCaddy {
+			if err := s.syncCaddy(ctx); err != nil {
+				run.Logf("注意：同步反向代理配置失败：%v", err)
+			}
+		}
+		return nil
 	})
-	s.audit(r, u, "project."+req.Action, p.Name, req.Service, nil)
+	s.audit(r, u, "project."+req.Action, p.Name, service, nil)
 	return ok(w, map[string]any{"jobId": jobID})
 }
 

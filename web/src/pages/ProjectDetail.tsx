@@ -20,6 +20,7 @@ export default function ProjectDetail() {
   const openJob = useJobLog()
   const { busy, run } = useAction()
   const [saveTpl, setSaveTpl] = useState(false)
+  const [recreateTarget, setRecreateTarget] = useState<{ service?: string } | null>(null)
 
   if (!data) return <Page title="项目" crumbs={<Link to="/projects">项目</Link>}>{error ? <ErrorBox error={error} /> : <Loading />}</Page>
   const p = data.project
@@ -67,6 +68,7 @@ export default function ProjectDetail() {
               <Link className="btn btn-primary" to={`/databases`}>管理数据库</Link>
             ) : (
               <>
+                <button className="btn" disabled={!!busy} title="强制拉取最新镜像并重建全部容器" onClick={() => setRecreateTarget({})}><Icon name="refresh" />重建</button>
                 {p.source === 'inline' && <button className="btn" onClick={() => setSaveTpl(true)}><Icon name="template" />保存为模板</button>}
                 <button className="btn btn-primary" disabled={busy === 'deploy'} onClick={deploy}><Icon name="rocket" />{busy === 'deploy' ? '提交中…' : '部署'}</button>
               </>
@@ -76,7 +78,7 @@ export default function ProjectDetail() {
       }
     >
       <Tabs tabs={tabs} value={tab} onChange={(t) => setParams(t === 'overview' ? {} : { tab: t }, { replace: true })} />
-      {tab === 'overview' && <OverviewTab data={data} onAction={action} />}
+      {tab === 'overview' && <OverviewTab data={data} onAction={action} onRecreate={(service) => setRecreateTarget({ service })} />}
       {tab === 'metrics' && <ProjectMetrics projectId={id!} />}
       {tab === 'deployments' && <DeploymentsTab id={id!} />}
       {tab === 'images' && <ImagesTab project={p} onDeploy={deploy} />}
@@ -85,15 +87,34 @@ export default function ProjectDetail() {
       {tab === 'files' && <FilesTab id={id!} />}
       {tab === 'settings' && <SettingsTab data={data} onSaved={reload} />}
       {saveTpl && <SaveTemplateModal project={p} onClose={() => setSaveTpl(false)} />}
+      {recreateTarget && (
+        <Confirm
+          title={recreateTarget.service ? `重建服务 ${recreateTarget.service}` : `重建项目 ${p.name}`}
+          confirmText="强制拉取并重建"
+          onClose={() => setRecreateTarget(null)}
+          onConfirm={() => action('recreate', recreateTarget.service || '')}
+        >
+          {recreateTarget.service ? (
+            <p className="muted">
+              将强制拉取服务 <code className="mono">{recreateTarget.service}</code> 的最新镜像并重建容器（若存在多个副本将一并重建）。容器内未通过数据卷持久化的改动将丢失，期间该服务会短暂中断。
+            </p>
+          ) : (
+            <p className="muted">
+              将强制拉取项目 <code className="mono">{p.name}</code> 所有服务的最新镜像并重建全部容器。容器内未通过数据卷持久化的改动将丢失，期间服务会短暂中断。
+            </p>
+          )}
+        </Confirm>
+      )}
     </Page>
   )
 }
 
-function OverviewTab({ data, onAction }: { data: any; onAction: (a: string, s?: string) => void }) {
+function OverviewTab({ data, onAction, onRecreate }: { data: any; onAction: (a: string, s?: string) => void; onRecreate: (service: string) => void }) {
   const can = useCan()
   const nav = useNavigate()
   const { data: stats } = useLoad(() => get<Record<string, any>>('/containers/stats'), [], 10000)
   const p = data.project
+  const isDB = p.kind === 'database'
   return (
     <>
       <div className="grid">
@@ -141,6 +162,7 @@ function OverviewTab({ data, onAction }: { data: any; onAction: (a: string, s?: 
                           <Link className="btn btn-sm" to={`/containers/${c.id}?tab=logs`}>日志</Link>
                           {can.operator && c.state === 'running' && <Link className="btn btn-sm" to={`/containers/${c.id}?tab=terminal`}>终端</Link>}
                           {can.operator && c.service && <button className="btn btn-sm" onClick={() => onAction('restart', c.service)}>重启</button>}
+                          {can.operator && !isDB && c.service && <button className="btn btn-sm" title="强制拉取最新镜像并重建该服务容器" onClick={() => onRecreate(c.service)}>重建</button>}
                         </div>
                       </td>
                     </tr>

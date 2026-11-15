@@ -307,18 +307,24 @@ func (s *Server) composeUp(run *jobRun, p *Project) error {
 	run.SetProgress(50)
 	run.Logf("==> 启动服务")
 	args := []string{"up", "-d", "--remove-orphans", "--build"}
-	if boolOr(p.Options.Wait, true) {
-		t := p.Options.WaitTimeout
-		if t <= 0 {
-			t = 180
-		}
-		args = append(args, "--wait", "--wait-timeout", fmt.Sprint(t))
-	}
+	args = append(args, composeWaitArgs(p.Options)...)
 	if err := cp.Run(ctx, run, args...); err != nil {
 		s.dumpUnhealthy(run, p)
 		return fmt.Errorf("服务启动失败：%w", err)
 	}
 	return nil
+}
+
+// composeWaitArgs returns the --wait flags configured for a project's compose up invocations.
+func composeWaitArgs(opts ProjectOptions) []string {
+	if !boolOr(opts.Wait, true) {
+		return nil
+	}
+	t := opts.WaitTimeout
+	if t <= 0 {
+		t = 180
+	}
+	return []string{"--wait", "--wait-timeout", fmt.Sprint(t)}
 }
 
 // dumpUnhealthy appends the last log lines of failing containers to the job log.
