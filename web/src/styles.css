@@ -125,13 +125,46 @@ h1, h2, h3 { margin: 0; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field > span { font-size: 13px; font-weight: 500; }
 .field .hint { font-size: 12px; color: var(--muted); font-weight: 400; }
+/* A single-line value doesn't need the whole width of a wide card or modal. Inside a form grid the
+   columns of .form-grid-3 already bound it, so it is exempt there. */
+.field > .input, .field > .select { max-width: 560px; }
+.form-grid-3 .field > .input, .form-grid-3 .field > .select { max-width: none; }
 .check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; min-height: 32px; }
 .check input { width: 16px; height: 16px; accent-color: var(--accent); }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 14px 16px; }
-.seg { display: inline-flex; border: 1px solid #D6D6D1; border-radius: 6px; overflow: hidden; background: #fff; }
-.seg button { border: 0; background: none; padding: 0 12px; height: 32px; cursor: pointer; border-right: 1px solid #E2E2DE; }
-.seg button:last-child { border-right: 0; }
-.seg button.on { background: #18191B; color: #fff; }
+/* Main column plus a narrow side column (summary, danger zone); stacks on narrower screens. */
+.split { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; align-items: start; }
+.split > .col { gap: 20px; }
+@media (max-width: 1280px) { .split { grid-template-columns: minmax(0, 1fr); } }
+/* 3-column settings form; .span-2 widens a field. 2 then 1 column on narrow screens. */
+.form-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 16px; }
+.form-grid-3 .span-2 { grid-column: span 2; }
+@media (max-width: 1080px) {
+  .form-grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+  .form-grid-3 { grid-template-columns: minmax(0, 1fr); }
+  .form-grid-3 .span-2 { grid-column: auto; }
+}
+/* Segmented control: a pill track sized to its options, never stretched across the row. */
+.seg { display: inline-flex; flex-wrap: wrap; align-self: flex-start; width: fit-content; max-width: 100%; gap: 2px; padding: 3px; border: 1px solid #E2E2DE; border-radius: 8px; background: #F1F0EC; }
+.seg button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 0; border-radius: 5px; background: none; color: var(--muted); font-weight: 500; white-space: nowrap; cursor: pointer; transition: background .12s, color .12s, box-shadow .12s; }
+.seg button:hover:not(:disabled):not(.on) { color: var(--ink); background: rgba(24,25,27,.05); }
+.seg button.on { background: #fff; color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(24,25,27,.10), 0 0 0 1px rgba(24,25,27,.05); }
+.seg button:focus-visible { outline: 2px solid #E8A16B; outline-offset: 0; }
+.seg button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* File picker: click or drop a file. */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.file-drop { position: relative; display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 12px 14px; border: 1px dashed #C9C8C2; border-radius: 8px; background: #FAFAF8; color: var(--muted); cursor: pointer; transition: border-color .12s, background .12s; }
+.file-drop:hover, .file-drop.drag { border-color: var(--accent); background: #FDF6F0; }
+.file-drop:focus-within { outline: 2px solid #E8A16B; outline-offset: 1px; }
+.file-drop .file-ico { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: 8px; background: #fff; border: 1px solid #E2E2DE; color: var(--accent); }
+.file-drop .file-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.file-drop .file-title { color: var(--ink); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-drop .file-title em { font-style: normal; color: var(--accent-hover); }
+.file-drop.has { border-style: solid; border-color: #D6D6D1; background: #fff; }
+.file-drop.disabled { cursor: not-allowed; opacity: .6; }
 
 /* cards & tables */
 .card { background: #fff; border: 1px solid var(--line); border-radius: 8px; }

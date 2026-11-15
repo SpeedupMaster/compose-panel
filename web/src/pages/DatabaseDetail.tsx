@@ -276,15 +276,17 @@ function SettingsTab({ data, onSaved }: { data: any; onSaved: () => void }) {
   // PostgreSQL can't change major version in place; its versions are all majors.
   const versions: string[] = pg ? [d.version] : [...new Set<string>([d.version, ...(data.engine?.versions || [])])]
   const [deleting, setDeleting] = useState(false)
+  const image = d.image || defaultImage(data.engine, d.version)
   return (
-    <>
+    <div className="split">
       <Card title="实例配置">
-        <div className="form-grid">
-          <Field label="版本" hint={pg ? 'PostgreSQL 大版本不能原地升级：新建目标版本实例，再用备份导出/导入迁移' : '只建议升级小版本；大版本升级需要导出导入'}>
+        <div className="form-grid-3">
+          <Field label="版本" hint={pg ? '大版本不能原地升级，需新建实例后迁移' : '只建议升级小版本'}>
             <Select value={f.version} disabled={!can.operator || versions.length < 2} onChange={(v) => setF({ ...f, version: v })}>
               {versions.map((v) => <option key={v}>{v}</option>)}
             </Select>
           </Field>
+          <ImageField className="span-2" engine={d.engine} value={f.image} version={f.version} placeholder={defaultImage(data.engine, f.version)} readOnly={!can.operator} onChange={(image) => setF({ ...f, image })} />
           <Field label="访问方式">
             <Select value={f.exposure} disabled={!can.operator} onChange={(v) => setF({ ...f, exposure: v })}>
               <option value="internal">仅内部网络</option>
@@ -295,28 +297,46 @@ function SettingsTab({ data, onSaved }: { data: any; onSaved: () => void }) {
           <Field label="端口"><input className="input mono" value={f.port} readOnly={!can.operator} onChange={(e) => setF({ ...f, port: Number(e.target.value) || 0 })} /></Field>
           <Field label="内存上限" hint="留空保持不变"><input className="input mono" value={f.memLimit} readOnly={!can.operator} placeholder="512m" onChange={(e) => setF({ ...f, memLimit: e.target.value })} /></Field>
         </div>
-        <div style={{ marginTop: 14 }}>
-          <ImageField engine={d.engine} value={f.image} version={f.version} placeholder={defaultImage(data.engine, f.version)} readOnly={!can.operator} onChange={(image) => setF({ ...f, image })} />
-        </div>
         {can.operator && (
           <div className="row" style={{ justifyContent: 'flex-end', marginTop: 16 }}>
             <button className="btn btn-primary" onClick={async () => { try { const r = await put(`/databases/${d.id}`, f); openJob(r.jobId, `更新 ${d.name}`); onSaved() } catch (e) { toast.err(e) } }}>保存并重建容器</button>
           </div>
         )}
       </Card>
-      {can.admin && (
-        <Card title="危险操作">
-          <div className="row wrap">
-            <div className="grow"><div style={{ fontWeight: 600 }}>删除实例</div><div className="label">删除容器与数据卷。已有的备份文件会保留。</div></div>
-            <button className="btn btn-danger" onClick={() => setDeleting(true)}>删除实例…</button>
-          </div>
+      <div className="col">
+        <Card title="当前运行">
+          <dl className="kv" style={{ margin: 0 }}>
+            <dt>容器</dt><dd className="mono">{d.container}</dd>
+            <dt>镜像</dt><dd className="mono">{image}{!d.image && <span className="label"> · 官方</span>}</dd>
+            <dt>数据卷</dt><dd className="mono">{d.name}_data<div className="label">挂载到 {dataMount(d.engine, d.version)}</div></dd>
+            <dt>内部地址</dt><dd className="mono">{d.host}:{d.port}</dd>
+          </dl>
+          <p className="label" style={{ margin: '14px 0 0' }}>保存会按新配置重建容器：数据卷保留，连接会中断几秒。</p>
         </Card>
-      )}
+        {can.admin && (
+          <Card title="危险操作">
+            <div className="col" style={{ gap: 12 }}>
+              <div><div style={{ fontWeight: 600 }}>删除实例</div><div className="label">删除容器与数据卷。已有的备份文件会保留。</div></div>
+              <div><button className="btn btn-danger" onClick={() => setDeleting(true)}>删除实例…</button></div>
+            </div>
+          </Card>
+        )}
+      </div>
       {deleting && (
         <Confirm title={`删除数据库实例 ${d.name}`} danger confirmText="永久删除" typeToConfirm={d.name} onClose={() => setDeleting(false)} onConfirm={async () => { const r = await del(`/databases/${d.id}?confirm=${encodeURIComponent(d.name)}`); openJob(r.jobId, `删除 ${d.name}`); nav('/databases') }}>
           所有数据将被永久删除。请确认已有可用的备份。
         </Confirm>
       )}
-    </>
+    </div>
   )
+}
+
+// Where each engine keeps its data inside the container (mirrors dbmgr.Compose).
+function dataMount(engine: string, version: string) {
+  switch (engine) {
+    case 'postgres': return Number(version.split('.')[0]) >= 18 ? '/var/lib/postgresql' : '/var/lib/postgresql/data'
+    case 'mysql': case 'mariadb': return '/var/lib/mysql'
+    case 'mongo': return '/data/db'
+    default: return '/data'
+  }
 }

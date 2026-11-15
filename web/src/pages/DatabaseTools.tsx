@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { downloadCSV, get, post, qs, upload } from '../api'
 import { useCan } from '../auth'
 import { CodeArea } from '../components/editors'
-import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Select, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
+import { Card, Confirm, Empty, ErrorBox, Field, FilePicker, Icon, Loading, Select, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
 
 type QueryResult = { columns?: string[]; rows?: string[][]; truncated?: boolean; elapsedMs?: number; error?: string; needConfirm?: boolean; reasons?: string[] }
 
@@ -255,7 +255,6 @@ export function ImportExport({ id, engine, sql }: { id: string; engine: string; 
   const [file, setFile] = useState<File | null>(null)
   const [progress, setProgress] = useState<number | null>(null)
   const [confirm, setConfirm] = useState(false)
-  const ref = useRef<HTMLInputElement>(null)
   const exportUrl = `/api/databases/${id}/export` + qs({ db, format: engine === 'postgres' && plain ? 'sql' : undefined, gzip: gzip ? 1 : undefined })
   const doImport = async () => {
     if (!file) return
@@ -264,7 +263,6 @@ export function ImportExport({ id, engine, sql }: { id: string; engine: string; 
       const r = await upload<{ jobId: string }>('POST', `/databases/${id}/import` + qs({ db, name: file.name }), file, setProgress)
       openJob(r.jobId, `导入 ${file.name}`)
       setFile(null)
-      if (ref.current) ref.current.value = ''
     } catch (e) {
       toast.err(e)
     } finally {
@@ -291,8 +289,9 @@ export function ImportExport({ id, engine, sql }: { id: string; engine: string; 
         {!sql ? <div className="muted">{engine} 不支持在线导入，请使用备份恢复。</div> : (
           <div className="col" style={{ gap: 12 }}>
             <Field label="导入到库"><DbPicker id={id} value={db} onChange={setDb} /></Field>
-            <Field label="文件" hint={engine === 'postgres' ? '.sql 或 pg_dump 自定义格式（.dump），可再加 .gz' : '.sql，可再加 .gz'}>
-              <input ref={ref} className="input" type="file" accept=".sql,.dump,.gz,.pgdump,.backup" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+            <Field label="文件" div>
+              <FilePicker file={file} onChange={setFile} accept=".sql,.dump,.gz,.pgdump,.backup" disabled={progress != null}
+                hint={engine === 'postgres' ? '.sql 或 pg_dump 自定义格式（.dump），可再加 .gz' : '.sql，可再加 .gz'} />
             </Field>
             {progress != null && <div className="col" style={{ gap: 4 }}><div className="progress"><div style={{ width: progress + '%' }} /></div><span className="label">上传中 {progress}%</span></div>}
             <div className="alert warn" style={{ padding: '8px 12px' }}><Icon name="alert" />导入会在现有数据上执行文件中的语句（可能覆盖或冲突），建议先备份或导入到新库。</div>

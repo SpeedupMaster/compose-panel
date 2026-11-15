@@ -392,12 +392,61 @@ export async function copy(text: string) {
   }
 }
 
-export function Field({ label, hint, children }: { label: ReactNode; hint?: ReactNode; children: ReactNode }) {
+// div: render a <div> instead of <label>, for controls that are labels themselves (FilePicker).
+export function Field({ label, hint, children, className, div }: { label: ReactNode; hint?: ReactNode; children: ReactNode; className?: string; div?: boolean }) {
+  const Tag = div ? 'div' : 'label'
   return (
-    <label className="field">
+    <Tag className={'field' + (className ? ' ' + className : '')}>
       <span>{label}</span>
       {children}
       {hint && <span className="hint">{hint}</span>}
+    </Tag>
+  )
+}
+
+function fmtSize(n: number) {
+  if (n < 1024) return n + ' B'
+  const u = ['KB', 'MB', 'GB']
+  let i = -1
+  do { n /= 1024; i++ } while (n >= 1024 && i < u.length - 1)
+  return (n < 10 ? n.toFixed(1) : Math.round(n)) + ' ' + u[i]
+}
+
+// Click-or-drop file picker. Controlled by `file`: passing null clears the native input too.
+export function FilePicker({ file, onChange, accept, hint, disabled, label = '文件' }: {
+  file: File | null; onChange: (f: File | null) => void; accept?: string; hint?: ReactNode; disabled?: boolean; label?: string
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+  const [drag, setDrag] = useState(false)
+  useEffect(() => { if (!file && ref.current) ref.current.value = '' }, [file])
+  return (
+    <label className={'file-drop' + (drag ? ' drag' : '') + (file ? ' has' : '') + (disabled ? ' disabled' : '')}
+      onDragOver={(e) => { if (disabled) return; e.preventDefault(); setDrag(true) }}
+      onDragLeave={() => setDrag(false)}
+      onDrop={(e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f && !disabled) onChange(f) }}>
+      <input ref={ref} className="sr-only" type="file" accept={accept} disabled={disabled} aria-label={label}
+        onChange={(e) => onChange(e.target.files?.[0] || null)} />
+      <span className="file-ico"><Icon name={file ? 'file' : 'upload'} size={18} /></span>
+      <span className="file-main">
+        {file ? (
+          <><span className="file-title mono" title={file.name}>{file.name}</span><span className="label">{fmtSize(file.size)} · 点击更换</span></>
+        ) : (
+          <><span className="file-title"><em>选择文件</em> 或拖放到这里</span>{hint && <span className="label">{hint}</span>}</>
+        )}
+      </span>
+      {file && !disabled && (
+        <button type="button" className="btn btn-sm" onClick={(e) => { e.preventDefault(); onChange(null) }}><Icon name="x" size={14} />移除</button>
+      )}
+    </label>
+  )
+}
+
+// Small button that reads a file, for "fill from file" next to a text field.
+export function FileButton({ accept, onFile, children }: { accept?: string; onFile: (f: File) => void; children: ReactNode }) {
+  return (
+    <label className="btn btn-sm" style={{ position: 'relative' }}>
+      <input className="sr-only" type="file" accept={accept} onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = '' }} />
+      <Icon name="upload" size={14} />{children}
     </label>
   )
 }

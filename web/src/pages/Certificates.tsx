@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { dateTime, del, get, post } from '../api'
 import { useCan } from '../auth'
-import { Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, useLoad, useToast } from '../components/ui'
+import { Confirm, Empty, ErrorBox, Field, FileButton, Icon, Loading, Modal, Page, useLoad, useToast } from '../components/ui'
 
 export default function Certificates() {
   const { data, error, reload } = useLoad(() => get<any[]>('/certificates'), [], 60000)
@@ -43,17 +43,17 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
   const toast = useToast()
   const [f, setF] = useState({ name: '', cert: '', key: '' })
   const [err, setErr] = useState<unknown>()
-  const readFile = (k: 'cert' | 'key') => (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) file.text().then((t) => setF((x) => ({ ...x, [k]: t })))
-  }
+  const readFile = (k: 'cert' | 'key') => (file: File) => file.text().then((t) => setF((x) => ({ ...x, [k]: t })))
+  const fieldHead = (title: string, accept: string, k: 'cert' | 'key') => (
+    <span className="row" style={{ justifyContent: 'space-between' }}>{title}<FileButton accept={accept} onFile={readFile(k)}>从文件读取</FileButton></span>
+  )
   return (
     <Modal title="上传证书" wide onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" onClick={async () => { try { const r = await post('/certificates', f); toast.ok('已上传：' + (r.domains || []).join(', ')); if (r.warning) toast.err(r.warning); onDone() } catch (e) { setErr(e) } }}>上传</button></>}>
       <Field label="名称"><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="example.com 通配符" /></Field>
-      <Field label="证书链（PEM，fullchain）" hint={<input type="file" accept=".pem,.crt,.cer" onChange={readFile('cert')} />}>
+      <Field div label={fieldHead('证书链（PEM，fullchain）', '.pem,.crt,.cer', 'cert')}>
         <textarea className="textarea mono" rows={6} value={f.cert} onChange={(e) => setF({ ...f, cert: e.target.value })} placeholder="-----BEGIN CERTIFICATE-----" />
       </Field>
-      <Field label="私钥（PEM）" hint={<input type="file" accept=".pem,.key" onChange={readFile('key')} />}>
+      <Field div label={fieldHead('私钥（PEM）', '.pem,.key', 'key')}>
         <textarea className="textarea mono" rows={6} value={f.key} onChange={(e) => setF({ ...f, key: e.target.value })} placeholder="-----BEGIN PRIVATE KEY-----" />
       </Field>
       <p className="label" style={{ margin: 0 }}>私钥加密保存，只推送给 Caddy，不会再次显示。</p>

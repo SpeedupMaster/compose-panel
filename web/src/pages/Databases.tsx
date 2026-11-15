@@ -56,12 +56,14 @@ export function pgMajorFromImage(image: string) {
 
 export const defaultImage = (eng: any, version: string) => (eng?.image || '').replace('{v}', version)
 
-export const imageHint: Record<string, string> = {
-  postgres: '可用兼容官方镜像的变体，如 pgvector/pgvector:pg17、postgis/postgis:17-3.5；版本按标签自动识别',
-  mysql: '可填私有仓库或镜像加速地址，需兼容官方 mysql 镜像的环境变量',
-  mariadb: '可填私有仓库或镜像加速地址，需兼容官方 mariadb 镜像的环境变量',
-  mongo: '可填私有仓库或镜像加速地址，需兼容官方 mongo 镜像的环境变量',
-  redis: '可用兼容的变体，如 valkey/valkey:8-alpine 或 redis/redis-stack-server',
+// Example of a compatible variant, shown under the image field.
+function imageExample(engine: string, version: string) {
+  const v = version.split('.')[0]
+  switch (engine) {
+    case 'postgres': return `pgvector/pgvector:pg${v}、postgis/postgis:${v}-3.5`
+    case 'redis': return 'valkey/valkey:8-alpine'
+    default: return `registry.example.com/${engine}:${version}`
+  }
 }
 
 export function engineLabel(id: string) {
@@ -102,7 +104,7 @@ function CreateDB({ onClose }: { onClose: () => void }) {
           <button key={e.id} className={'btn' + (f.engine === e.id ? ' btn-primary' : '')} style={{ height: 44 }} onClick={() => setF({ ...f, engine: e.id, version: '', port: 0, image: '' })}>{e.name}</button>
         ))}
       </div>
-      <div className="form-grid">
+      <div className="form-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))' }}>
         <Field label="实例名" hint="也是内部网络中的主机名"><input className="input mono" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value.toLowerCase() })} placeholder={f.engine + '-main'} autoFocus /></Field>
         <Field label="版本">
           <Select value={version} onChange={(v) => setF({ ...f, version: v })}>
@@ -118,10 +120,10 @@ function CreateDB({ onClose }: { onClose: () => void }) {
         </Field>
         <Field label="端口"><input className="input mono" inputMode="numeric" value={f.port || eng?.port || ''} onChange={(e) => setF({ ...f, port: Number(e.target.value) || 0 })} /></Field>
         <Field label="内存上限"><input className="input mono" value={f.memLimit} onChange={(e) => setF({ ...f, memLimit: e.target.value })} /></Field>
+        <ImageField engine={f.engine} value={f.image} placeholder={defaultImage(eng, version)} version={version} onChange={setImage} />
       </div>
-      <ImageField engine={f.engine} value={f.image} placeholder={defaultImage(eng, version)} version={version} onChange={setImage} />
       {f.engine === 'postgres' && Number(version) >= 18 && (
-        <p className="label" style={{ margin: 0 }}>PostgreSQL 18 起数据目录改为 <code className="mono">/var/lib/postgresql/18/docker</code>，面板会把数据卷挂到 <code className="mono">/var/lib/postgresql</code>。</p>
+        <div className="alert run" style={{ padding: '8px 12px' }}><Icon name="databases" />PostgreSQL 18 的数据目录是 <code className="mono">/var/lib/postgresql/18/docker</code>，数据卷会挂到 <code className="mono">/var/lib/postgresql</code>。</div>
       )}
       {f.exposure === 'public' && <div className="alert warn">公网暴露的数据库容易被扫描和爆破，请确认防火墙和强密码。</div>}
       {f.engine !== 'redis' && (
@@ -136,14 +138,14 @@ function CreateDB({ onClose }: { onClose: () => void }) {
   )
 }
 
-export function ImageField({ engine, value, placeholder, version, onChange, readOnly }: {
-  engine: string; value: string; placeholder: string; version: string; onChange: (v: string) => void; readOnly?: boolean
+export function ImageField({ engine, value, placeholder, version, onChange, readOnly, className }: {
+  engine: string; value: string; placeholder: string; version: string; onChange: (v: string) => void; readOnly?: boolean; className?: string
 }) {
   const m = engine === 'postgres' ? pgMajorFromImage(value) : ''
   return (
-    <Field label="镜像（可选）" hint={m && m !== version.split('.')[0]
+    <Field label="镜像（可选）" className={className} hint={m && m !== version.split('.')[0]
       ? <span style={{ color: '#A41E14' }}>该镜像是 PostgreSQL {m}，与版本 {version} 不一致</span>
-      : `留空使用官方镜像 ${placeholder}。${imageHint[engine] || ''}`}>
+      : <>留空用官方镜像；也可填兼容变体，如 <span className="mono">{imageExample(engine, version)}</span></>}>
       <input className="input mono" value={value} readOnly={readOnly} placeholder={placeholder} spellCheck={false} autoComplete="off"
         onChange={(e) => onChange(e.target.value.trim())} />
     </Field>

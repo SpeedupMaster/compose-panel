@@ -154,13 +154,20 @@ function PolicyModal({ p, sources, onClose, onSaved }: { p: Policy; sources: any
   return (
     <Modal title={f.id ? '编辑备份策略' : '新建备份策略'} wide onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" onClick={submit}>保存</button></>}>
       {f.id ? <div>备份对象：<b>{sourceText(f.source)}</b></div> : <SourcePicker value={f.source} onChange={(source) => setF({ ...f, source })} sources={sources} />}
-      <div className="form-grid">
+      <div className="form-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(300px, 100%), 1fr))' }}>
         <Field label="名称" hint="留空自动生成"><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
+        <Field label="存储位置">
+          <Select value={sid} onChange={(v) => setF({ ...f, storageId: Number(v) })}>
+            {(storages || []).map((s) => <option key={s.id} value={s.id}>{s.name}（{({ s3: 'S3', local: '本地', sftp: 'SFTP', webdav: 'WebDAV' } as Record<string, string>)[s.kind] || s.kind}）</option>)}
+          </Select>
+        </Field>
         <Field label="计划（cron，5 段）" hint="按面板时区执行">
           <input className="input mono" value={f.schedule} onChange={(e) => setF({ ...f, schedule: e.target.value })} />
         </Field>
+        <Field label="常用计划" div>
+          <div className="row wrap" style={{ gap: 6, minHeight: 36 }}>{presets.map(([c, l]) => <button key={c} type="button" className={'btn btn-sm' + (f.schedule === c ? ' btn-primary' : '')} onClick={() => setF({ ...f, schedule: c })}>{l}</button>)}</div>
+        </Field>
       </div>
-      <div className="row wrap">{presets.map(([c, l]) => <button key={c} className={'btn btn-sm' + (f.schedule === c ? ' btn-primary' : '')} onClick={() => setF({ ...f, schedule: c })}>{l}</button>)}</div>
       <div>
         <div className="label" style={{ marginBottom: 6 }}>保留策略（祖父-父-子）：每个周期保留最新的一份，最新一份始终保留</div>
         <div className="form-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
@@ -169,11 +176,6 @@ function PolicyModal({ p, sources, onClose, onSaved }: { p: Policy; sources: any
           ))}
         </div>
       </div>
-      <Field label="存储位置">
-        <Select value={sid} onChange={(v) => setF({ ...f, storageId: Number(v) })}>
-          {(storages || []).map((s) => <option key={s.id} value={s.id}>{s.name}（{({ s3: 'S3', local: '本地', sftp: 'SFTP', webdav: 'WebDAV' } as Record<string, string>)[s.kind] || s.kind}）</option>)}
-        </Select>
-      </Field>
       <label className="check"><input type="checkbox" checked={f.encrypt} onChange={(e) => setF({ ...f, encrypt: e.target.checked })} />使用 age 加密（面板密钥）</label>
       {f.encrypt && (
         <Field label="额外接收者公钥（可选）" hint="每行一个 age1… 公钥。持有对应私钥的人也能解密，适合把密钥离线保管">
