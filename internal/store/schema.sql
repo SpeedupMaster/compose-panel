@@ -103,7 +103,8 @@ CREATE TABLE IF NOT EXISTS db_instances (
   root_password TEXT NOT NULL,               -- encrypted
   port          INTEGER NOT NULL,
   exposure      TEXT NOT NULL DEFAULT 'internal', -- internal | local | public
-  created_at    INTEGER NOT NULL
+  created_at    INTEGER NOT NULL,
+  image         TEXT NOT NULL DEFAULT ''        -- custom image; '' = official image for engine+version
 );
 
 CREATE TABLE IF NOT EXISTS registries (

@@ -23,6 +23,7 @@ var migrations = []string{
 	`ALTER TABLE sites ADD COLUMN load_balance INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE sites ADD COLUMN health_path TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE backups ADD COLUMN verified_at INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE db_instances ADD COLUMN image TEXT NOT NULL DEFAULT ''`,
 }
 
 // Open opens (and creates if needed) the panel database in WAL mode.

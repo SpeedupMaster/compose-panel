@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ type dbInstance struct {
 	Name      string `json:"name"`
 	Engine    string `json:"engine"`
 	Version   string `json:"version"`
+	Image     string `json:"image"` // custom image; "" = official image for engine+version
 	RootUser  string `json:"rootUser"`
 	Port      int    `json:"port"`
 	Exposure  string `json:"exposure"`
@@ -31,9 +33,9 @@ type dbInstance struct {
 func (s *Server) getDB(id int64) (*dbInstance, error) {
 	d := &dbInstance{}
 	var enc string
-	err := s.db.QueryRow(`SELECT d.id, d.project_id, p.name, d.engine, d.version, d.root_user, d.root_password, d.port, d.exposure, d.created_at
+	err := s.db.QueryRow(`SELECT d.id, d.project_id, p.name, d.engine, d.version, d.root_user, d.root_password, d.port, d.exposure, d.created_at, d.image
 		FROM db_instances d JOIN projects p ON p.id=d.project_id WHERE d.id=?`, id).
-		Scan(&d.ID, &d.ProjectID, &d.Name, &d.Engine, &d.Version, &d.RootUser, &enc, &d.Port, &d.Exposure, &d.CreatedAt)
+		Scan(&d.ID, &d.ProjectID, &d.Name, &d.Engine, &d.Version, &d.RootUser, &enc, &d.Port, &d.Exposure, &d.CreatedAt, &d.Image)
 	if err != nil {
 		return nil, errNotFound
 	}
@@ -100,6 +102,7 @@ func (s *Server) handleCreateDatabase(w http.ResponseWriter, r *http.Request, u 
 		Name     string `json:"name"`
 		Engine   string `json:"engine"`
 		Version  string `json:"version"`
+		Image    string `json:"image"`
 		Exposure string `json:"exposure"`
 		Port     int    `json:"port"`
 		MemLimit string `json:"memLimit"`
@@ -120,6 +123,15 @@ func (s *Server) handleCreateDatabase(w http.ResponseWriter, r *http.Request, u 
 	if req.Version == "" {
 		req.Version = eng.Versions[0]
 	}
+	if !contains(eng.Versions, req.Version) {
+		return bad("不支持的版本")
+	}
+	if err := checkDBImage(eng.ID, req.Version, &req.Image); err != nil {
+		return err
+	}
+	if req.MemLimit = strings.TrimSpace(req.MemLimit); req.MemLimit != "" && !memLimitRe.MatchString(req.MemLimit) {
+		return bad("内存限制格式如 512m、1g")
+	}
 	if req.Port == 0 {
 		req.Port = eng.Port
 	}
@@ -137,7 +149,7 @@ func (s *Server) handleCreateDatabase(w http.ResponseWriter, r *http.Request, u 
 	if exists > 0 {
 		return bad("名称已被项目或实例占用")
 	}
-	compose, err := dbmgr.Compose(eng.ID, req.Version, req.Name, req.Exposure, s.cfg.DBNetwork, req.Port, req.MemLimit)
+	compose, err := dbmgr.Compose(eng.ID, req.Version, req.Image, req.Name, req.Exposure, s.cfg.DBNetwork, req.Port, req.MemLimit)
 	if err != nil {
 		return err
 	}
@@ -157,8 +169,8 @@ func (s *Server) handleCreateDatabase(w http.ResponseWriter, r *http.Request, u 
 		return err
 	}
 	pid, _ := res.LastInsertId()
-	res, err = tx.Exec(`INSERT INTO db_instances(project_id,engine,version,root_user,root_password,port,exposure,created_at) VALUES(?,?,?,?,?,?,?,?)`,
-		pid, eng.ID, req.Version, eng.RootUser, s.box.Seal(pw), req.Port, req.Exposure, now)
+	res, err = tx.Exec(`INSERT INTO db_instances(project_id,engine,version,root_user,root_password,port,exposure,created_at,image) VALUES(?,?,?,?,?,?,?,?,?)`,
+		pid, eng.ID, req.Version, eng.RootUser, s.box.Seal(pw), req.Port, req.Exposure, now, req.Image)
 	if err != nil {
 		return err
 	}
@@ -255,10 +267,11 @@ func (s *Server) handleUpdateDatabase(w http.ResponseWriter, r *http.Request, u 
 		return err
 	}
 	var req struct {
-		Exposure string `json:"exposure"`
-		Port     int    `json:"port"`
-		Version  string `json:"version"`
-		MemLimit string `json:"memLimit"`
+		Exposure string  `json:"exposure"`
+		Port     int     `json:"port"`
+		Version  string  `json:"version"`
+		Image    *string `json:"image"` // nil keeps the current image; "" switches to the official one
+		MemLimit string  `json:"memLimit"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		return err
@@ -272,11 +285,35 @@ func (s *Server) handleUpdateDatabase(w http.ResponseWriter, r *http.Request, u 
 	if req.Version == "" {
 		req.Version = d.Version
 	}
-	compose, err := dbmgr.Compose(d.Engine, req.Version, d.Name, req.Exposure, s.cfg.DBNetwork, req.Port, req.MemLimit)
+	eng, _ := dbmgr.EngineByID(d.Engine)
+	if req.Version != d.Version && !contains(eng.Versions, req.Version) {
+		return bad("不支持的版本")
+	}
+	if d.Engine == "postgres" && pgMajor(req.Version) != pgMajor(d.Version) {
+		return bad("PostgreSQL 大版本不能原地升级（数据目录格式不兼容）。请新建 %s 实例，再用备份导出/导入迁移数据", req.Version)
+	}
+	image := d.Image
+	if req.Image != nil {
+		image = *req.Image
+	}
+	if err := checkDBImage(d.Engine, req.Version, &image); err != nil {
+		return err
+	}
+	if req.MemLimit = strings.TrimSpace(req.MemLimit); req.MemLimit == "" {
+		// Blank means "keep": carry over the limit from the current compose file.
+		if p, err := s.getProject(d.ProjectID); err == nil {
+			if m := memLimitLineRe.FindStringSubmatch(p.Compose); m != nil {
+				req.MemLimit = m[1]
+			}
+		}
+	} else if !memLimitRe.MatchString(req.MemLimit) {
+		return bad("内存限制格式如 512m、1g")
+	}
+	compose, err := dbmgr.Compose(d.Engine, req.Version, image, d.Name, req.Exposure, s.cfg.DBNetwork, req.Port, req.MemLimit)
 	if err != nil {
 		return err
 	}
-	_, _ = s.db.Exec(`UPDATE db_instances SET exposure=?, port=?, version=? WHERE id=?`, req.Exposure, req.Port, req.Version, d.ID)
+	_, _ = s.db.Exec(`UPDATE db_instances SET exposure=?, port=?, version=?, image=? WHERE id=?`, req.Exposure, req.Port, req.Version, image, d.ID)
 	_, _ = s.db.Exec(`UPDATE projects SET compose=?, description=?, updated_at=? WHERE id=?`, compose, d.Engine+" "+req.Version, time.Now().Unix(), d.ProjectID)
 	p, _ := s.getProject(d.ProjectID)
 	jobID, _ := s.startDeploy(p, "manual", u.Username, 0)
@@ -528,4 +565,42 @@ func (s *Server) handleDBQuery(w http.ResponseWriter, r *http.Request, u *User) 
 		return ok(w, map[string]any{"error": err.Error(), "elapsedMs": time.Since(start).Milliseconds()})
 	}
 	return ok(w, map[string]any{"columns": res.Columns, "rows": res.Rows, "truncated": truncated, "elapsedMs": time.Since(start).Milliseconds()})
+}
+
+var (
+	memLimitRe     = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?[bkmgBKMG]?$`)
+	memLimitLineRe = regexp.MustCompile(`(?m)^    mem_limit: *(\S+)`)
+)
+
+func contains(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+func pgMajor(v string) string { return strings.SplitN(v, ".", 2)[0] }
+
+// checkDBImage normalises a custom image and, for PostgreSQL, rejects one whose tag
+// names a different major version than the instance (the data layout depends on it).
+func checkDBImage(engine, version string, image *string) error {
+	*image = strings.TrimSpace(*image)
+	if *image == "" {
+		return nil
+	}
+	if !dbmgr.ValidImage(*image) {
+		return bad("镜像名无效，格式如 pgvector/pgvector:pg17 或 registry.example.com/team/postgres:17")
+	}
+	if eng, ok := dbmgr.EngineByID(engine); ok && *image == eng.DefaultImage(version) {
+		*image = "" // same as the official one: keep following the version
+		return nil
+	}
+	if engine == "postgres" {
+		if m := dbmgr.PostgresMajorFromImage(*image); m != "" && m != pgMajor(version) {
+			return bad("镜像 %s 看起来是 PostgreSQL %s，与所选版本 %s 不一致", *image, m, version)
+		}
+	}
+	return nil
 }

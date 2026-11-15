@@ -4,7 +4,7 @@ import { bytes, del, get, post, put } from '../api'
 import { useCan } from '../auth'
 import { BackupNowModal, BackupTable } from '../components/backup'
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, SecretBox, Select, Status, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
-import { engineLabel, exposureName } from './Databases'
+import { defaultImage, engineLabel, exposureName, ImageField } from './Databases'
 import { ImportExport, SlowQueries, SqlConsole, TableBrowser } from './DatabaseTools'
 
 type Tab = 'overview' | 'dbs' | 'users' | 'sessions' | 'sql' | 'tables' | 'slow' | 'io' | 'backups' | 'settings'
@@ -27,7 +27,7 @@ export default function DatabaseDetail() {
     <Page
       title={d.name}
       crumbs={<><Link to="/databases">数据库</Link> / {d.name}</>}
-      sub={<span className="row wrap"><Status s={d.status} /><span>{engineLabel(d.engine)} {d.version}</span><span>· {exposureName[d.exposure]}</span></span>}
+      sub={<span className="row wrap"><Status s={d.status} /><span>{engineLabel(d.engine)} {d.version}</span>{d.image && <span className="mono" title="自定义镜像">· {d.image}</span>}<span>· {exposureName[d.exposure]}</span></span>}
       actions={<Link className="btn" to={`/projects/${d.projectId}`}>容器与日志</Link>}
     >
       <Tabs tabs={tabs} value={tab} onChange={(t) => setParams(t === 'overview' ? {} : { tab: t }, { replace: true })} />
@@ -271,15 +271,18 @@ function SettingsTab({ data, onSaved }: { data: any; onSaved: () => void }) {
   const toast = useToast()
   const nav = useNavigate()
   const openJob = useJobLog()
-  const [f, setF] = useState({ version: d.version, exposure: d.exposure, port: d.port, memLimit: '' })
+  const [f, setF] = useState({ version: d.version, exposure: d.exposure, port: d.port, memLimit: '', image: d.image || '' })
+  const pg = d.engine === 'postgres'
+  // PostgreSQL can't change major version in place; its versions are all majors.
+  const versions: string[] = pg ? [d.version] : [...new Set<string>([d.version, ...(data.engine?.versions || [])])]
   const [deleting, setDeleting] = useState(false)
   return (
     <>
       <Card title="实例配置">
         <div className="form-grid">
-          <Field label="版本" hint="只建议升级小版本；大版本升级需要导出导入">
-            <Select value={f.version} disabled={!can.operator} onChange={(v) => setF({ ...f, version: v })}>
-              {[...new Set([d.version, ...(data.engine?.versions || [])])].map((v: string) => <option key={v}>{v}</option>)}
+          <Field label="版本" hint={pg ? 'PostgreSQL 大版本不能原地升级：新建目标版本实例，再用备份导出/导入迁移' : '只建议升级小版本；大版本升级需要导出导入'}>
+            <Select value={f.version} disabled={!can.operator || versions.length < 2} onChange={(v) => setF({ ...f, version: v })}>
+              {versions.map((v) => <option key={v}>{v}</option>)}
             </Select>
           </Field>
           <Field label="访问方式">
@@ -291,6 +294,9 @@ function SettingsTab({ data, onSaved }: { data: any; onSaved: () => void }) {
           </Field>
           <Field label="端口"><input className="input mono" value={f.port} readOnly={!can.operator} onChange={(e) => setF({ ...f, port: Number(e.target.value) || 0 })} /></Field>
           <Field label="内存上限" hint="留空保持不变"><input className="input mono" value={f.memLimit} readOnly={!can.operator} placeholder="512m" onChange={(e) => setF({ ...f, memLimit: e.target.value })} /></Field>
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <ImageField engine={d.engine} value={f.image} version={f.version} placeholder={defaultImage(data.engine, f.version)} readOnly={!can.operator} onChange={(image) => setF({ ...f, image })} />
         </div>
         {can.operator && (
           <div className="row" style={{ justifyContent: 'flex-end', marginTop: 16 }}>

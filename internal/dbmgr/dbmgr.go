@@ -18,6 +18,7 @@ type Engine struct {
 	ID       string   `json:"id"`
 	Name     string   `json:"name"`
 	Versions []string `json:"versions"`
+	Image    string   `json:"image"` // official image; {v} is replaced by the version
 	Port     int      `json:"port"`
 	RootUser string   `json:"rootUser"`
 	Tools    string   `json:"tools"`
@@ -26,11 +27,11 @@ type Engine struct {
 }
 
 var Engines = []Engine{
-	{ID: "postgres", Name: "PostgreSQL", Versions: []string{"17", "16", "15"}, Port: 5432, RootUser: "postgres", Tools: "pg_dump · psql", SQL: true, DumpExt: "pgdump"},
-	{ID: "mysql", Name: "MySQL", Versions: []string{"8.4", "8.0"}, Port: 3306, RootUser: "root", Tools: "mysqldump · mysql", SQL: true, DumpExt: "sql"},
-	{ID: "mariadb", Name: "MariaDB", Versions: []string{"11.4", "10.11"}, Port: 3306, RootUser: "root", Tools: "mariadb-dump", SQL: true, DumpExt: "sql"},
-	{ID: "mongo", Name: "MongoDB", Versions: []string{"8.0", "7.0"}, Port: 27017, RootUser: "root", Tools: "mongodump · mongosh", DumpExt: "archive"},
-	{ID: "redis", Name: "Redis", Versions: []string{"7.4", "7.2"}, Port: 6379, RootUser: "default", Tools: "RDB 快照 · redis-cli", DumpExt: "rdb"},
+	{ID: "postgres", Name: "PostgreSQL", Versions: []string{"18", "17", "16", "15"}, Image: "postgres:{v}-alpine", Port: 5432, RootUser: "postgres", Tools: "pg_dump · psql", SQL: true, DumpExt: "pgdump"},
+	{ID: "mysql", Name: "MySQL", Versions: []string{"8.4", "8.0"}, Image: "mysql:{v}", Port: 3306, RootUser: "root", Tools: "mysqldump · mysql", SQL: true, DumpExt: "sql"},
+	{ID: "mariadb", Name: "MariaDB", Versions: []string{"11.4", "10.11"}, Image: "mariadb:{v}", Port: 3306, RootUser: "root", Tools: "mariadb-dump", SQL: true, DumpExt: "sql"},
+	{ID: "mongo", Name: "MongoDB", Versions: []string{"8.0", "7.0"}, Image: "mongo:{v}", Port: 27017, RootUser: "root", Tools: "mongodump · mongosh", DumpExt: "archive"},
+	{ID: "redis", Name: "Redis", Versions: []string{"7.4", "7.2"}, Image: "redis:{v}-alpine", Port: 6379, RootUser: "default", Tools: "RDB 快照 · redis-cli", DumpExt: "rdb"},
 }
 
 func EngineByID(id string) (Engine, bool) {
@@ -46,34 +47,87 @@ var identRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
 
 func ValidIdent(s string) bool { return identRe.MatchString(s) }
 
-// Compose renders the compose file for a new instance. Secrets come from .env.
-func Compose(engine, version, alias, exposure, dbNetwork string, port int, memLimit string) (string, error) {
+// DefaultImage is the official image for this engine at version.
+func (e Engine) DefaultImage(version string) string {
+	return strings.ReplaceAll(e.Image, "{v}", version)
+}
+
+var imageRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._/:-]*(@sha256:[a-f0-9]{64})?$`)
+
+// ValidImage accepts docker image references (registry/repo:tag or @sha256 digest).
+func ValidImage(s string) bool {
+	return len(s) <= 255 && imageRe.MatchString(s) && !strings.Contains(s, "//")
+}
+
+var (
+	pgTagRe      = regexp.MustCompile(`(?i)pg-?(\d{2})(?:\D|$)`)
+	leadingNumRe = regexp.MustCompile(`^(\d{2})(?:\D|$)`)
+)
+
+// PostgresMajorFromImage reads the PostgreSQL major version from an image tag:
+// postgres:18-alpine, pgvector/pgvector:pg17, postgis/postgis:17-3.5,
+// timescale/timescaledb:2.17.2-pg16. "" when the tag doesn't say (e.g. latest).
+func PostgresMajorFromImage(image string) string {
+	ref := image
+	if i := strings.Index(ref, "@"); i >= 0 {
+		ref = ref[:i]
+	}
+	i := strings.LastIndex(ref, ":")
+	if i < 0 || i < strings.LastIndex(ref, "/") {
+		return ""
+	}
+	tag := ref[i+1:]
+	if m := pgTagRe.FindStringSubmatch(tag); m != nil {
+		return m[1]
+	}
+	if m := leadingNumRe.FindStringSubmatch(tag); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// PostgresDataMount is where the data volume is mounted. From 18 on the official image
+// keeps PGDATA in /var/lib/postgresql/<major>/docker and declares /var/lib/postgresql as
+// its volume; it refuses to start with a volume on the old /var/lib/postgresql/data path.
+func PostgresDataMount(version string) string {
+	if major, err := strconv.Atoi(strings.SplitN(version, ".", 2)[0]); err == nil && major >= 18 {
+		return "/var/lib/postgresql"
+	}
+	return "/var/lib/postgresql/data"
+}
+
+// Compose renders the compose file for an instance. Secrets come from .env.
+// image overrides the official image (e.g. pgvector/pgvector:pg17); "" uses the default.
+func Compose(engine, version, image, alias, exposure, dbNetwork string, port int, memLimit string) (string, error) {
+	eng, ok := EngineByID(engine)
+	if !ok {
+		return "", fmt.Errorf("unknown engine %q", engine)
+	}
+	if image == "" {
+		image = eng.DefaultImage(version)
+	}
 	var b strings.Builder
 	b.WriteString("services:\n  db:\n")
+	fmt.Fprintf(&b, "    image: %s\n", image)
 	switch engine {
 	case "postgres":
-		fmt.Fprintf(&b, "    image: postgres:%s-alpine\n", version)
 		// pg_stat_statements powers the slow-query view; it ships with the image.
 		b.WriteString("    command: [\"postgres\", \"-c\", \"shared_preload_libraries=pg_stat_statements\"]\n")
 		b.WriteString("    environment:\n      POSTGRES_PASSWORD: ${DB_ROOT_PASSWORD}\n")
-		b.WriteString("    volumes:\n      - data:/var/lib/postgresql/data\n")
+		fmt.Fprintf(&b, "    volumes:\n      - data:%s\n", PostgresDataMount(version))
 		b.WriteString("    healthcheck:\n      test: [\"CMD-SHELL\", \"pg_isready -U postgres\"]\n      interval: 10s\n      timeout: 5s\n      retries: 5\n")
 	case "mysql":
-		fmt.Fprintf(&b, "    image: mysql:%s\n", version)
 		b.WriteString("    environment:\n      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}\n")
 		b.WriteString("    volumes:\n      - data:/var/lib/mysql\n")
 		b.WriteString("    healthcheck:\n      test: [\"CMD-SHELL\", \"mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent\"]\n      interval: 10s\n      timeout: 5s\n      retries: 10\n")
 	case "mariadb":
-		fmt.Fprintf(&b, "    image: mariadb:%s\n", version)
 		b.WriteString("    environment:\n      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}\n")
 		b.WriteString("    volumes:\n      - data:/var/lib/mysql\n")
 		b.WriteString("    healthcheck:\n      test: [\"CMD\", \"healthcheck.sh\", \"--connect\", \"--innodb_initialized\"]\n      interval: 10s\n      timeout: 5s\n      retries: 10\n")
 	case "mongo":
-		fmt.Fprintf(&b, "    image: mongo:%s\n", version)
 		b.WriteString("    environment:\n      MONGO_INITDB_ROOT_USERNAME: root\n      MONGO_INITDB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}\n")
 		b.WriteString("    volumes:\n      - data:/data/db\n")
 	case "redis":
-		fmt.Fprintf(&b, "    image: redis:%s-alpine\n", version)
 		b.WriteString("    command: [\"redis-server\", \"--appendonly\", \"yes\", \"--requirepass\", \"${DB_ROOT_PASSWORD}\"]\n")
 		b.WriteString("    volumes:\n      - data:/data\n")
 		b.WriteString("    healthcheck:\n      test: [\"CMD-SHELL\", \"redis-cli -a \\\"$$REDIS_PASSWORD\\\" --no-auth-warning ping | grep PONG\"]\n      interval: 10s\n      timeout: 5s\n      retries: 5\n")

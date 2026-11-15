@@ -44,6 +44,26 @@ export default function Databases() {
   )
 }
 
+// Mirrors dbmgr.PostgresMajorFromImage: postgres:18-alpine, pgvector/pgvector:pg17,
+// timescale/timescaledb:2.17.2-pg16 → major version; '' when the tag doesn't say.
+export function pgMajorFromImage(image: string) {
+  const ref = image.trim().split('@')[0]
+  const i = ref.lastIndexOf(':')
+  if (i < 0 || i < ref.lastIndexOf('/')) return ''
+  const tag = ref.slice(i + 1)
+  return (tag.match(/pg-?(\d{2})(?:\D|$)/i) || tag.match(/^(\d{2})(?:\D|$)/) || [])[1] || ''
+}
+
+export const defaultImage = (eng: any, version: string) => (eng?.image || '').replace('{v}', version)
+
+export const imageHint: Record<string, string> = {
+  postgres: '可用兼容官方镜像的变体，如 pgvector/pgvector:pg17、postgis/postgis:17-3.5；版本按标签自动识别',
+  mysql: '可填私有仓库或镜像加速地址，需兼容官方 mysql 镜像的环境变量',
+  mariadb: '可填私有仓库或镜像加速地址，需兼容官方 mariadb 镜像的环境变量',
+  mongo: '可填私有仓库或镜像加速地址，需兼容官方 mongo 镜像的环境变量',
+  redis: '可用兼容的变体，如 valkey/valkey:8-alpine 或 redis/redis-stack-server',
+}
+
 export function engineLabel(id: string) {
   return ({ postgres: 'PostgreSQL', mysql: 'MySQL', mariadb: 'MariaDB', mongo: 'MongoDB', redis: 'Redis' } as Record<string, string>)[id] || id
 }
@@ -52,15 +72,21 @@ function CreateDB({ onClose }: { onClose: () => void }) {
   const { data: engines } = useLoad(() => get<any[]>('/db-engines'))
   const nav = useNavigate()
   const openJob = useJobLog()
-  const [f, setF] = useState({ name: '', engine: 'postgres', version: '', exposure: 'internal', port: 0, memLimit: '512m', initDb: '', initUser: '' })
+  const [f, setF] = useState({ name: '', engine: 'postgres', version: '', exposure: 'internal', port: 0, memLimit: '512m', image: '', initDb: '', initUser: '' })
   const [err, setErr] = useState<unknown>()
   const [busy, setBusy] = useState(false)
   const eng = engines?.find((e) => e.id === f.engine)
+  const version = f.version || eng?.versions[0] || ''
+  const setImage = (image: string) => {
+    // PostgreSQL's data layout depends on the major version, so follow the image's tag.
+    const m = f.engine === 'postgres' ? pgMajorFromImage(image) : ''
+    setF({ ...f, image, version: m && eng?.versions.includes(m) ? m : f.version })
+  }
   const submit = async () => {
     setBusy(true)
     setErr(undefined)
     try {
-      const r = await post('/databases', { ...f, version: f.version || eng?.versions[0], port: f.port || eng?.port })
+      const r = await post('/databases', { ...f, version, port: f.port || eng?.port, image: f.image.trim() })
       openJob(r.jobId, `创建数据库 ${f.name}`)
       nav(`/databases/${r.id}`)
     } catch (e) {
@@ -73,13 +99,13 @@ function CreateDB({ onClose }: { onClose: () => void }) {
     <Modal title="新建数据库" onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" disabled={busy || !f.name} onClick={submit}>{busy ? '创建中…' : '创建'}</button></>}>
       <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8 }}>
         {(engines || []).map((e) => (
-          <button key={e.id} className={'btn' + (f.engine === e.id ? ' btn-primary' : '')} style={{ height: 44 }} onClick={() => setF({ ...f, engine: e.id, version: '', port: 0 })}>{e.name}</button>
+          <button key={e.id} className={'btn' + (f.engine === e.id ? ' btn-primary' : '')} style={{ height: 44 }} onClick={() => setF({ ...f, engine: e.id, version: '', port: 0, image: '' })}>{e.name}</button>
         ))}
       </div>
       <div className="form-grid">
         <Field label="实例名" hint="也是内部网络中的主机名"><input className="input mono" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value.toLowerCase() })} placeholder={f.engine + '-main'} autoFocus /></Field>
         <Field label="版本">
-          <Select value={f.version || eng?.versions[0] || ''} onChange={(v) => setF({ ...f, version: v })}>
+          <Select value={version} onChange={(v) => setF({ ...f, version: v })}>
             {(eng?.versions || []).map((v: string) => <option key={v}>{v}</option>)}
           </Select>
         </Field>
@@ -93,6 +119,10 @@ function CreateDB({ onClose }: { onClose: () => void }) {
         <Field label="端口"><input className="input mono" inputMode="numeric" value={f.port || eng?.port || ''} onChange={(e) => setF({ ...f, port: Number(e.target.value) || 0 })} /></Field>
         <Field label="内存上限"><input className="input mono" value={f.memLimit} onChange={(e) => setF({ ...f, memLimit: e.target.value })} /></Field>
       </div>
+      <ImageField engine={f.engine} value={f.image} placeholder={defaultImage(eng, version)} version={version} onChange={setImage} />
+      {f.engine === 'postgres' && Number(version) >= 18 && (
+        <p className="label" style={{ margin: 0 }}>PostgreSQL 18 起数据目录改为 <code className="mono">/var/lib/postgresql/18/docker</code>，面板会把数据卷挂到 <code className="mono">/var/lib/postgresql</code>。</p>
+      )}
       {f.exposure === 'public' && <div className="alert warn">公网暴露的数据库容易被扫描和爆破，请确认防火墙和强密码。</div>}
       {f.engine !== 'redis' && (
         <div className="form-grid">
@@ -103,5 +133,19 @@ function CreateDB({ onClose }: { onClose: () => void }) {
       <p className="label" style={{ margin: 0 }}>root 密码随机生成并加密保存。应用项目可通过共享网络 <code className="mono">panel-db</code> 以实例名访问。</p>
       <ErrorBox error={err} />
     </Modal>
+  )
+}
+
+export function ImageField({ engine, value, placeholder, version, onChange, readOnly }: {
+  engine: string; value: string; placeholder: string; version: string; onChange: (v: string) => void; readOnly?: boolean
+}) {
+  const m = engine === 'postgres' ? pgMajorFromImage(value) : ''
+  return (
+    <Field label="镜像（可选）" hint={m && m !== version.split('.')[0]
+      ? <span style={{ color: '#A41E14' }}>该镜像是 PostgreSQL {m}，与版本 {version} 不一致</span>
+      : `留空使用官方镜像 ${placeholder}。${imageHint[engine] || ''}`}>
+      <input className="input mono" value={value} readOnly={readOnly} placeholder={placeholder} spellCheck={false} autoComplete="off"
+        onChange={(e) => onChange(e.target.value.trim())} />
+    </Field>
   )
 }
