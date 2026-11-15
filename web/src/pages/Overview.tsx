@@ -3,6 +3,9 @@ import { ago, bytes, duration, get, pct } from '../api'
 import { MetricsPanel } from '../components/charts'
 import { Card, Empty, ErrorBox, JobStatus, Loading, Meter, Page, Status, useJobLog, useLoad } from '../components/ui'
 
+// Rows shown per list card; the API returns at most 8 deployments and jobs.
+const ROWS = 8
+
 export default function Overview() {
   const { data: o, error } = useLoad(() => get<any>('/overview'), [], 15000)
   const openJob = useJobLog()
@@ -72,19 +75,19 @@ export default function Overview() {
       <MetricsPanel url="/metrics/host" host />
 
       <div className="grid-2">
-        <Card title="项目" actions={<Link className="btn btn-sm" to="/projects">全部项目</Link>} pad={false}>
+        <Card className="dash" title="项目" actions={<Link className="btn btn-sm" to="/projects">全部项目</Link>} pad={false}>
           {o.projects.length === 0 ? (
-            <Empty action={<Link className="btn btn-primary" to="/projects/new">新建项目</Link>}>还没有项目。</Empty>
+            <Empty icon="projects" action={<Link className="btn btn-primary" to="/projects/new">新建项目</Link>}>还没有项目。</Empty>
           ) : (
             <div className="table-wrap">
               <table>
-                <thead><tr><th>名称</th><th>状态</th><th>容器</th></tr></thead>
+                <thead><tr><th>名称</th><th className="c-status">状态</th><th className="c-time">容器</th></tr></thead>
                 <tbody>
-                  {o.projects.slice(0, 10).map((p: any) => (
+                  {o.projects.slice(0, ROWS).map((p: any) => (
                     <tr key={p.id}>
-                      <td><Link to={`/projects/${p.id}`}>{p.name}</Link>{p.kind === 'database' && <span className="tag" style={{ marginLeft: 8 }}>数据库</span>}</td>
+                      <td><div className="name"><Link to={`/projects/${p.id}`} title={p.name}>{p.name}</Link>{p.kind === 'database' && <span className="tag">数据库</span>}</div></td>
                       <td><Status s={p.status} /></td>
-                      <td className="mono">{p.running}/{p.total}</td>
+                      <td className="c-time mono">{p.running}/{p.total}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -93,20 +96,20 @@ export default function Overview() {
           )}
         </Card>
 
-        <Card title="最近部署" pad={false}>
+        <Card className="dash" title="最近部署" actions={<Link className="btn btn-sm" to="/jobs?kind=deploy">部署任务</Link>} pad={false}>
           {o.deployments.length === 0 ? (
-            <Empty>还没有部署记录。</Empty>
+            <Empty icon="rocket">还没有部署记录。</Empty>
           ) : (
             <div className="table-wrap">
               <table>
-                <thead><tr><th>项目</th><th>状态</th><th>触发</th><th>时间</th></tr></thead>
+                <thead><tr><th>项目</th><th className="c-status">状态</th><th>触发</th><th className="c-time">时间</th></tr></thead>
                 <tbody>
-                  {o.deployments.map((d: any) => (
+                  {o.deployments.slice(0, ROWS).map((d: any) => (
                     <tr key={d.deployment.id}>
-                      <td><Link to={`/deployments/${d.deployment.id}`}>{d.project} #{d.deployment.number}</Link></td>
+                      <td><Link to={`/deployments/${d.deployment.id}`} title={`${d.project} #${d.deployment.number}`}>{d.project} #{d.deployment.number}</Link></td>
                       <td><JobStatus s={d.deployment.status} /></td>
-                      <td className="muted">{triggerName(d.deployment.trigger)} · {d.deployment.actor}</td>
-                      <td className="muted nowrap">{ago(d.deployment.createdAt)}</td>
+                      <td className="muted" title={`${triggerName(d.deployment.trigger)} · ${d.deployment.actor}`}>{triggerName(d.deployment.trigger)} · {d.deployment.actor}</td>
+                      <td className="c-time muted">{ago(d.deployment.createdAt)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -115,18 +118,19 @@ export default function Overview() {
           )}
         </Card>
 
-        <Card title="最近任务" actions={<Link className="btn btn-sm" to="/jobs">任务中心</Link>} pad={false}>
+        <Card className="dash" title="最近任务" actions={<Link className="btn btn-sm" to="/jobs">任务中心</Link>} pad={false}>
           {o.jobs.length === 0 ? (
-            <Empty>最近 6 小时没有任务。</Empty>
+            <Empty icon="jobs">最近 6 小时没有任务。</Empty>
           ) : (
             <div className="table-wrap">
               <table>
+                <thead><tr><th>任务</th><th className="c-status">状态</th><th className="c-time">时间</th></tr></thead>
                 <tbody>
-                  {o.jobs.map((j: any) => (
+                  {o.jobs.slice(0, ROWS).map((j: any) => (
                     <tr key={j.id} className="clickable" onClick={() => openJob(j.id, j.title)}>
-                      <td>{j.title}</td>
+                      <td title={j.title}>{j.title}</td>
                       <td><JobStatus s={j.status} /></td>
-                      <td className="muted nowrap">{ago(j.createdAt)}</td>
+                      <td className="c-time muted">{ago(j.createdAt)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -135,17 +139,18 @@ export default function Overview() {
           )}
         </Card>
 
-        <Card title="证书" actions={<Link className="btn btn-sm" to="/certificates">全部证书</Link>} pad={false}>
+        <Card className="dash" title="证书" actions={<Link className="btn btn-sm" to="/certificates">全部证书</Link>} pad={false}>
           {o.certs.length === 0 ? (
-            <Empty>近期没有即将过期的证书。</Empty>
+            <Empty icon="certs">近期没有即将过期的证书。</Empty>
           ) : (
             <div className="table-wrap">
               <table>
+                <thead><tr><th>域名</th><th className="c-time">剩余</th></tr></thead>
                 <tbody>
-                  {o.certs.map((c: any) => (
+                  {o.certs.slice(0, ROWS).map((c: any) => (
                     <tr key={c.id + c.name}>
-                      <td className="mono">{c.domains?.join(', ')}</td>
-                      <td><span className={'badge ' + (c.daysLeft <= 7 ? 'err' : 'warn')}>剩 {c.daysLeft} 天</span></td>
+                      <td className="mono" title={c.domains?.join(', ')}>{c.domains?.join(', ')}</td>
+                      <td className="c-time"><span className={'badge ' + (c.daysLeft <= 7 ? 'err' : 'warn')}>剩 {c.daysLeft} 天</span></td>
                     </tr>
                   ))}
                 </tbody>

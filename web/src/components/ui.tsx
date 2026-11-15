@@ -76,9 +76,9 @@ export function Page({ title, crumbs, actions, children, sub }: { title: ReactNo
   )
 }
 
-export function Card({ title, actions, children, pad = true }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; pad?: boolean }) {
+export function Card({ title, actions, children, pad = true, className }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; pad?: boolean; className?: string }) {
   return (
-    <section className="card">
+    <section className={'card' + (className ? ' ' + className : '')}>
       {(title || actions) && (
         <div className="card-head">
           <h2 className="st">{title}</h2>
@@ -90,9 +90,10 @@ export function Card({ title, actions, children, pad = true }: { title?: ReactNo
   )
 }
 
-export function Empty({ children, action }: { children: ReactNode; action?: ReactNode }) {
+export function Empty({ children, action, icon }: { children: ReactNode; action?: ReactNode; icon?: string }) {
   return (
     <div className="empty">
+      {icon && <span className="empty-icon"><Icon name={icon} size={22} /></span>}
       <div>{children}</div>
       {action}
     </div>

@@ -20,7 +20,7 @@ const kinds: [string, string][] = [['', '全部类型'], ['deploy', '部署'], [
 
 function JobList() {
   const [status, setStatus] = useState('')
-  const [kind, setKind] = useState('')
+  const [kind, setKind] = useState(() => new URLSearchParams(location.search).get('kind') || '')
   const { data, error } = useLoad(() => get<any[]>(`/jobs?limit=200${status ? '&status=' + status : ''}${kind ? '&kind=' + kind : ''}`), [status, kind], 4000)
   const openJob = useJobLog()
   return (
