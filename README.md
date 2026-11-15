@@ -30,13 +30,27 @@
 
 ## 快速开始（Linux 服务器）
 
-要求：Docker 24+ 与 docker compose 插件，80/443 端口空闲。
+要求：Docker 24+ 与 docker compose 插件，80/443 端口空闲，x86_64（amd64）架构。
+
+**推荐：使用预构建镜像**（VPS 上不编译，只需两个文件）。镜像由 GitHub Actions 构建并推送到 `ghcr.io/speedupmaster/compose-panel`：
 
 ```bash
-git clone <本仓库> compose-panel && cd compose-panel/deploy
+mkdir -p /opt/compose-panel/deploy && cd /opt/compose-panel/deploy
+curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/SpeedupMaster/compose-panel/main/deploy/docker-compose.ghcr.yml
+curl -fsSLo Caddyfile https://raw.githubusercontent.com/SpeedupMaster/compose-panel/main/deploy/Caddyfile
+docker compose up -d
+docker compose logs panel | grep -i token     # 首次启动打印的初始化令牌
+```
+
+升级：`docker compose pull && docker compose up -d`。默认跟随 `latest`（main 分支最新构建）；想固定版本，在同目录 `.env` 里写 `PANEL_IMAGE=ghcr.io/speedupmaster/compose-panel:1.2.3`（对应 `v1.2.3` tag），回滚时改回旧版本号再 `up -d` 即可。
+
+**从源码构建**（开发或需要修改代码时；构建需要较多内存，1 GB 内存的小机器可能失败）：
+
+```bash
+git clone https://github.com/SpeedupMaster/compose-panel.git && cd compose-panel/deploy
 # 国内网络可加：export GOPROXY=https://goproxy.cn,direct NPM_REGISTRY=https://registry.npmmirror.com
 docker compose up -d --build
-docker compose logs panel | grep -i token     # 首次启动打印的初始化令牌
+docker compose logs panel | grep -i token
 ```
 
 打开 `http://<服务器 IP>:7800`，输入初始化令牌创建管理员。然后建议：
@@ -150,7 +164,7 @@ internal/jobs        持久化任务队列与日志
 internal/notify      通知渠道（含钉钉/飞书/Bark）
 internal/server      HTTP API、调度、监控
 web/                 React + Vite 前端（构建后嵌入二进制）
-deploy/              docker-compose.yml 与 Caddy 引导配置
+deploy/              docker-compose.yml（源码构建）、docker-compose.ghcr.yml（预构建镜像）与 Caddy 引导配置
 ```
 
 ## 当前状态与限制

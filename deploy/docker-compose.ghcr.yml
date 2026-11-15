@@ -1,0 +1,67 @@
+# Compose Panel + Caddy, using the prebuilt image from GHCR (recommended for VPS).
+# Nothing is compiled on the server; only this file and Caddyfile are needed:
+#   mkdir -p /opt/compose-panel/deploy && cd /opt/compose-panel/deploy
+#   curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/SpeedupMaster/compose-panel/main/deploy/docker-compose.ghcr.yml
+#   curl -fsSLo Caddyfile https://raw.githubusercontent.com/SpeedupMaster/compose-panel/main/deploy/Caddyfile
+#   docker compose up -d
+#   docker compose logs panel   # shows the one-time setup token
+# Upgrade: docker compose pull && docker compose up -d
+# Pin a version with PANEL_IMAGE=ghcr.io/speedupmaster/compose-panel:1.2.3 in .env.
+#
+# Keep in sync with docker-compose.yml (the source-build variant used by the dev scripts).
+# Project and backup directories are mounted at the SAME path inside the panel,
+# because `docker compose` resolves relative bind mounts on the host.
+name: compose-panel
+
+services:
+  panel:
+    image: ${PANEL_IMAGE:-ghcr.io/speedupmaster/compose-panel:latest}
+    container_name: panel
+    restart: unless-stopped
+    environment:
+      PANEL_DATA_DIR: /data/panel
+      PANEL_PROJECTS_DIR: ${PANEL_ROOT:-/opt/compose-panel}/projects
+      PANEL_BACKUPS_DIR: ${PANEL_ROOT:-/opt/compose-panel}/backups
+      PANEL_CADDY_ADMIN: /run/caddy/admin.sock
+      PANEL_CADDY_DATA: /caddy-data/caddy
+      PANEL_UPSTREAM: panel:7800
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PANEL_ROOT:-/opt/compose-panel}/data:/data/panel
+      - ${PANEL_ROOT:-/opt/compose-panel}/projects:${PANEL_ROOT:-/opt/compose-panel}/projects
+      - ${PANEL_ROOT:-/opt/compose-panel}/backups:${PANEL_ROOT:-/opt/compose-panel}/backups
+      - caddy-admin:/run/caddy
+      - caddy-data:/caddy-data:ro
+    ports:
+      # First login happens here. After setting a panel domain in Settings,
+      # change this to "127.0.0.1:7800:7800" (or remove it) and use https://<domain>.
+      - "${PANEL_PORT:-7800}:7800"
+    networks: [proxy]
+    depends_on: [caddy]
+
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: panel-caddy
+    restart: unless-stopped
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-admin:/run/caddy
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [proxy]
+
+networks:
+  # Shared with every project; the panel creates panel-db itself on first use.
+  proxy:
+    name: panel-proxy
+
+volumes:
+  caddy-admin:
+  caddy-data:
+  caddy-config:
