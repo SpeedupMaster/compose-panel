@@ -154,6 +154,22 @@ h1, h2, h3 { margin: 0; }
 .seg button:focus-visible { outline: 2px solid #E8A16B; outline-offset: 0; }
 .seg button:disabled { opacity: .45; cursor: not-allowed; }
 
+/* Combobox: text input with a suggestion menu (menu reuses .select-menu). */
+.combo { position: relative; width: 100%; }
+.field > .combo { max-width: 560px; }
+.combo > .input { padding-right: 36px; }
+.combo-toggle { position: absolute; top: 1px; right: 1px; bottom: 1px; width: 34px; display: grid; place-items: center; border: 0; border-radius: 0 5px 5px 0; background: none; color: #8A8D93; cursor: pointer; }
+.combo-toggle:hover { color: var(--ink); }
+.combo-toggle svg { transition: transform .15s; }
+.combo.open .combo-toggle svg { transform: rotate(180deg); color: var(--accent); }
+.combo.open > .input { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(181,71,8,.12); outline: none; }
+.combo-menu li { justify-content: space-between; gap: 16px; }
+.combo-main { display: flex; flex-direction: column; min-width: 0; }
+.combo-main .mono { font-size: 13px; }
+.combo-label { font-size: 12px; color: var(--muted); font-weight: 400; }
+.combo-hint { font-size: 12px; color: var(--muted); font-weight: 400; flex: none; }
+.combo-menu li.selected .combo-label { color: var(--muted); }
+
 /* Table footer pager. */
 .pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; padding: 10px 16px; border-top: 1px solid var(--line); }
 .pager-ctrl { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }

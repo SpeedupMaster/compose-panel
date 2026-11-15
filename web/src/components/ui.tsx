@@ -513,6 +513,154 @@ export function Meter({ value, max, warnAt = 75, errAt = 90 }: { value: number; 
   )
 }
 
+// ---------- combobox ----------
+// Free-text input with a suggestion list: type anything, or open the list (chevron, ArrowDown)
+// and pick. Typing filters the list; the menu shares Select's look and portal placement.
+
+export type ComboOption = { value: string; label?: ReactNode; hint?: ReactNode; disabled?: boolean }
+
+let comboSeq = 0
+
+export function Combobox({ value, onChange, options, placeholder, className, mono, autoFocus, ...aria }: {
+  value: string
+  onChange: (v: string) => void
+  options: ComboOption[]
+  placeholder?: string
+  className?: string
+  mono?: boolean
+  autoFocus?: boolean
+  'aria-label'?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [filter, setFilter] = useState(false) // filter by the typed text (off when opened from the chevron)
+  const [active, setActive] = useState(-1)
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; width: number; maxHeight: number } | null>(null)
+  const boxRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLUListElement>(null)
+  const [uid] = useState(() => 'combo' + ++comboSeq)
+
+  const q = value.trim().toLowerCase()
+  const shown = filter && q
+    ? options.filter((o) => o.value.toLowerCase().includes(q) || nodeText(o.label).toLowerCase().includes(q) || nodeText(o.hint).toLowerCase().includes(q))
+    : options
+
+  const place = useCallback(() => {
+    const r = boxRef.current?.getBoundingClientRect()
+    if (!r) return
+    const gap = 4
+    const below = window.innerHeight - r.bottom - gap - 8
+    const above = r.top - gap - 8
+    const up = below < 200 && above > below
+    setPos({
+      left: Math.max(8, Math.min(r.left, window.innerWidth - r.width - 8)),
+      width: r.width,
+      maxHeight: Math.max(120, Math.min(320, up ? above : below)),
+      ...(up ? { bottom: window.innerHeight - r.top + gap } : { top: r.bottom + gap }),
+    })
+  }, [])
+
+  const show = (withFilter: boolean) => {
+    place()
+    setFilter(withFilter)
+    setActive(-1)
+    setOpen(true)
+  }
+  const pick = (o: ComboOption | undefined) => {
+    if (!o || o.disabled) return
+    onChange(o.value)
+    setOpen(false)
+    inputRef.current?.focus()
+  }
+  const step = (from: number, dir: 1 | -1) => {
+    for (let i = from + dir; i >= 0 && i < shown.length; i += dir) if (!shown[i].disabled) return i
+    return from
+  }
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (!boxRef.current?.contains(t) && !listRef.current?.contains(t)) setOpen(false)
+    }
+    const onMove = (e: Event) => {
+      if (listRef.current && e.target instanceof Node && listRef.current.contains(e.target)) return
+      place()
+    }
+    document.addEventListener('mousedown', onDown)
+    window.addEventListener('resize', onMove)
+    window.addEventListener('scroll', onMove, true)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      window.removeEventListener('resize', onMove)
+      window.removeEventListener('scroll', onMove, true)
+    }
+  }, [open, place])
+
+  useEffect(() => {
+    if (open && active >= 0) listRef.current?.children[active]?.scrollIntoView({ block: 'nearest' })
+  }, [open, active])
+
+  const onKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    const k = e.key
+    if (!open) {
+      if (k === 'ArrowDown' || k === 'ArrowUp') { e.preventDefault(); show(false) }
+      return
+    }
+    if (k === 'Escape') { e.preventDefault(); e.stopPropagation(); setOpen(false) }
+    else if (k === 'Tab') setOpen(false)
+    else if (k === 'ArrowDown') { e.preventDefault(); setActive((a) => step(a, 1)) }
+    else if (k === 'ArrowUp') { e.preventDefault(); setActive((a) => step(a, -1)) }
+    else if (k === 'Enter' && active >= 0) { e.preventDefault(); pick(shown[active]) }
+  }
+
+  return (
+    <div ref={boxRef} className={'combo' + (open ? ' open' : '') + (className ? ' ' + className : '')}>
+      <input
+        ref={inputRef}
+        className={'input' + (mono ? ' mono' : '')}
+        value={value}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+        autoComplete="off"
+        spellCheck={false}
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={uid}
+        aria-autocomplete="list"
+        aria-activedescendant={open && active >= 0 ? `${uid}-${active}` : undefined}
+        aria-label={aria['aria-label']}
+        onChange={(e) => { onChange(e.target.value); if (!open) show(true); else { setFilter(true); setActive(-1) } }}
+        onKeyDown={onKey}
+      />
+      <button type="button" className="combo-toggle" tabIndex={-1} aria-label="展开选项"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => { e.preventDefault(); if (open) setOpen(false); else { show(false); inputRef.current?.focus() } }}>
+        <Icon name="chevron-down" size={16} />
+      </button>
+      {open && pos && shown.length > 0 && createPortal(
+        <ul ref={listRef} id={uid} role="listbox" className="select-menu combo-menu"
+          style={{ left: pos.left, top: pos.top, bottom: pos.bottom, minWidth: pos.width, maxWidth: Math.max(pos.width, 480), maxHeight: pos.maxHeight }}>
+          {shown.map((o, i) => (
+            <li key={o.value} id={`${uid}-${i}`} role="option" aria-selected={o.value === value} aria-disabled={o.disabled || undefined}
+              className={(i === active ? 'active' : '') + (o.value === value ? ' selected' : '') + (o.disabled ? ' disabled' : '')}
+              onMouseEnter={() => !o.disabled && setActive(i)}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => pick(o)}>
+              <span className="combo-main">
+                <span className="mono">{o.value}</span>
+                {o.label && <span className="combo-label">{o.label}</span>}
+              </span>
+              {o.hint && <span className="combo-hint">{o.hint}</span>}
+            </li>
+          ))}
+        </ul>,
+        document.body,
+      )}
+    </div>
+  )
+}
+
 // ---------- select ----------
 // Styled replacement for <select>. Takes the same <option> children, so call sites read the
 // same; onChange receives the chosen value as a string. The menu is portalled to <body> so it

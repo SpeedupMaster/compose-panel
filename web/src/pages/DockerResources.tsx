@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { ago, bytes, del, get, post } from '../api'
 import { useCan } from '../auth'
-import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Status, Tabs, useLoad, useToast } from '../components/ui'
+import { Card, Combobox, ComboOption, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Status, Tabs, useLoad, useToast } from '../components/ui'
 import { portsText } from './ProjectDetail'
 import { FileBrowser } from '../components/files'
 
@@ -199,8 +199,39 @@ function Networks() {
   )
 }
 
+// Common registries offered in the address field; users can still type any host.
+const knownRegistries: [string, string, string?][] = [
+  ['docker.io', 'Docker Hub'],
+  ['ghcr.io', 'GitHub Container Registry'],
+  ['registry.gitlab.com', 'GitLab Container Registry'],
+  ['quay.io', 'Red Hat Quay'],
+  ['public.ecr.aws', 'Amazon ECR Public'],
+  ['us-docker.pkg.dev', 'Google Artifact Registry', '按区域替换'],
+  ['registry.cn-hangzhou.aliyuncs.com', '阿里云 ACR', '按地域替换'],
+  ['ccr.ccs.tencentyun.com', '腾讯云 TCR 个人版'],
+  ['swr.cn-north-4.myhuaweicloud.com', '华为云 SWR', '按区域替换'],
+]
+
+// Registry host of an image reference, or '' for Docker Hub short names (nginx, me/app).
+function registryHost(ref: string) {
+  const first = ref.split('/')[0]
+  return ref.includes('/') && (first.includes('.') || first.includes(':') || first === 'localhost') ? first : ''
+}
+
+function registryOptions(images: any[] | undefined, existing: string[]): ComboOption[] {
+  const taken = new Set(existing)
+  const known = new Set(knownRegistries.map(([h]) => h))
+  const local = [...new Set((images || []).flatMap((im) => (im.tags || []).map(registryHost)).filter((h: string) => h && !known.has(h) && h !== 'docker.io'))].sort()
+  const tag = (h: string) => (taken.has(h) ? '已添加' : undefined)
+  return [
+    ...local.map((h) => ({ value: h, label: '本机镜像中使用', hint: tag(h) })),
+    ...knownRegistries.map(([h, l, note]) => ({ value: h, label: note ? `${l} · ${note}` : l, hint: tag(h) })),
+  ]
+}
+
 function Registries() {
   const { data, error, reload } = useLoad(() => get<any[]>('/registries'), [])
+  const { data: images } = useLoad(() => get<any[]>('/docker/images').catch(() => []), [])
   const can = useCan()
   const toast = useToast()
   const [form, setForm] = useState<{ host: string; username: string; password: string } | null>(null)
@@ -226,7 +257,10 @@ function Registries() {
       )}
       {form && (
         <Modal title="添加镜像仓库凭据" onClose={() => setForm(null)} footer={<><button className="btn" onClick={() => setForm(null)}>取消</button><button className="btn btn-primary" onClick={async () => { try { await post('/registries', form); setForm(null); reload() } catch (e) { toast.err(e) } }}>保存</button></>}>
-          <Field label="地址" hint="如 ghcr.io、registry.example.com；Docker Hub 填 docker.io"><input className="input mono" value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} /></Field>
+          <Field label="地址" hint="从列表选择，或直接输入仓库地址，如 registry.example.com:5000">
+            <Combobox mono autoFocus aria-label="仓库地址" value={form.host} placeholder="docker.io" onChange={(host) => setForm({ ...form, host })}
+              options={registryOptions(images, data.map((r) => r.host))} />
+          </Field>
           <Field label="用户名"><input className="input" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>
           <Field label="密码 / 访问令牌"><input className="input" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="new-password" /></Field>
         </Modal>
