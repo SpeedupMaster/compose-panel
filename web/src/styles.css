@@ -8,16 +8,19 @@
   --accent-hover: #93370D;
   --side: #17181B;
   --blue: #1D44B8;
-  --font: 'IBM Plex Sans', 'Noto Sans SC', system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
-  --mono: 'IBM Plex Mono', 'Noto Sans SC', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  /* IBM Plex (Latin) is bundled with the app; CJK falls through to one consistent system
+     Chinese face per OS so every page, control and popup renders the same text. */
+  --cjk: 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans SC';
+  --font: 'IBM Plex Sans', var(--cjk), system-ui, sans-serif;
+  --mono: 'IBM Plex Mono', var(--cjk), ui-monospace, Consolas, monospace;
 }
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
-body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--font); font-size: 14px; line-height: 1.5; }
+body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--font); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
 a { color: var(--accent-hover); }
 a:hover { color: #6E2A0A; }
-button, input, select, textarea { font: inherit; color: inherit; }
+button, input, select, textarea, optgroup { font: inherit; color: inherit; }
 h1, h2, h3 { margin: 0; }
 
 .mono { font-family: var(--mono); font-size: 13px; }
@@ -89,7 +92,25 @@ h1, h2, h3 { margin: 0; }
 .link-btn { background: none; border: 0; padding: 0; color: var(--accent-hover); cursor: pointer; text-decoration: underline; }
 
 .input, .select, .textarea { width: 100%; min-height: 36px; padding: 7px 10px; border: 1px solid #CFCFCA; border-radius: 6px; background: #fff; }
-.input:focus, .select:focus, .textarea:focus, .btn:focus-visible, .nav:focus-visible { outline: 2px solid #E8A16B; outline-offset: 1px; }
+.input:focus, .select:focus-visible, .textarea:focus, .btn:focus-visible, .nav:focus-visible { outline: 2px solid #E8A16B; outline-offset: 1px; }
+
+/* custom select (see <Select> in ui.tsx) */
+.select { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px 0 12px; text-align: left; cursor: pointer; transition: border-color .12s, box-shadow .12s; }
+.select:hover:not(:disabled) { border-color: #AFAFA9; }
+.select.open { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(181,71,8,.12); }
+.select:disabled { background: #FAFAF8; color: var(--muted); cursor: not-allowed; }
+.select > svg { color: #8A8D93; transition: transform .15s; }
+.select.open > svg { transform: rotate(180deg); color: var(--accent); }
+.select.sm { height: 30px; min-height: 30px; font-size: 13px; padding: 0 8px 0 10px; }
+.select-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.select-value.placeholder { color: #8A8D93; }
+.select-menu { position: fixed; z-index: 300; margin: 0; padding: 4px; list-style: none; overflow-y: auto; max-width: min(480px, calc(100vw - 16px)); background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 32px rgba(24,25,27,.14), 0 2px 6px rgba(24,25,27,.06); font-size: 14px; animation: select-in .12s ease-out; }
+.select-menu li { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 6px 10px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
+.select-menu li.active { background: #F4F4F1; }
+.select-menu li.selected { color: var(--accent-hover); font-weight: 500; }
+.select-menu li.disabled { color: #A3A5AA; cursor: default; background: none; }
+.select-menu li > svg { color: var(--accent); }
+@keyframes select-in { from { opacity: 0; transform: translateY(-2px); } }
 .textarea { min-height: 90px; resize: vertical; }
 .code { font-family: var(--mono); font-size: 13px; line-height: 1.55; tab-size: 2; white-space: pre; }
 .field { display: flex; flex-direction: column; gap: 6px; }

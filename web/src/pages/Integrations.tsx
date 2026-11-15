@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ago, bytes, del, get, post, put } from '../api'
-import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, SecretBox, Tabs, useLoad, useToast } from '../components/ui'
+import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, SecretBox, Select, Tabs, useLoad, useToast } from '../components/ui'
 
 export default function Integrations() {
   const [tab, setTab] = useState<'storage' | 'notify' | 'key'>('storage')
@@ -215,9 +215,9 @@ function ChannelModal({ c, onClose, onSaved }: { c: Channel; onClose: () => void
     <Modal title={c.id ? '编辑通知渠道' : '添加通知渠道'} onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" onClick={async () => { try { c.id ? await put(`/notify/channels/${c.id}`, f) : await post('/notify/channels', f); onSaved() } catch (e) { setErr(e) } }}>保存</button></>}>
       <Field label="名称"><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
       <Field label="类型">
-        <select className="select" value={f.kind} disabled={!!c.id} onChange={(e) => setF({ ...f, kind: e.target.value as Channel['kind'], config: {} })}>
+        <Select value={f.kind} disabled={!!c.id} onChange={(v) => setF({ ...f, kind: v as Channel['kind'], config: {} })}>
           {Object.entries(kindName).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-        </select>
+        </Select>
       </Field>
       {f.kind === 'telegram' && (
         <>

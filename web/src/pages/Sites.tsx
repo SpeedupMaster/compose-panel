@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { del, get, post, put } from '../api'
 import { useCan } from '../auth'
-import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, useLoad, useToast } from '../components/ui'
+import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Select, useLoad, useToast } from '../components/ui'
 import { AccessLogs } from './SiteLogs'
 
 type Site = {
@@ -160,14 +160,14 @@ function SiteModal({ s, onClose, onSaved }: { s: Site; onClose: () => void; onSa
       {mode === 'project' && (
         <div className="form-grid">
           <Field label="项目">
-            <select className="select" value={f.projectId || ''} onChange={(e) => setF({ ...f, projectId: Number(e.target.value), service: '' })}>
+            <Select value={f.projectId || ''} onChange={(v) => setF({ ...f, projectId: Number(v), service: '' })}>
               <option value="">选择项目</option>
               {(projects || []).filter((p) => p.kind !== 'database').map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            </Select>
           </Field>
           <Field label="服务">
             {services.length ? (
-              <select className="select" value={f.service || services[0]} onChange={(e) => setF({ ...f, service: e.target.value })}>{services.map((x) => <option key={x}>{x}</option>)}</select>
+              <Select value={f.service || services[0]} onChange={(v) => setF({ ...f, service: v })}>{services.map((x) => <option key={x}>{x}</option>)}</Select>
             ) : (
               <input className="input mono" value={f.service} onChange={(e) => setF({ ...f, service: e.target.value })} placeholder="web" />
             )}

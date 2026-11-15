@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { bytes, get, qs } from '../api'
-import { ErrorBox, Icon, Loading, Modal, useLoad } from '../components/ui'
+import { ErrorBox, Icon, Loading, Modal, Select, useLoad } from '../components/ui'
 
 type Entry = { ts: number; ip: string; method: string; host: string; uri: string; proto: string; status: number; size: number; durationMs: number; ua: string; referer: string }
 type Resp = { enabled: boolean; entries: Entry[]; total: number; avgMs: number; classes: Record<string, number>; topPaths: { key: string; count: number }[]; topIps: { key: string; count: number }[]; files: number }
@@ -30,20 +30,20 @@ export function AccessLogs({ site, onClose }: { site: any; onClose: () => void }
     <Modal title={<>访问日志 · <span className="mono">{site.domains[0]}</span></>} wide onClose={onClose}>
       {data && !data.enabled && <div className="alert warn"><Icon name="alert" />这个站点没有开启访问日志，下面只显示之前记录的内容。在站点设置中开启「记录访问日志」。</div>}
       <form className="row wrap" onSubmit={(e) => { e.preventDefault(); apply() }}>
-        <select className="select" style={{ width: 120 }} aria-label="时间范围" value={hours} onChange={(e) => setHours(Number(e.target.value))}>
+        <Select style={{ width: 120 }} aria-label="时间范围" value={hours} onChange={(v) => setHours(Number(v))}>
           <option value={1}>1 小时</option>
           <option value={6}>6 小时</option>
           <option value={24}>24 小时</option>
           <option value={72}>3 天</option>
           <option value={168}>7 天</option>
-        </select>
-        <select className="select" style={{ width: 110 }} aria-label="状态码" value={status} onChange={(e) => { setStatus(e.target.value); setApplied({ status: e.target.value, path, ip }) }}>
+        </Select>
+        <Select style={{ width: 110 }} aria-label="状态码" value={status} onChange={(v) => { setStatus(v); setApplied({ status: v, path, ip }) }}>
           <option value="">全部状态</option>
           <option value="2xx">2xx</option>
           <option value="3xx">3xx</option>
           <option value="4xx">4xx</option>
           <option value="5xx">5xx</option>
-        </select>
+        </Select>
         <input className="input mono" style={{ width: 200 }} placeholder="路径包含" aria-label="路径" value={path} onChange={(e) => setPath(e.target.value)} />
         <input className="input mono" style={{ width: 150 }} placeholder="IP 前缀" aria-label="IP" value={ip} onChange={(e) => setIp(e.target.value)} />
         <button className="btn btn-sm" type="submit"><Icon name="search" size={16} />筛选</button>

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ago, dateTime, del, get, post, put } from '../api'
 import { roleName, useAuth, useCan } from '../auth'
-import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, SecretBox, Tabs, useLoad, useToast } from '../components/ui'
+import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, SecretBox, Select, Tabs, useLoad, useToast } from '../components/ui'
 
 export default function Access() {
   const can = useCan()
@@ -78,11 +78,11 @@ function UserModal({ u, onClose, onSaved }: { u: UserForm; onClose: () => void; 
         <Field label="邮箱"><input className="input" type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
       </div>
       <Field label="角色">
-        <select className="select" value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>
+        <Select value={f.role} onChange={(v) => setF({ ...f, role: v })}>
           <option value="viewer">只读：查看状态与日志</option>
           <option value="operator">运维：部署、重启、备份、终端</option>
           <option value="admin">管理员：全部权限，包括用户与设置</option>
-        </select>
+        </Select>
       </Field>
       {f.role !== 'admin' && (
         <Field label="可访问的项目">
@@ -140,19 +140,19 @@ function Tokens() {
         <Modal title="创建 API 令牌" onClose={() => setCreate(null)} footer={<><button className="btn" onClick={() => setCreate(null)}>取消</button><button className="btn btn-primary" onClick={async () => { try { const r = await post('/tokens', create); setCreate(null); setTok(r.token); reload() } catch (e) { setErr(e) } }}>创建</button></>}>
           <Field label="名称"><input className="input" value={create.name} onChange={(e) => setCreate({ ...create, name: e.target.value })} placeholder="GitHub Actions" /></Field>
           <Field label="权限" hint="令牌权限不会超过你自己的角色">
-            <select className="select" value={create.scope} onChange={(e) => setCreate({ ...create, scope: e.target.value })}>
+            <Select value={create.scope} onChange={(v) => setCreate({ ...create, scope: v })}>
               <option value="read">只读</option>
               <option value="deploy">部署（读取 + 部署/重启）</option>
               <option value="full">完全（等同你的账号）</option>
-            </select>
+            </Select>
           </Field>
           <Field label="有效期">
-            <select className="select" value={create.days} onChange={(e) => setCreate({ ...create, days: Number(e.target.value) })}>
+            <Select value={create.days} onChange={(v) => setCreate({ ...create, days: Number(v) })}>
               <option value={30}>30 天</option>
               <option value={90}>90 天</option>
               <option value={365}>1 年</option>
               <option value={0}>永不过期</option>
-            </select>
+            </Select>
           </Field>
           <ErrorBox error={err} />
         </Modal>
@@ -181,11 +181,11 @@ function Audit() {
           <input className="input" style={{ width: 140 }} placeholder="用户" aria-label="用户" value={f.actor} onChange={(e) => { setF({ ...f, actor: e.target.value }); setPage(0) }} />
           <input className="input" style={{ width: 160 }} placeholder="操作，如 project." aria-label="操作" value={f.action} onChange={(e) => { setF({ ...f, action: e.target.value }); setPage(0) }} />
           <input className="input" style={{ width: 180 }} placeholder="搜索对象/详情" aria-label="搜索" value={f.q} onChange={(e) => { setF({ ...f, q: e.target.value }); setPage(0) }} />
-          <select className="select" style={{ width: 110 }} aria-label="结果" value={f.result} onChange={(e) => { setF({ ...f, result: e.target.value }); setPage(0) }}>
+          <Select style={{ width: 110 }} aria-label="结果" value={f.result} onChange={(v) => { setF({ ...f, result: v }); setPage(0) }}>
             <option value="">全部</option>
             <option value="ok">成功</option>
             <option value="failed">失败</option>
-          </select>
+          </Select>
         </div>
         <div className="row">
           <button className="btn btn-sm" onClick={async () => { try { const r = await get('/audit/verify'); r.ok ? toast.ok(`哈希链完整（${r.count} 条）`) : toast.err(`哈希链在第 ${r.brokenAt} 条处断开，日志可能被篡改`) } catch (e) { toast.err(e) } }}><Icon name="check" size={16} />校验完整性</button>

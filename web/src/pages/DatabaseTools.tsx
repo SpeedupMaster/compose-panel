@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { downloadCSV, get, post, qs, upload } from '../api'
 import { useCan } from '../auth'
 import { CodeArea } from '../components/editors'
-import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
+import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Select, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
 
 type QueryResult = { columns?: string[]; rows?: string[][]; truncated?: boolean; elapsedMs?: number; error?: string; needConfirm?: boolean; reasons?: string[] }
 
@@ -13,9 +13,9 @@ function DbPicker({ id, value, onChange }: { id: string; value: string; onChange
     if (!value && cur) onChange(cur)
   }, [value, cur]) // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <select className="select" aria-label="库" value={cur} onChange={(e) => onChange(e.target.value)}>
+    <Select aria-label="库" value={cur} onChange={(v) => onChange(v)}>
       {(dbs || []).map((x) => <option key={x.name}>{x.name}</option>)}
-    </select>
+    </Select>
   )
 }
 

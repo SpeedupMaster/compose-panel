@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ago, bytes, get, post } from '../api'
 import { useCan } from '../auth'
-import { Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Status, useJobLog, useLoad } from '../components/ui'
+import { Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Select, Status, useJobLog, useLoad } from '../components/ui'
 
 export const exposureName: Record<string, string> = { internal: '仅内部网络', local: '本机 127.0.0.1', public: '公网' }
 
@@ -79,16 +79,16 @@ function CreateDB({ onClose }: { onClose: () => void }) {
       <div className="form-grid">
         <Field label="实例名" hint="也是内部网络中的主机名"><input className="input mono" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value.toLowerCase() })} placeholder={f.engine + '-main'} autoFocus /></Field>
         <Field label="版本">
-          <select className="select" value={f.version || eng?.versions[0] || ''} onChange={(e) => setF({ ...f, version: e.target.value })}>
+          <Select value={f.version || eng?.versions[0] || ''} onChange={(v) => setF({ ...f, version: v })}>
             {(eng?.versions || []).map((v: string) => <option key={v}>{v}</option>)}
-          </select>
+          </Select>
         </Field>
         <Field label="访问方式">
-          <select className="select" value={f.exposure} onChange={(e) => setF({ ...f, exposure: e.target.value })}>
+          <Select value={f.exposure} onChange={(v) => setF({ ...f, exposure: v })}>
             <option value="internal">仅内部网络（推荐）</option>
             <option value="local">映射到本机 127.0.0.1</option>
             <option value="public">映射到公网（不推荐）</option>
-          </select>
+          </Select>
         </Field>
         <Field label="端口"><input className="input mono" inputMode="numeric" value={f.port || eng?.port || ''} onChange={(e) => setF({ ...f, port: Number(e.target.value) || 0 })} /></Field>
         <Field label="内存上限"><input className="input mono" value={f.memLimit} onChange={(e) => setF({ ...f, memLimit: e.target.value })} /></Field>

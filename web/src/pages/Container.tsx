@@ -7,7 +7,7 @@ import { bytes, dateTime, get, post, streamLines } from '../api'
 import { useCan } from '../auth'
 import { MetricsPanel } from '../components/charts'
 import { FileBrowser } from '../components/files'
-import { Card, Confirm, ErrorBox, Icon, Loading, LogView, Meter, Page, Status, Tabs, useAction, useLoad } from '../components/ui'
+import { Card, Confirm, ErrorBox, Icon, Loading, LogView, Meter, Page, Select, Status, Tabs, useAction, useLoad } from '../components/ui'
 
 type Tab = 'logs' | 'terminal' | 'files' | 'metrics' | 'info'
 
@@ -94,9 +94,9 @@ function Logs({ id, running }: { id: string; running: boolean }) {
       <div className="card-head">
         <div className="row wrap">
           <input className="input" style={{ width: 220 }} placeholder="筛选" aria-label="筛选日志" value={filter} onChange={(e) => setFilter(e.target.value)} />
-          <select className="select" style={{ width: 130 }} aria-label="行数" value={tail} onChange={(e) => setTail(e.target.value)}>
+          <Select style={{ width: 130 }} aria-label="行数" value={tail} onChange={(v) => setTail(v)}>
             {['200', '500', '2000', '10000', 'all'].map((t) => <option key={t} value={t}>{t === 'all' ? '全部' : `最近 ${t} 行`}</option>)}
-          </select>
+          </Select>
           <label className="check"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />实时跟随</label>
           <label className="check"><input type="checkbox" checked={ts} onChange={(e) => setTs(e.target.checked)} />时间戳</label>
         </div>
@@ -119,7 +119,7 @@ function Term({ id }: { id: string }) {
   const [state, setState] = useState<'connecting' | 'open' | 'closed'>('connecting')
   useEffect(() => {
     if (!ref.current) return
-    const term = new Terminal({ fontFamily: "'IBM Plex Mono', Consolas, monospace", fontSize: 13, cursorBlink: true, theme: { background: '#121315' }, scrollback: 5000 })
+    const term = new Terminal({ fontFamily: "'IBM Plex Mono', 'Microsoft YaHei UI', 'PingFang SC', Consolas, monospace", fontSize: 13, cursorBlink: true, theme: { background: '#121315' }, scrollback: 5000 })
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.open(ref.current)
@@ -161,11 +161,11 @@ function Term({ id }: { id: string }) {
     <section className="card" style={{ overflow: 'hidden' }}>
       <div className="card-head">
         <div className="row wrap">
-          <select className="select" style={{ width: 140 }} aria-label="Shell" value={shell} onChange={(e) => setShell(e.target.value)}>
+          <Select style={{ width: 140 }} aria-label="Shell" value={shell} onChange={(v) => setShell(v)}>
             <option value="auto">自动（bash/sh）</option>
             <option value="bash">bash</option>
             <option value="sh">sh</option>
-          </select>
+          </Select>
           <input className="input" style={{ width: 160 }} placeholder="用户（默认）" aria-label="用户" value={user} onChange={(e) => setUser(e.target.value)} />
           <button className="btn btn-sm" onClick={() => setSession(session + 1)}>{state === 'closed' ? '重新连接' : '重新打开'}</button>
         </div>

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ago, bytes, dateTime, del, get, post } from '../api'
 import { useCan } from '../auth'
-import { Confirm, Empty, ErrorBox, Field, Icon, Modal, Status, useJobLog, useLoad, useToast } from './ui'
+import { Confirm, Empty, ErrorBox, Field, Icon, Modal, Select, Status, useJobLog, useLoad, useToast } from './ui'
 
 export type BackupSource = { kind: 'database' | 'volume' | 'dir' | 'panel'; instanceId?: number; database?: string; volume?: string; projectId?: number; path?: string }
 
@@ -47,9 +47,9 @@ export function BackupNowModal({ source, onClose, onDone }: { source?: BackupSou
     <Modal title="立即备份" onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" disabled={!sid} onClick={submit}>开始备份</button></>}>
       {source ? <div>备份对象：<b>{sourceText(source)}</b></div> : <SourcePicker value={src} onChange={setSrc} sources={sources} />}
       <Field label="存储位置">
-        <select className="select" value={sid || ''} onChange={(e) => setStorageId(Number(e.target.value))}>
+        <Select value={sid || ''} onChange={(v) => setStorageId(Number(v))}>
           {(storages || []).map((s) => <option key={s.id} value={s.id}>{s.name}（{({ s3: 'S3', local: '本地', sftp: 'SFTP', webdav: 'WebDAV' } as Record<string, string>)[s.kind] || s.kind}）</option>)}
-        </select>
+        </Select>
       </Field>
       <label className="check"><input type="checkbox" checked={encrypt} onChange={(e) => setEncrypt(e.target.checked)} />使用 age 加密</label>
       <ErrorBox error={err} />
@@ -70,34 +70,34 @@ export function SourcePicker({ value, onChange, sources }: { value: BackupSource
       {value.kind === 'database' && (
         <div className="form-grid">
           <Field label="实例">
-            <select className="select" value={value.instanceId || ''} onChange={(e) => onChange({ kind: 'database', instanceId: Number(e.target.value), database: '' })}>
+            <Select value={value.instanceId || ''} onChange={(v) => onChange({ kind: 'database', instanceId: Number(v), database: '' })}>
               <option value="">选择实例</option>
               {sources.databases.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}
-            </select>
+            </Select>
           </Field>
           <Field label="库">
-            <select className="select" value={value.database || ''} onChange={(e) => onChange({ ...value, database: e.target.value })}>
+            <Select value={value.database || ''} onChange={(v) => onChange({ ...value, database: v })}>
               <option value="">选择库</option>
               {(dbi?.databases || []).map((n: string) => <option key={n}>{n}</option>)}
-            </select>
+            </Select>
           </Field>
         </div>
       )}
       {value.kind === 'volume' && (
         <Field label="数据卷">
-          <select className="select" value={value.volume || ''} onChange={(e) => onChange({ kind: 'volume', volume: e.target.value })}>
+          <Select value={value.volume || ''} onChange={(v) => onChange({ kind: 'volume', volume: v })}>
             <option value="">选择数据卷</option>
             {sources.volumes.map((v: any) => <option key={v.name} value={v.name}>{v.name}{v.project ? `（${v.project}）` : ''}</option>)}
-          </select>
+          </Select>
         </Field>
       )}
       {value.kind === 'dir' && (
         <div className="form-grid">
           <Field label="项目">
-            <select className="select" value={value.projectId || ''} onChange={(e) => onChange({ ...value, kind: 'dir', projectId: Number(e.target.value) })}>
+            <Select value={value.projectId || ''} onChange={(v) => onChange({ ...value, kind: 'dir', projectId: Number(v) })}>
               <option value="">选择项目</option>
               {sources.projects.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            </Select>
           </Field>
           <Field label="相对路径" hint="项目目录下的子目录，如 data、uploads">
             <input className="input mono" value={value.path || ''} onChange={(e) => onChange({ ...value, kind: 'dir', path: e.target.value })} />

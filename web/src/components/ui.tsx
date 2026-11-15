@@ -1,4 +1,11 @@
-import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { Children, createContext, CSSProperties, Fragment, isValidElement, KeyboardEvent as ReactKeyboardEvent, ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import {
+  ChartLine, Check, ChevronDown, Clock, Container, Copy, Database, Download, ExternalLink, File, Folder, GitBranch, Globe,
+  HardDriveDownload, KeyRound, Layers, LayoutDashboard, LayoutTemplate, Link, ListChecks, Lock, LogOut, Menu, Pencil, Play, Plug, Plus,
+  RefreshCw, Rocket, RotateCcw, ScrollText, Search, Settings, ShieldCheck, Square, SquareTerminal, Trash2, TriangleAlert, Upload, Users, X,
+  type LucideIcon,
+} from 'lucide-react'
 import { ApiError, get, post, streamLines } from '../api'
 
 // ---------- status badges ----------
@@ -415,54 +422,242 @@ export function Meter({ value, max, warnAt = 75, errAt = 90 }: { value: number; 
   )
 }
 
-// ---------- icons (stroke, 18px) ----------
+// ---------- select ----------
+// Styled replacement for <select>. Takes the same <option> children, so call sites read the
+// same; onChange receives the chosen value as a string. The menu is portalled to <body> so it
+// is never clipped by modals or scrolling tables, and flips upward near the bottom edge.
 
-const paths: Record<string, string> = {
-  overview: 'M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z',
-  projects: 'M3 7l9-4 9 4-9 4-9-4zM3 12l9 4 9-4M3 17l9 4 9-4',
-  docker: 'M4 10h3v3H4zM8 10h3v3H8zM12 10h3v3h-3zM8 6h3v3H8zM12 6h3v3h-3zM3 14h17c-1 4-5 6-9 6-4 0-7-2-8-6z',
-  databases: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
-  backups: 'M12 3v12M7 10l5 5 5-5M4 17v3h16v-3',
-  sites: 'M12 3a9 9 0 100 18 9 9 0 000-18zM3 12h18M12 3c2.5 2.5 3.8 5.5 3.8 9s-1.3 6.5-3.8 9c-2.5-2.5-3.8-5.5-3.8-9S9.5 5.5 12 3z',
-  certs: 'M12 3l7 3v5c0 5-3 8.5-7 10-4-1.5-7-5-7-10V6l7-3zM9 12l2 2 4-4',
-  jobs: 'M4 6h16M4 12h10M4 18h7M17 15l2 2 3-4',
-  integrations: 'M9 7V3M15 7V3M7 7h10v4a5 5 0 01-10 0V7zM12 16v5',
-  access: 'M9 11a4 4 0 100-8 4 4 0 000 8zM2 21c0-3.9 3.1-7 7-7s7 3.1 7 7M17 11l2 2 4-4',
-  settings: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z',
-  logout: 'M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9',
-  x: 'M18 6L6 18M6 6l12 12',
-  plus: 'M12 5v14M5 12h14',
-  menu: 'M3 6h18M3 12h18M3 18h18',
-  play: 'M6 4l14 8-14 8V4z',
-  stop: 'M6 6h12v12H6z',
-  restart: 'M3 12a9 9 0 1015-6.7L21 8M21 3v5h-5',
-  rocket: 'M5 15c-1.5 1.3-2 5-2 5s3.7-.5 5-2c.7-.8.7-2.1-.1-2.9a2.1 2.1 0 00-2.9-.1zM12 15l-3-3a22 22 0 012-4A12.9 12.9 0 0122 2c0 2.7-.8 7.5-6 11a22.4 22.4 0 01-4 2z',
-  terminal: 'M4 17l6-6-6-6M12 19h8',
-  logs: 'M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9l-6-6zM14 3v6h6M8 13h8M8 17h5',
-  trash: 'M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6',
-  download: 'M12 3v12M7 10l5 5 5-5M4 21h16',
-  refresh: 'M21 12a9 9 0 11-3-6.7L21 8M21 3v5h-5',
-  check: 'M5 12l5 5L20 7',
-  lock: 'M5 11h14v10H5zM8 11V7a4 4 0 018 0v4',
-  key: 'M15 7a4 4 0 11-4 4l-8 8v-3l2-2v-2h2l2-2M17 9h.01',
-  copy: 'M9 9h11v11H9zM5 15H4V4h11v1',
-  edit: 'M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4 12.5-12.5z',
-  search: 'M11 19a8 8 0 100-16 8 8 0 000 16zM21 21l-4.3-4.3',
-  alert: 'M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z',
-  git: 'M6 3v12M18 9a3 3 0 100-6 3 3 0 000 6zM6 21a3 3 0 100-6 3 3 0 000 6zM18 9a9 9 0 01-9 9',
-  folder: 'M3 6a2 2 0 012-2h4l2 2h8a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V6z',
-  file: 'M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9l-6-6zM14 3v6h6',
-  upload: 'M12 21V9M7 14l5-5 5 5M4 3h16',
-  chart: 'M3 3v18h18M7 15l4-4 3 3 6-6',
-  clock: 'M12 21a9 9 0 100-18 9 9 0 000 18zM12 7v5l3 2',
-  link: 'M10 14a5 5 0 007 0l3-3a5 5 0 00-7-7l-1 1M14 10a5 5 0 00-7 0l-3 3a5 5 0 007 7l1-1',
-  external: 'M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3',
+type Opt = { value: string; label: ReactNode; text: string; disabled?: boolean }
+
+function nodeText(n: ReactNode): string {
+  if (n == null || typeof n === 'boolean') return ''
+  if (typeof n === 'string' || typeof n === 'number') return String(n)
+  if (Array.isArray(n)) return n.map(nodeText).join('')
+  if (isValidElement(n)) return nodeText((n.props as { children?: ReactNode }).children)
+  return ''
+}
+
+function readOptions(children: ReactNode): Opt[] {
+  const out: Opt[] = []
+  Children.forEach(children, (c) => {
+    if (!isValidElement(c)) return
+    if (c.type === Fragment) return void out.push(...readOptions((c.props as { children?: ReactNode }).children))
+    const p = c.props as { value?: string | number; children?: ReactNode; disabled?: boolean }
+    const text = nodeText(p.children)
+    out.push({ value: p.value != null ? String(p.value) : text, label: p.children, text, disabled: p.disabled })
+  })
+  return out
+}
+
+let selectSeq = 0
+
+export function Select({ value, onChange, children, disabled, style, className, placeholder, ...aria }: {
+  value: string | number | undefined
+  onChange: (v: string) => void
+  children: ReactNode
+  disabled?: boolean
+  style?: CSSProperties
+  className?: string
+  placeholder?: string
+  'aria-label'?: string
+  id?: string
+}) {
+  const opts = readOptions(children)
+  const cur = value == null ? '' : String(value)
+  const selIdx = opts.findIndex((o) => o.value === cur)
+  const sel = selIdx >= 0 ? opts[selIdx] : undefined
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(-1)
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; width: number; maxHeight: number } | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const listRef = useRef<HTMLUListElement>(null)
+  const typed = useRef({ s: '', t: 0 })
+  const [uid] = useState(() => 'sel' + ++selectSeq)
+
+  const place = useCallback(() => {
+    const r = btnRef.current?.getBoundingClientRect()
+    if (!r) return
+    const gap = 4
+    const below = window.innerHeight - r.bottom - gap - 8
+    const above = r.top - gap - 8
+    const want = Math.min(320, opts.length * 34 + 10)
+    const up = below < want && above > below
+    setPos({
+      left: Math.max(8, Math.min(r.left, window.innerWidth - r.width - 8)),
+      width: r.width,
+      maxHeight: Math.max(120, Math.min(320, up ? above : below)),
+      ...(up ? { bottom: window.innerHeight - r.top + gap } : { top: r.bottom + gap }),
+    })
+  }, [opts.length])
+
+  const show = () => {
+    if (disabled) return
+    place()
+    setActive(selIdx >= 0 ? selIdx : opts.findIndex((o) => !o.disabled))
+    setOpen(true)
+  }
+  const pick = (i: number) => {
+    const o = opts[i]
+    if (!o || o.disabled) return
+    setOpen(false)
+    btnRef.current?.focus()
+    if (o.value !== cur) onChange(o.value)
+  }
+  const step = (from: number, dir: 1 | -1) => {
+    for (let i = from + dir; i >= 0 && i < opts.length; i += dir) if (!opts[i].disabled) return i
+    return from
+  }
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (!btnRef.current?.contains(t) && !listRef.current?.contains(t)) setOpen(false)
+    }
+    const onMove = (e: Event) => {
+      if (listRef.current && e.target instanceof Node && listRef.current.contains(e.target)) return
+      place()
+    }
+    document.addEventListener('mousedown', onDown)
+    window.addEventListener('resize', onMove)
+    window.addEventListener('scroll', onMove, true)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      window.removeEventListener('resize', onMove)
+      window.removeEventListener('scroll', onMove, true)
+    }
+  }, [open, place])
+
+  useEffect(() => {
+    if (open && active >= 0) listRef.current?.children[active]?.scrollIntoView({ block: 'nearest' })
+  }, [open, active])
+
+  const onKey = (e: ReactKeyboardEvent) => {
+    if (disabled) return
+    const k = e.key
+    if (!open) {
+      if (k === 'ArrowDown' || k === 'ArrowUp' || k === 'Enter' || k === ' ') { e.preventDefault(); show() }
+      return
+    }
+    if (k === 'Escape' || k === 'Tab') {
+      if (k === 'Escape') { e.preventDefault(); e.stopPropagation() }
+      setOpen(false)
+    } else if (k === 'ArrowDown') { e.preventDefault(); setActive((a) => step(a, 1)) }
+    else if (k === 'ArrowUp') { e.preventDefault(); setActive((a) => step(a, -1)) }
+    else if (k === 'Home') { e.preventDefault(); setActive(step(-1, 1)) }
+    else if (k === 'End') { e.preventDefault(); setActive(step(opts.length, -1)) }
+    else if (k === 'Enter' || k === ' ') { e.preventDefault(); pick(active) }
+    else if (k.length === 1) {
+      const now = Date.now()
+      typed.current = { s: (now - typed.current.t < 600 ? typed.current.s : '') + k.toLowerCase(), t: now }
+      const i = opts.findIndex((o) => !o.disabled && o.text.toLowerCase().startsWith(typed.current.s))
+      if (i >= 0) setActive(i)
+    }
+  }
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        id={aria.id}
+        className={'select' + (open ? ' open' : '') + (className ? ' ' + className : '')}
+        style={style}
+        disabled={disabled}
+        role="combobox"
+        aria-label={aria['aria-label']}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={open ? uid : undefined}
+        aria-activedescendant={open && active >= 0 ? `${uid}-${active}` : undefined}
+        onClick={() => (open ? setOpen(false) : show())}
+        onKeyDown={onKey}
+      >
+        <span className={'select-value' + (sel ? '' : ' placeholder')}>{sel ? sel.label : placeholder ?? '请选择'}</span>
+        <Icon name="chevron-down" size={16} />
+      </button>
+      {open && pos && createPortal(
+        <ul
+          ref={listRef}
+          id={uid}
+          role="listbox"
+          className="select-menu"
+          style={{ left: pos.left, top: pos.top, bottom: pos.bottom, minWidth: pos.width, maxHeight: pos.maxHeight }}
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          {opts.map((o, i) => (
+            <li
+              key={o.value + ':' + i}
+              id={`${uid}-${i}`}
+              role="option"
+              aria-selected={i === selIdx}
+              aria-disabled={o.disabled || undefined}
+              className={(i === active ? 'active' : '') + (i === selIdx ? ' selected' : '') + (o.disabled ? ' disabled' : '')}
+              onMouseEnter={() => !o.disabled && setActive(i)}
+              onClick={() => pick(i)}
+            >
+              <span className="grow">{o.label}</span>
+              {i === selIdx && <Icon name="check" size={16} />}
+            </li>
+          ))}
+          {opts.length === 0 && <li className="disabled">无可选项</li>}
+        </ul>,
+        document.body,
+      )}
+    </>
+  )
+}
+
+// ---------- icons ----------
+// One icon set for the whole panel: Lucide, fixed 1.5px stroke at every size. Use <Icon name="..."> everywhere
+// so nothing ships a one-off SVG with a different weight or style.
+
+const icons: Record<string, LucideIcon> = {
+  overview: LayoutDashboard,
+  projects: Layers,
+  docker: Container,
+  databases: Database,
+  backups: HardDriveDownload,
+  sites: Globe,
+  certs: ShieldCheck,
+  jobs: ListChecks,
+  integrations: Plug,
+  access: Users,
+  settings: Settings,
+  logout: LogOut,
+  x: X,
+  plus: Plus,
+  menu: Menu,
+  play: Play,
+  stop: Square,
+  restart: RotateCcw,
+  rocket: Rocket,
+  template: LayoutTemplate,
+  terminal: SquareTerminal,
+  logs: ScrollText,
+  trash: Trash2,
+  download: Download,
+  refresh: RefreshCw,
+  check: Check,
+  lock: Lock,
+  key: KeyRound,
+  copy: Copy,
+  edit: Pencil,
+  search: Search,
+  alert: TriangleAlert,
+  git: GitBranch,
+  folder: Folder,
+  file: File,
+  upload: Upload,
+  chart: ChartLine,
+  clock: Clock,
+  link: Link,
+  external: ExternalLink,
+  'chevron-down': ChevronDown,
 }
 
 export function Icon({ name, size = 18 }: { name: string; size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flex: 'none' }}>
-      <path d={paths[name] || ''} />
-    </svg>
-  )
+  const C = icons[name]
+  if (!C) return null
+  return <C size={size} strokeWidth={1.5} absoluteStrokeWidth aria-hidden="true" style={{ flex: 'none' }} />
 }

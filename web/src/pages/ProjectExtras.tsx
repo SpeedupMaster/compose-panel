@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ago, dateTime, del, get, post, put } from '../api'
 import { useCan } from '../auth'
-import { Card, Confirm, Empty, ErrorBox, Field, Icon, JobStatus, Loading, Modal, useAction, useJobLog, useLoad, useToast } from '../components/ui'
+import { Card, Confirm, Empty, ErrorBox, Field, Icon, JobStatus, Loading, Modal, Select, useAction, useJobLog, useLoad, useToast } from '../components/ui'
 
 // ---------- image updates ----------
 
@@ -212,19 +212,19 @@ function CronForm({ task, services, onClose, onSaved }: { task: Partial<CronTask
       <Field label="名称"><input className="input" value={t.name || ''} onChange={(e) => set({ name: e.target.value })} autoFocus /></Field>
       {!task.projectId && (
         <Field label="项目">
-          <select className="select" value={t.projectId || ''} onChange={(e) => set({ projectId: Number(e.target.value), service: '' })}>
+          <Select value={t.projectId || ''} onChange={(v) => set({ projectId: Number(v), service: '' })}>
             <option value="">选择项目</option>
             {(projects || []).map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
+          </Select>
         </Field>
       )}
       <div className="form-grid">
         <Field label="服务" hint="在该服务第一个运行中的容器里执行">
           {svcList.length ? (
-            <select className="select" value={t.service || ''} onChange={(e) => set({ service: e.target.value })}>
+            <Select value={t.service || ''} onChange={(v) => set({ service: v })}>
               <option value="">选择服务</option>
               {svcList.map((s) => <option key={s}>{s}</option>)}
-            </select>
+            </Select>
           ) : <input className="input mono" value={t.service || ''} onChange={(e) => set({ service: e.target.value })} />}
         </Field>
         <Field label="执行用户" hint="留空使用容器默认用户"><input className="input mono" value={t.user || ''} onChange={(e) => set({ user: e.target.value })} placeholder="如 www-data" /></Field>

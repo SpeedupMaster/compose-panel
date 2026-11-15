@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { ago, dateTime, get, post } from '../api'
 import { useCan } from '../auth'
 import { CronTasks } from './ProjectExtras'
-import { Card, Empty, ErrorBox, JobStatus, Loading, Page, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
+import { Card, Empty, ErrorBox, JobStatus, Loading, Page, Select, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
 
 export default function Jobs() {
   const [tab, setTab] = useState<'jobs' | 'cron' | 'schedules'>('jobs')
@@ -27,16 +27,16 @@ function JobList() {
     <section className="card">
       <div className="card-head">
         <div className="row wrap">
-          <select className="select" style={{ width: 140 }} aria-label="状态" value={status} onChange={(e) => setStatus(e.target.value)}>
+          <Select style={{ width: 140 }} aria-label="状态" value={status} onChange={(v) => setStatus(v)}>
             <option value="">全部状态</option>
             <option value="active">进行中/排队</option>
             <option value="success">成功</option>
             <option value="failed">失败</option>
             <option value="canceled">已取消</option>
-          </select>
-          <select className="select" style={{ width: 140 }} aria-label="类型" value={kind} onChange={(e) => setKind(e.target.value)}>
+          </Select>
+          <Select style={{ width: 140 }} aria-label="类型" value={kind} onChange={(v) => setKind(v)}>
             {kinds.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-          </select>
+          </Select>
         </div>
       </div>
       <ErrorBox error={error} />

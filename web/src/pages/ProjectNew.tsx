@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { del, get, post } from '../api'
 import { useCan } from '../auth'
 import { CodeArea, EnvEditor, EnvVar, validateCompose, Validation, ValidationResult } from '../components/editors'
-import { Card, Confirm, ErrorBox, Field, Icon, Page, useJobLog, useLoad, useToast } from '../components/ui'
+import { Card, Confirm, ErrorBox, Field, Icon, Page, Select, useJobLog, useLoad, useToast } from '../components/ui'
 
 type Template = { id: string; name: string; description: string; compose: string; env: EnvVar[] | null; files: { path: string; content: string }[] | null; vars: string[] | null; service: string; port: number; custom: boolean; category: string }
 
@@ -191,9 +191,9 @@ export default function ProjectNew() {
           </Field>
           <Field label="服务">
             {v?.services?.length ? (
-              <select className="select" value={service} onChange={(e) => setService(e.target.value)}>
+              <Select value={service} onChange={(v) => setService(v)}>
                 {v.services.map((s) => <option key={s}>{s}</option>)}
-              </select>
+              </Select>
             ) : (
               <input className="input mono" value={service} onChange={(e) => setService(e.target.value)} placeholder="web" />
             )}

@@ -4,7 +4,7 @@ import { ago, bytes, del, get, post, put } from '../api'
 import { useCan } from '../auth'
 import { BackupNowModal, BackupSource, BackupTable, SourcePicker, sourceText, useStorages } from '../components/backup'
 import { Drills } from './Drills'
-import { Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Status, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
+import { Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Select, Status, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
 
 type Policy = {
   id?: number
@@ -112,12 +112,12 @@ export default function Backups() {
           <div className="card-head">
             <div className="row wrap">
               <input className="input" style={{ width: 240 }} placeholder="搜索" aria-label="搜索备份" value={q} onChange={(e) => setQ(e.target.value)} />
-              <select className="select" style={{ width: 140 }} aria-label="状态" value={status} onChange={(e) => setStatus(e.target.value)}>
+              <Select style={{ width: 140 }} aria-label="状态" value={status} onChange={(v) => setStatus(v)}>
                 <option value="">全部状态</option>
                 <option value="success">成功</option>
                 <option value="failed">失败</option>
                 <option value="running">进行中</option>
-              </select>
+              </Select>
             </div>
           </div>
           {records ? <BackupTable list={records} reload={reloadRecords} names={names} /> : <Loading />}
@@ -170,9 +170,9 @@ function PolicyModal({ p, sources, onClose, onSaved }: { p: Policy; sources: any
         </div>
       </div>
       <Field label="存储位置">
-        <select className="select" value={sid} onChange={(e) => setF({ ...f, storageId: Number(e.target.value) })}>
+        <Select value={sid} onChange={(v) => setF({ ...f, storageId: Number(v) })}>
           {(storages || []).map((s) => <option key={s.id} value={s.id}>{s.name}（{({ s3: 'S3', local: '本地', sftp: 'SFTP', webdav: 'WebDAV' } as Record<string, string>)[s.kind] || s.kind}）</option>)}
-        </select>
+        </Select>
       </Field>
       <label className="check"><input type="checkbox" checked={f.encrypt} onChange={(e) => setF({ ...f, encrypt: e.target.checked })} />使用 age 加密（面板密钥）</label>
       {f.encrypt && (

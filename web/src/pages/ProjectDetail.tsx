@@ -67,7 +67,7 @@ export default function ProjectDetail() {
               <Link className="btn btn-primary" to={`/databases`}>管理数据库</Link>
             ) : (
               <>
-                {p.source === 'inline' && <button className="btn" onClick={() => setSaveTpl(true)}>保存为模板</button>}
+                {p.source === 'inline' && <button className="btn" onClick={() => setSaveTpl(true)}><Icon name="template" />保存为模板</button>}
                 <button className="btn btn-primary" disabled={busy === 'deploy'} onClick={deploy}><Icon name="rocket" />{busy === 'deploy' ? '提交中…' : '部署'}</button>
               </>
             )}

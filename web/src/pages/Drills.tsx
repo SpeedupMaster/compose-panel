@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ago, dateTime, del, get, post, put } from '../api'
 import { useCan } from '../auth'
-import { Card, Confirm, Empty, ErrorBox, Field, Icon, JobStatus, Loading, Modal, useAction, useJobLog, useLoad, useToast } from '../components/ui'
+import { Card, Confirm, Empty, ErrorBox, Field, Icon, JobStatus, Loading, Modal, Select, useAction, useJobLog, useLoad, useToast } from '../components/ui'
 
 type Drill = { id?: number; policyId: number; policy?: string; label?: string; kind?: string; schedule: string; checkSql: string; minRows: number; enabled: boolean; next?: number; lastRun?: DrillRun | null }
 type DrillRun = { id: number; drillId: number; backupId: number; label: string; status: string; report: string; jobId: string; startedAt: number; finishedAt: number }
@@ -118,9 +118,9 @@ function DrillModal({ d, policies, onClose, onSaved }: { d: Drill; policies: any
   return (
     <Modal title={f.id ? '编辑恢复演练' : '新建恢复演练'} onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" disabled={!!busy || !f.policyId} onClick={save}>保存</button></>}>
       <Field label="备份策略">
-        <select className="select" value={f.policyId || ''} onChange={(e) => setF({ ...f, policyId: Number(e.target.value) })}>
+        <Select value={f.policyId || ''} onChange={(v) => setF({ ...f, policyId: Number(v) })}>
           {policies.map((p) => <option key={p.id} value={p.id}>{p.name}（{kindText[p.source.kind] || p.source.kind}）</option>)}
-        </select>
+        </Select>
       </Field>
       <Field label="计划（cron）" hint="默认每周日 05:00；演练会占用一些 CPU 和磁盘，建议避开业务高峰">
         <input className="input mono" value={f.schedule} onChange={(e) => setF({ ...f, schedule: e.target.value })} />

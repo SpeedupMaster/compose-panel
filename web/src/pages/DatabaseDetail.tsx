@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { bytes, del, get, post, put } from '../api'
 import { useCan } from '../auth'
 import { BackupNowModal, BackupTable } from '../components/backup'
-import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, SecretBox, Status, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
+import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, SecretBox, Select, Status, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
 import { engineLabel, exposureName } from './Databases'
 import { ImportExport, SlowQueries, SqlConsole, TableBrowser } from './DatabaseTools'
 
@@ -234,6 +234,7 @@ function BackupsTab({ d }: { d: any }) {
   const { data: policies } = useLoad(() => get<any[]>('/backup-policies'), [])
   const can = useCan()
   const [now, setNow] = useState<string | null>(null)
+  const [bkDb, setBkDb] = useState('')
   const { data: dbs } = useLoad(() => (d.status === 'running' && d.engine !== 'redis' ? get<any[]>(`/databases/${d.id}/dbs`) : Promise.resolve([{ name: 'all' }])), [d.id])
   const mine = (policies || []).filter((p) => p.source.kind === 'database' && p.source.instanceId === d.id)
   return (
@@ -249,10 +250,10 @@ function BackupsTab({ d }: { d: any }) {
         title="备份记录"
         actions={can.operator && (dbs || []).length > 0 && (
           <div className="row">
-            <select className="select" style={{ width: 160 }} aria-label="选择库" id="bk-db" defaultValue={dbs?.[0]?.name}>
+            <Select className="sm" style={{ width: 160 }} aria-label="选择库" value={bkDb || dbs?.[0]?.name} onChange={setBkDb}>
               {(dbs || []).map((x) => <option key={x.name}>{x.name}</option>)}
-            </select>
-            <button className="btn btn-sm btn-primary" onClick={() => setNow((document.getElementById('bk-db') as HTMLSelectElement).value)}>立即备份</button>
+            </Select>
+            <button className="btn btn-sm btn-primary" onClick={() => setNow(bkDb || dbs?.[0]?.name)}>立即备份</button>
           </div>
         )}
         pad={false}
@@ -277,16 +278,16 @@ function SettingsTab({ data, onSaved }: { data: any; onSaved: () => void }) {
       <Card title="实例配置">
         <div className="form-grid">
           <Field label="版本" hint="只建议升级小版本；大版本升级需要导出导入">
-            <select className="select" value={f.version} disabled={!can.operator} onChange={(e) => setF({ ...f, version: e.target.value })}>
+            <Select value={f.version} disabled={!can.operator} onChange={(v) => setF({ ...f, version: v })}>
               {[...new Set([d.version, ...(data.engine?.versions || [])])].map((v: string) => <option key={v}>{v}</option>)}
-            </select>
+            </Select>
           </Field>
           <Field label="访问方式">
-            <select className="select" value={f.exposure} disabled={!can.operator} onChange={(e) => setF({ ...f, exposure: e.target.value })}>
+            <Select value={f.exposure} disabled={!can.operator} onChange={(v) => setF({ ...f, exposure: v })}>
               <option value="internal">仅内部网络</option>
               <option value="local">本机 127.0.0.1</option>
               <option value="public">公网</option>
-            </select>
+            </Select>
           </Field>
           <Field label="端口"><input className="input mono" value={f.port} readOnly={!can.operator} onChange={(e) => setF({ ...f, port: Number(e.target.value) || 0 })} /></Field>
           <Field label="内存上限" hint="留空保持不变"><input className="input mono" value={f.memLimit} readOnly={!can.operator} placeholder="512m" onChange={(e) => setF({ ...f, memLimit: e.target.value })} /></Field>
