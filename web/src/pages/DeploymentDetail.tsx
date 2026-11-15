@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { CSSProperties, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { dateTime, get, post, streamLines } from '../api'
 import { useCan } from '../auth'
 import { Diff } from '../components/editors'
+import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
 import { Card, Confirm, ErrorBox, JobStatus, Loading, LogView, Page, Tabs, useJobLog, useLoad } from '../components/ui'
 import { triggerName } from './Overview'
 
@@ -52,20 +53,30 @@ export default function DeploymentDetail() {
       )}
       {tab === 'compose' && (
         <Card pad={false}>
-          <pre className="diff" style={{ margin: 0, padding: 16, maxHeight: 600 }}>{data.compose || '（无快照）'}</pre>
+          <pre className="diff" style={{ margin: 0, padding: 16, '--diff-h': '600px' } as CSSProperties}>{data.compose || '（无快照）'}</pre>
         </Card>
       )}
       {tab === 'env' && (
         <Card pad={false}>
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>变量</th><th>值</th></tr></thead>
-              <tbody>
-                {data.env.length === 0 && <tr><td colSpan={2} className="muted">没有环境变量</td></tr>}
-                {data.env.map((e: any) => <tr key={e.key}><td className="mono">{e.key}</td><td className="mono">{e.value}</td></tr>)}
-              </tbody>
-            </table>
-          </div>
+          {data.env.length === 0 ? (
+            <div className="card-body muted">没有环境变量</div>
+          ) : (
+            <ResponsiveTable
+              table={
+                <div className="table-wrap">
+                  <table>
+                    <thead><tr><th>变量</th><th>值</th></tr></thead>
+                    <tbody>
+                      {data.env.map((e: any) => <tr key={e.key}><td className="mono">{e.key}</td><td className="mono" style={{ overflowWrap: 'anywhere' }}>{e.value}</td></tr>)}
+                    </tbody>
+                  </table>
+                </div>
+              }
+              cards={data.env.map((e: any) => (
+                <MobileCard key={e.key} tight title={<span className="mono">{e.key}</span>} sub={<span className="mono">{e.value}</span>} />
+              ))}
+            />
+          )}
         </Card>
       )}
       {rollback && (

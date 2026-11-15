@@ -5,6 +5,7 @@ import { useCan } from '../auth'
 import { Card, Combobox, ComboOption, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Status, Tabs, useLoad, useToast } from '../components/ui'
 import { portsText } from './ProjectDetail'
 import { FileBrowser } from '../components/files'
+import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
 
 type Tab = 'containers' | 'images' | 'volumes' | 'networks' | 'registries'
 
@@ -98,24 +99,46 @@ function Containers() {
   const list = data.filter((c) => !q || c.name.includes(q) || c.image.includes(q) || c.project.includes(q))
   return (
     <section className="card">
-      <div className="card-head"><input className="input" style={{ maxWidth: 280 }} placeholder="搜索容器、镜像、项目" aria-label="搜索容器" value={q} onChange={(e) => setQ(e.target.value)} /></div>
-      <div className="table-wrap">
-        <table>
-          <thead><tr><th>名称</th><th>项目</th><th>状态</th><th>镜像</th><th>端口</th><th>创建</th></tr></thead>
-          <tbody>
-            {list.map((c) => (
-              <tr key={c.id} className="clickable" onClick={() => nav(`/containers/${c.id}`)}>
-                <td><Link className="row-link" to={`/containers/${c.id}`} onClick={(e) => e.stopPropagation()}>{c.name}</Link></td>
-                <td>{c.project || <span className="muted">—</span>}</td>
-                <td><Status s={c.health === 'unhealthy' ? 'unhealthy' : c.state} /><div className="label">{c.status}</div></td>
-                <td className="mono ellipsis" style={{ maxWidth: 260, fontSize: 13 }} title={c.image}>{c.image}</td>
-                <td className="mono" style={{ fontSize: 12 }}>{portsText(c.ports)}</td>
-                <td className="muted nowrap">{ago(c.created)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <div className="card-head"><input className="input filter-input" placeholder="搜索容器、镜像、项目" aria-label="搜索容器" value={q} onChange={(e) => setQ(e.target.value)} /></div>
+      <ResponsiveTable
+        table={
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>名称</th><th>项目</th><th>状态</th><th>镜像</th><th>端口</th><th>创建</th></tr></thead>
+              <tbody>
+                {list.map((c) => (
+                  <tr key={c.id} className="clickable" onClick={() => nav(`/containers/${c.id}`)}>
+                    <td><Link className="row-link" to={`/containers/${c.id}`} onClick={(e) => e.stopPropagation()}>{c.name}</Link></td>
+                    <td>{c.project || <span className="muted">—</span>}</td>
+                    <td><Status s={c.health === 'unhealthy' ? 'unhealthy' : c.state} /><div className="label">{c.status}</div></td>
+                    <td className="mono ellipsis" style={{ maxWidth: 260, fontSize: 13 }} title={c.image}>{c.image}</td>
+                    <td className="mono" style={{ fontSize: 12 }}>{portsText(c.ports)}</td>
+                    <td className="muted nowrap">{ago(c.created)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        }
+        cards={list.map((c) => {
+          const ports = portsText(c.ports)
+          return (
+            <MobileCard
+              key={c.id}
+              onClick={() => nav(`/containers/${c.id}`)}
+              title={<Link className="row-link" to={`/containers/${c.id}`} onClick={(e) => e.stopPropagation()}>{c.name}</Link>}
+              sub={c.project || '未关联项目'}
+              badges={<Status s={c.health === 'unhealthy' ? 'unhealthy' : c.state} />}
+              meta={[
+                { label: '镜像', value: c.image, mono: true, full: true },
+                { label: '运行态', value: c.status },
+                { label: '创建', value: ago(c.created) },
+                ports !== '—' ? { label: '端口', value: ports, mono: true, full: true } : false,
+              ]}
+            />
+          )
+        })}
+      />
     </section>
   )
 }
@@ -127,23 +150,41 @@ function Images() {
   if (!data) return error ? <ErrorBox error={error} /> : <Loading />
   return (
     <section className="card">
-      <div className="table-wrap">
-        <table>
-          <thead><tr><th>标签</th><th>ID</th><th>大小</th><th>使用者</th><th>创建</th><th></th></tr></thead>
-          <tbody>
-            {data.map((im) => (
-              <tr key={im.id}>
-                <td className="mono" style={{ fontSize: 13 }}>{im.tags.length ? im.tags.join(', ') : <span className="muted">&lt;none&gt;</span>}</td>
-                <td className="mono" style={{ fontSize: 12 }}>{im.id.replace('sha256:', '').slice(0, 12)}</td>
-                <td className="nowrap">{bytes(im.size)}</td>
-                <td>{im.usedBy.length ? im.usedBy.join(', ') : <span className="badge off">未使用</span>}</td>
-                <td className="muted nowrap">{ago(im.created)}</td>
-                <td>{can.admin && im.usedBy.length === 0 && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除镜像" onClick={() => setRm(im)}><Icon name="trash" size={16} /></button>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <ResponsiveTable
+        table={
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>标签</th><th>ID</th><th>大小</th><th>使用者</th><th>创建</th><th></th></tr></thead>
+              <tbody>
+                {data.map((im) => (
+                  <tr key={im.id}>
+                    <td className="mono" style={{ fontSize: 13 }}>{im.tags.length ? im.tags.join(', ') : <span className="muted">&lt;none&gt;</span>}</td>
+                    <td className="mono" style={{ fontSize: 12 }}>{im.id.replace('sha256:', '').slice(0, 12)}</td>
+                    <td className="nowrap">{bytes(im.size)}</td>
+                    <td>{im.usedBy.length ? im.usedBy.join(', ') : <span className="badge off">未使用</span>}</td>
+                    <td className="muted nowrap">{ago(im.created)}</td>
+                    <td>{can.admin && im.usedBy.length === 0 && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除镜像" onClick={() => setRm(im)}><Icon name="trash" size={16} /></button>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        }
+        cards={data.map((im) => (
+          <MobileCard
+            key={im.id}
+            title={<span className="mono">{im.tags.length ? im.tags.join(', ') : '<none>'}</span>}
+            sub={<span className="mono">{im.id.replace('sha256:', '').slice(0, 12)}</span>}
+            badges={im.usedBy.length === 0 ? <span className="badge off">未使用</span> : undefined}
+            meta={[
+              { label: '大小', value: bytes(im.size) },
+              { label: '创建', value: ago(im.created) },
+              im.usedBy.length ? { label: '使用者', value: im.usedBy.join(', '), full: true } : false,
+            ]}
+            actions={can.admin && im.usedBy.length === 0 ? <button className="btn btn-sm btn-danger" onClick={() => setRm(im)}><Icon name="trash" size={16} />删除镜像</button> : undefined}
+          />
+        ))}
+      />
       {rm && <Confirm title="删除镜像" danger confirmText="删除" onClose={() => setRm(null)} onConfirm={async () => { await del(`/docker/images/${encodeURIComponent(rm.id)}`); reload() }}>删除 <code className="mono">{rm.tags[0] || rm.id.slice(7, 19)}</code>？</Confirm>}
     </section>
   )
@@ -163,28 +204,51 @@ function Volumes() {
         </Modal>
       )}
       {data.length === 0 ? <Empty>没有数据卷。</Empty> : (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>名称</th><th>项目</th><th>大小</th><th>使用者</th><th></th></tr></thead>
-            <tbody>
-              {data.map((v) => (
-                <tr key={v.name}>
-                  <td className="mono" style={{ fontSize: 13 }}>{v.name}</td>
-                  <td>{v.project || <span className="muted">—</span>}</td>
-                  <td className="nowrap">{v.size >= 0 ? bytes(v.size) : '—'}</td>
-                  <td>{v.usedBy.length ? v.usedBy.join(', ') : <span className="badge off">未使用</span>}</td>
-                  <td>
-                    <div className="row" style={{ justifyContent: 'flex-end' }}>
-                      {can.admin && <button className="btn btn-sm" onClick={() => setBrowse(v.name)}><Icon name="folder" size={16} />文件</button>}
-                      <Link className="btn btn-sm" to={`/backups?volume=${encodeURIComponent(v.name)}`}>备份</Link>
-                      {can.admin && v.usedBy.length === 0 && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除数据卷" onClick={() => setRm(v)}><Icon name="trash" size={16} /></button>}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ResponsiveTable
+          table={
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>名称</th><th>项目</th><th>大小</th><th>使用者</th><th></th></tr></thead>
+                <tbody>
+                  {data.map((v) => (
+                    <tr key={v.name}>
+                      <td className="mono" style={{ fontSize: 13 }}>{v.name}</td>
+                      <td>{v.project || <span className="muted">—</span>}</td>
+                      <td className="nowrap">{v.size >= 0 ? bytes(v.size) : '—'}</td>
+                      <td>{v.usedBy.length ? v.usedBy.join(', ') : <span className="badge off">未使用</span>}</td>
+                      <td>
+                        <div className="row" style={{ justifyContent: 'flex-end' }}>
+                          {can.admin && <button className="btn btn-sm" onClick={() => setBrowse(v.name)}><Icon name="folder" size={16} />文件</button>}
+                          <Link className="btn btn-sm" to={`/backups?volume=${encodeURIComponent(v.name)}`}>备份</Link>
+                          {can.admin && v.usedBy.length === 0 && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除数据卷" onClick={() => setRm(v)}><Icon name="trash" size={16} /></button>}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          }
+          cards={data.map((v) => (
+            <MobileCard
+              key={v.name}
+              title={<span className="mono">{v.name}</span>}
+              sub={v.project || undefined}
+              badges={v.usedBy.length === 0 ? <span className="badge off">未使用</span> : undefined}
+              meta={[
+                { label: '大小', value: v.size >= 0 ? bytes(v.size) : '—' },
+                v.usedBy.length ? { label: '使用者', value: v.usedBy.join(', '), full: true } : false,
+              ]}
+              actions={
+                <>
+                  {can.admin && <button className="btn btn-sm" onClick={() => setBrowse(v.name)}><Icon name="folder" size={16} />文件</button>}
+                  <Link className="btn btn-sm" to={`/backups?volume=${encodeURIComponent(v.name)}`}>备份</Link>
+                  {can.admin && v.usedBy.length === 0 && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除数据卷" onClick={() => setRm(v)}><Icon name="trash" size={16} /></button>}
+                </>
+              }
+            />
+          ))}
+        />
       )}
       {rm && <Confirm title="删除数据卷" danger confirmText="永久删除" typeToConfirm={rm.name} onClose={() => setRm(null)} onConfirm={async () => { await del(`/docker/volumes/${encodeURIComponent(rm.name)}`); reload() }}>卷中的数据将永久丢失，建议先备份。</Confirm>}
     </section>
@@ -198,22 +262,45 @@ function Networks() {
   if (!data) return error ? <ErrorBox error={error} /> : <Loading />
   return (
     <section className="card">
-      <div className="table-wrap">
-        <table>
-          <thead><tr><th>名称</th><th>驱动</th><th>子网</th><th>容器</th><th></th></tr></thead>
-          <tbody>
-            {data.map((n) => (
-              <tr key={n.id}>
-                <td className="mono" style={{ fontSize: 13 }}>{n.name} {n.panel && <span className="badge run">面板</span>} {n.system && <span className="badge off">系统</span>} {n.internal && <span className="badge off">内部</span>}</td>
-                <td>{n.driver}</td>
-                <td className="mono" style={{ fontSize: 13 }}>{n.subnet || '—'}</td>
-                <td>{n.containers?.length ? n.containers.join(', ') : <span className="muted">—</span>}</td>
-                <td>{can.admin && !n.system && !n.panel && !n.containers?.length && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除网络" onClick={() => setRm(n)}><Icon name="trash" size={16} /></button>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <ResponsiveTable
+        table={
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>名称</th><th>驱动</th><th>子网</th><th>容器</th><th></th></tr></thead>
+              <tbody>
+                {data.map((n) => (
+                  <tr key={n.id}>
+                    <td className="mono" style={{ fontSize: 13 }}>{n.name} {n.panel && <span className="badge run">面板</span>} {n.system && <span className="badge off">系统</span>} {n.internal && <span className="badge off">内部</span>}</td>
+                    <td>{n.driver}</td>
+                    <td className="mono" style={{ fontSize: 13 }}>{n.subnet || '—'}</td>
+                    <td>{n.containers?.length ? n.containers.join(', ') : <span className="muted">—</span>}</td>
+                    <td>{can.admin && !n.system && !n.panel && !n.containers?.length && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除网络" onClick={() => setRm(n)}><Icon name="trash" size={16} /></button>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        }
+        cards={data.map((n) => (
+          <MobileCard
+            key={n.id}
+            title={<span className="mono">{n.name}</span>}
+            badges={
+              <>
+                {n.panel && <span className="badge run">面板</span>}
+                {n.system && <span className="badge off">系统</span>}
+                {n.internal && <span className="badge off">内部</span>}
+              </>
+            }
+            meta={[
+              { label: '驱动', value: n.driver },
+              { label: '子网', value: n.subnet || '—', mono: true },
+              n.containers?.length ? { label: '容器', value: n.containers.join(', '), full: true } : false,
+            ]}
+            actions={can.admin && !n.system && !n.panel && !n.containers?.length ? <button className="btn btn-sm btn-danger" onClick={() => setRm(n)}><Icon name="trash" size={16} />删除网络</button> : undefined}
+          />
+        ))}
+      />
       {rm && <Confirm title="删除网络" danger confirmText="删除" onClose={() => setRm(null)} onConfirm={async () => { await del(`/docker/networks/${rm.id}`); reload() }}>删除网络 <code className="mono">{rm.name}</code>？</Confirm>}
     </section>
   )
@@ -260,24 +347,37 @@ function Registries() {
     <Card title="镜像仓库凭据" actions={can.admin && <button className="btn btn-sm btn-primary" onClick={() => setForm({ host: '', username: '', password: '' })}><Icon name="plus" size={16} />添加</button>} pad={false}>
       <p className="label" style={{ padding: '12px 16px 0', margin: 0 }}>部署时用于拉取私有镜像（临时 DOCKER_CONFIG，不写入主机）。</p>
       {data.length === 0 ? <Empty>没有凭据。</Empty> : (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>地址</th><th>用户名</th><th></th></tr></thead>
-            <tbody>
-              {data.map((r) => (
-                <tr key={r.id}>
-                  <td className="mono">{r.host}</td>
-                  <td>{r.username}</td>
-                  <td>{can.admin && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={async () => { await del(`/registries/${r.id}`).catch(toast.err); reload() }}><Icon name="trash" size={16} /></button>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ResponsiveTable
+          table={
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>地址</th><th>用户名</th><th></th></tr></thead>
+                <tbody>
+                  {data.map((r) => (
+                    <tr key={r.id}>
+                      <td className="mono">{r.host}</td>
+                      <td>{r.username}</td>
+                      <td>{can.admin && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={async () => { await del(`/registries/${r.id}`).catch(toast.err); reload() }}><Icon name="trash" size={16} /></button>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          }
+          cards={data.map((r) => (
+            <MobileCard
+              key={r.id}
+              tight
+              title={<span className="mono">{r.host}</span>}
+              sub={`用户名：${r.username}`}
+              badges={can.admin ? <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={async () => { await del(`/registries/${r.id}`).catch(toast.err); reload() }}><Icon name="trash" size={16} /></button> : undefined}
+            />
+          ))}
+        />
       )}
       {form && (
         <Modal title="添加镜像仓库凭据" onClose={() => setForm(null)} footer={<><button className="btn" onClick={() => setForm(null)}>取消</button><button className="btn btn-primary" onClick={async () => { try { await post('/registries', form); setForm(null); reload() } catch (e) { toast.err(e) } }}>保存</button></>}>
-          <Field label="地址" hint="从列表选择，或直接输入仓库地址，如 registry.example.com:5000">
+          <Field div label="地址" hint="从列表选择，或直接输入仓库地址，如 registry.example.com:5000">
             <Combobox mono autoFocus aria-label="仓库地址" value={form.host} placeholder="docker.io" onChange={(host) => setForm({ ...form, host })}
               options={registryOptions(images, data.map((r) => r.host))} />
           </Field>

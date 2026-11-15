@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { get, post } from '../api'
 import { roleName, useAuth, useCan } from '../auth'
-import { Icon, useJobLog } from './ui'
+import { Icon, lockBodyScroll, useJobLog } from './ui'
 
 type NavItem = { to: string; label: string; icon: string; admin?: boolean; badge?: number }
 
@@ -16,7 +16,17 @@ export default function Layout() {
   const [alerts, setAlerts] = useState({ unhealthy: 0, certs: 0, backups: 0 })
   const openJob = useJobLog()
 
-  useEffect(() => setOpen(false), [loc.pathname])
+  useEffect(() => setOpen(false), [loc.pathname, loc.search])
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    window.addEventListener('keydown', onKey)
+    const unlock = window.matchMedia('(max-width: 860px)').matches ? lockBodyScroll() : undefined
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      unlock?.()
+    }
+  }, [open])
   useEffect(() => {
     let stop = false
     const tick = async () => {
@@ -73,27 +83,55 @@ export default function Layout() {
   }
 
   const u = me!.user
+  const alertTotal = alerts.unhealthy + alerts.backups + alerts.certs
   return (
     <div className="app">
       <div className="mobile-bar">
-        <button aria-label="打开菜单" onClick={() => setOpen(true)}><Icon name="menu" /></button>
-        <b>Compose 面板</b>
+        <div className="mobile-bar-left">
+          <button
+            type="button"
+            className="mobile-bar-menu"
+            aria-label={open ? '关闭菜单' : '打开菜单'}
+            aria-expanded={open}
+            onClick={() => setOpen((x) => !x)}
+          >
+            <Icon name="menu" />
+            {alertTotal > 0 && <span className="mobile-menu-dot" aria-hidden="true" />}
+          </button>
+          <Logo size={24} />
+          <b className="ellipsis">Compose 面板</b>
+        </div>
+        {active.length > 0 && (
+          <button
+            type="button"
+            className="mobile-job-pill"
+            aria-label={`查看运行中任务（${active.length}）`}
+            onClick={() => openJob(active[0].id, active[0].title)}
+          >
+            <span className="mobile-job-dot" aria-hidden="true" />
+            <span className="ellipsis">执行中 · {active.length}</span>
+          </button>
+        )}
       </div>
+      {open && <div className="side-backdrop" aria-hidden="true" onClick={() => setOpen(false)} />}
       <aside className={'side' + (open ? ' open' : '')} aria-label="主导航">
         <div className="brand">
           <Logo />
-          <div>
+          <div className="grow" style={{ minWidth: 0 }}>
             <b>Compose 面板</b>
             <small>v{me!.version}</small>
           </div>
+          <button type="button" className="icon-btn side-close" aria-label="关闭菜单" onClick={() => setOpen(false)}>
+            <Icon name="x" />
+          </button>
         </div>
         {active.length > 0 ? (
-          <button className="jobs" style={{ border: 0, cursor: 'pointer', textAlign: 'left' }} onClick={() => openJob(active[0].id, active[0].title)}>
+          <button className="jobs" style={{ border: 0, cursor: 'pointer', textAlign: 'left' }} onClick={() => { setOpen(false); openJob(active[0].id, active[0].title) }}>
             <span className="grow ellipsis">运行中任务 · {active[0].title}</span>
             <span className="pill info">{active.length}</span>
           </button>
         ) : (
-          <NavLink to="/jobs" className="jobs">
+          <NavLink to="/jobs" className="jobs" onClick={() => setOpen(false)}>
             <span className="grow">没有运行中的任务</span>
           </NavLink>
         )}
@@ -103,7 +141,7 @@ export default function Layout() {
             {g.items
               .filter((it) => !it.admin || can.admin)
               .map((it) => (
-                <NavLink key={it.to} to={it.to} end={it.to === '/'} className={({ isActive }) => 'nav' + (isActive ? ' active' : '')}>
+                <NavLink key={it.to} to={it.to} end={it.to === '/'} onClick={() => setOpen(false)} className={({ isActive }) => 'nav' + (isActive ? ' active' : '')}>
                   <Icon name={it.icon} />
                   <span className="grow">{it.label}</span>
                   {!!it.badge && <span className="pill alert">{it.badge}</span>}

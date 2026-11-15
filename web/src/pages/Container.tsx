@@ -7,6 +7,7 @@ import { bytes, dateTime, get, post, streamLines } from '../api'
 import { useCan } from '../auth'
 import { MetricsPanel } from '../components/charts'
 import { FileBrowser } from '../components/files'
+import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
 import { Card, Confirm, ErrorBox, Icon, Loading, LogView, Meter, Page, Select, Status, Tabs, useAction, useLoad } from '../components/ui'
 
 type Tab = 'logs' | 'terminal' | 'files' | 'metrics' | 'info'
@@ -93,14 +94,14 @@ function Logs({ id, running }: { id: string; running: boolean }) {
     <section className="card" style={{ overflow: 'hidden' }}>
       <div className="card-head">
         <div className="row wrap">
-          <input className="input" style={{ width: 220 }} placeholder="筛选" aria-label="筛选日志" value={filter} onChange={(e) => setFilter(e.target.value)} />
-          <Select style={{ width: 130 }} aria-label="行数" value={tail} onChange={(v) => setTail(v)}>
+          <input className="input filter-input" placeholder="筛选" aria-label="筛选日志" value={filter} onChange={(e) => setFilter(e.target.value)} />
+          <Select className="filter-select" style={{ width: 130 }} aria-label="行数" value={tail} onChange={(v) => setTail(v)}>
             {['200', '500', '2000', '10000', 'all'].map((t) => <option key={t} value={t}>{t === 'all' ? '全部' : `最近 ${t} 行`}</option>)}
           </Select>
           <label className="check"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />实时跟随</label>
           <label className="check"><input type="checkbox" checked={ts} onChange={(e) => setTs(e.target.checked)} />时间戳</label>
         </div>
-        <div className="row">
+        <div className="row wrap">
           {ended && <span className="label">流已结束</span>}
           <button className="btn btn-sm" onClick={() => setPaused(!paused)}>{paused ? '继续' : '暂停'}</button>
           <a className="btn btn-sm" href={`/api/containers/${id}/logs?download=1`}><Icon name="download" size={16} />下载</a>
@@ -161,12 +162,12 @@ function Term({ id }: { id: string }) {
     <section className="card" style={{ overflow: 'hidden' }}>
       <div className="card-head">
         <div className="row wrap">
-          <Select style={{ width: 140 }} aria-label="Shell" value={shell} onChange={(v) => setShell(v)}>
+          <Select className="filter-select" style={{ width: 140 }} aria-label="Shell" value={shell} onChange={(v) => setShell(v)}>
             <option value="auto">自动（bash/sh）</option>
             <option value="bash">bash</option>
             <option value="sh">sh</option>
           </Select>
-          <input className="input" style={{ width: 160 }} placeholder="用户（默认）" aria-label="用户" value={user} onChange={(e) => setUser(e.target.value)} />
+          <input className="input filter-input" style={{ width: 'min(160px, 100%)' }} placeholder="用户（默认）" aria-label="用户" value={user} onChange={(e) => setUser(e.target.value)} />
           <button className="btn btn-sm" onClick={() => setSession(session + 1)}>{state === 'closed' ? '重新连接' : '重新打开'}</button>
         </div>
         <span className={'badge ' + (state === 'open' ? 'ok' : state === 'connecting' ? 'run' : 'off')}><span className="dot" />{state === 'open' ? '已连接' : state === 'connecting' ? '连接中' : '已断开'}</span>
@@ -218,16 +219,24 @@ function Info({ c, id }: { c: any; id: string }) {
         </Card>
       </div>
       <Card title="环境变量" pad={false}>
-        <div className="table-wrap">
-          <table>
-            <tbody>
-              {(c.env || []).map((e: string, i: number) => {
-                const k = e.indexOf('=')
-                return <tr key={i}><td className="mono" style={{ width: '30%' }}>{e.slice(0, k)}</td><td className="mono" style={{ overflowWrap: 'anywhere' }}>{e.slice(k + 1)}</td></tr>
-              })}
-            </tbody>
-          </table>
-        </div>
+        <ResponsiveTable
+          table={
+            <div className="table-wrap">
+              <table>
+                <tbody>
+                  {(c.env || []).map((e: string, i: number) => {
+                    const k = e.indexOf('=')
+                    return <tr key={i}><td className="mono" style={{ width: '30%' }}>{k >= 0 ? e.slice(0, k) : e}</td><td className="mono" style={{ overflowWrap: 'anywhere' }}>{k >= 0 ? e.slice(k + 1) : ''}</td></tr>
+                  })}
+                </tbody>
+              </table>
+            </div>
+          }
+          cards={(c.env || []).map((e: string, i: number) => {
+            const k = e.indexOf('=')
+            return <MobileCard key={i} tight title={<span className="mono">{k >= 0 ? e.slice(0, k) : e}</span>} sub={<span className="mono">{k >= 0 ? e.slice(k + 1) : ''}</span>} />
+          })}
+        />
       </Card>
     </>
   )

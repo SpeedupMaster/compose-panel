@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ago, dateTime, del, get, post, put } from '../api'
 import { roleName, useAuth, useCan } from '../auth'
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Pager, SecretBox, Select, Tabs, useLoad, useToast } from '../components/ui'
+import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
 
 export default function Access() {
   const can = useCan()
@@ -30,29 +31,58 @@ function Users() {
   if (!data) return error ? <ErrorBox error={error} /> : <Loading />
   return (
     <Card title="用户" actions={<button className="btn btn-sm btn-primary" onClick={() => setEdit({ username: '', email: '', role: 'operator', disabled: false, projects: null })}><Icon name="plus" size={16} />添加用户</button>} pad={false}>
-      <div className="table-wrap">
-        <table>
-          <thead><tr><th>用户</th><th>角色</th><th>项目范围</th><th>两步验证</th><th>最近登录</th><th></th></tr></thead>
-          <tbody>
-            {data.map((u) => (
-              <tr key={u.id}>
-                <td><span style={{ fontWeight: 600 }}>{u.username}</span>{u.disabled && <span className="badge off" style={{ marginLeft: 6 }}>已停用</span>}<div className="label">{u.email}</div></td>
-                <td>{roleName[u.role]}</td>
-                <td>{u.role === 'admin' || u.projects === null ? '全部项目' : `${u.projects.length} 个项目`}</td>
-                <td>{u.totp ? <span className="badge ok">已开启</span> : <span className="badge warn">未开启</span>}</td>
-                <td className="muted nowrap">{u.lastLoginAt ? `${ago(u.lastLoginAt)} · ${u.lastLoginIp}` : '从未'}</td>
-                <td>
-                  <div className="row" style={{ justifyContent: 'flex-end' }}>
-                    <button className="btn btn-sm" onClick={() => setReset(u)}>重置密码</button>
-                    <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ id: u.id, username: u.username, email: u.email, role: u.role, disabled: u.disabled, projects: u.projects })}><Icon name="edit" size={16} /></button>
-                    {u.id !== me?.user.id && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(u)}><Icon name="trash" size={16} /></button>}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <ResponsiveTable
+        table={
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>用户</th><th>角色</th><th>项目范围</th><th>两步验证</th><th>最近登录</th><th></th></tr></thead>
+              <tbody>
+                {data.map((u) => (
+                  <tr key={u.id}>
+                    <td><span style={{ fontWeight: 600 }}>{u.username}</span>{u.disabled && <span className="badge off" style={{ marginLeft: 6 }}>已停用</span>}<div className="label">{u.email}</div></td>
+                    <td>{roleName[u.role]}</td>
+                    <td>{u.role === 'admin' || u.projects === null ? '全部项目' : `${u.projects.length} 个项目`}</td>
+                    <td>{u.totp ? <span className="badge ok">已开启</span> : <span className="badge warn">未开启</span>}</td>
+                    <td className="muted nowrap">{u.lastLoginAt ? `${ago(u.lastLoginAt)} · ${u.lastLoginIp}` : '从未'}</td>
+                    <td>
+                      <div className="row" style={{ justifyContent: 'flex-end' }}>
+                        <button className="btn btn-sm" onClick={() => setReset(u)}>重置密码</button>
+                        <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ id: u.id, username: u.username, email: u.email, role: u.role, disabled: u.disabled, projects: u.projects })}><Icon name="edit" size={16} /></button>
+                        {u.id !== me?.user.id && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(u)}><Icon name="trash" size={16} /></button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        }
+        cards={data.map((u) => (
+          <MobileCard
+            key={u.id}
+            title={u.username}
+            sub={u.email}
+            badges={
+              <>
+                {u.disabled && <span className="badge off">已停用</span>}
+                {u.totp ? <span className="badge ok">已开启两步</span> : <span className="badge warn">未开启两步</span>}
+              </>
+            }
+            meta={[
+              { label: '角色', value: roleName[u.role] },
+              { label: '项目范围', value: u.role === 'admin' || u.projects === null ? '全部项目' : `${u.projects.length} 个项目` },
+              { label: '最近登录', value: u.lastLoginAt ? `${ago(u.lastLoginAt)} · ${u.lastLoginIp}` : '从未', full: true },
+            ]}
+            actions={
+              <>
+                <button className="btn btn-sm" onClick={() => setReset(u)}>重置密码</button>
+                <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ id: u.id, username: u.username, email: u.email, role: u.role, disabled: u.disabled, projects: u.projects })}><Icon name="edit" size={16} /></button>
+                {u.id !== me?.user.id && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(u)}><Icon name="trash" size={16} /></button>}
+              </>
+            }
+          />
+        ))}
+      />
       {edit && <UserModal u={edit} onClose={() => setEdit(null)} onSaved={(r) => { setEdit(null); reload(); if (r?.password) setPw({ user: edit.username, password: r.password }) }} />}
       {pw && (
         <Modal title="初始密码" onClose={() => setPw(null)} footer={<button className="btn btn-primary" onClick={() => setPw(null)}>完成</button>}>
@@ -117,24 +147,47 @@ function Tokens() {
     <Card title="API 令牌" actions={<button className="btn btn-sm btn-primary" onClick={() => setCreate({ name: '', scope: 'deploy', days: 90 })}><Icon name="plus" size={16} />创建令牌</button>} pad={false}>
       <p className="label" style={{ padding: '12px 16px 0', margin: 0 }}>用于 CI 等脚本调用：<code className="mono">curl -H "Authorization: Bearer cpt_…" -X POST {location.origin}/api/projects/ID/deploy</code></p>
       {data.length === 0 ? <Empty>没有令牌。</Empty> : (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>名称</th><th>前缀</th><th>权限</th>{can.admin && <th>所有者</th>}<th>过期</th><th>最近使用</th><th></th></tr></thead>
-            <tbody>
-              {data.map((t) => (
-                <tr key={t.id}>
-                  <td style={{ fontWeight: 600 }}>{t.name}</td>
-                  <td className="mono">{t.prefix}…</td>
-                  <td>{({ read: '只读', deploy: '部署', full: '完全' } as Record<string, string>)[t.scope] || t.scope}</td>
-                  {can.admin && <td>{t.owner}</td>}
-                  <td className="muted nowrap">{t.expiresAt ? (t.expiresAt < Date.now() / 1000 ? <span className="badge err">已过期</span> : dateTime(t.expiresAt)) : '永不'}</td>
-                  <td className="muted nowrap">{t.lastUsedAt ? `${ago(t.lastUsedAt)} · ${t.lastUsedIp}` : '从未'}</td>
-                  <td><button className="btn btn-sm btn-ghost btn-icon" aria-label="吊销" onClick={() => setRm(t)}><Icon name="trash" size={16} /></button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ResponsiveTable
+          table={
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>名称</th><th>前缀</th><th>权限</th>{can.admin && <th>所有者</th>}<th>过期</th><th>最近使用</th><th></th></tr></thead>
+                <tbody>
+                  {data.map((t) => (
+                    <tr key={t.id}>
+                      <td style={{ fontWeight: 600 }}>{t.name}</td>
+                      <td className="mono">{t.prefix}…</td>
+                      <td>{({ read: '只读', deploy: '部署', full: '完全' } as Record<string, string>)[t.scope] || t.scope}</td>
+                      {can.admin && <td>{t.owner}</td>}
+                      <td className="muted nowrap">{t.expiresAt ? (t.expiresAt < Date.now() / 1000 ? <span className="badge err">已过期</span> : dateTime(t.expiresAt)) : '永不'}</td>
+                      <td className="muted nowrap">{t.lastUsedAt ? `${ago(t.lastUsedAt)} · ${t.lastUsedIp}` : '从未'}</td>
+                      <td><button className="btn btn-sm btn-ghost btn-icon" aria-label="吊销" onClick={() => setRm(t)}><Icon name="trash" size={16} /></button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          }
+          cards={data.map((t) => (
+            <MobileCard
+              key={t.id}
+              title={t.name}
+              sub={<span className="mono">{t.prefix}…</span>}
+              badges={
+                <>
+                  <span className="badge off">{({ read: '只读', deploy: '部署', full: '完全' } as Record<string, string>)[t.scope] || t.scope}</span>
+                  {t.expiresAt && t.expiresAt < Date.now() / 1000 && <span className="badge err">已过期</span>}
+                </>
+              }
+              meta={[
+                can.admin ? { label: '所有者', value: t.owner } : false,
+                { label: '过期', value: t.expiresAt ? dateTime(t.expiresAt) : '永不' },
+                { label: '最近使用', value: t.lastUsedAt ? `${ago(t.lastUsedAt)} · ${t.lastUsedIp}` : '从未', full: true },
+              ]}
+              actions={<button className="btn btn-sm btn-danger" onClick={() => setRm(t)}><Icon name="trash" size={16} />吊销</button>}
+            />
+          ))}
+        />
       )}
       {create && (
         <Modal title="创建 API 令牌" onClose={() => setCreate(null)} footer={<><button className="btn" onClick={() => setCreate(null)}>取消</button><button className="btn btn-primary" onClick={async () => { try { const r = await post('/tokens', create); setCreate(null); setTok(r.token); reload() } catch (e) { setErr(e) } }}>创建</button></>}>
@@ -179,16 +232,16 @@ function Audit() {
     <section className="card">
       <div className="card-head">
         <div className="row wrap">
-          <input className="input" style={{ width: 140 }} placeholder="用户" aria-label="用户" value={f.actor} onChange={(e) => { setF({ ...f, actor: e.target.value }); setPage(1) }} />
-          <input className="input" style={{ width: 160 }} placeholder="操作，如 project." aria-label="操作" value={f.action} onChange={(e) => { setF({ ...f, action: e.target.value }); setPage(1) }} />
-          <input className="input" style={{ width: 180 }} placeholder="搜索对象/详情" aria-label="搜索" value={f.q} onChange={(e) => { setF({ ...f, q: e.target.value }); setPage(1) }} />
-          <Select style={{ width: 110 }} aria-label="结果" value={f.result} onChange={(v) => { setF({ ...f, result: v }); setPage(1) }}>
+          <input className="input filter-input" style={{ width: 'min(140px, 100%)', flex: '1 1 120px' }} placeholder="用户" aria-label="用户" value={f.actor} onChange={(e) => { setF({ ...f, actor: e.target.value }); setPage(1) }} />
+          <input className="input filter-input" style={{ width: 'min(160px, 100%)', flex: '1 1 140px' }} placeholder="操作，如 project." aria-label="操作" value={f.action} onChange={(e) => { setF({ ...f, action: e.target.value }); setPage(1) }} />
+          <input className="input filter-input" style={{ width: 'min(180px, 100%)', flex: '1 1 160px' }} placeholder="搜索对象/详情" aria-label="搜索" value={f.q} onChange={(e) => { setF({ ...f, q: e.target.value }); setPage(1) }} />
+          <Select className="filter-select" style={{ width: 110 }} aria-label="结果" value={f.result} onChange={(v) => { setF({ ...f, result: v }); setPage(1) }}>
             <option value="">全部</option>
             <option value="ok">成功</option>
             <option value="failed">失败</option>
           </Select>
         </div>
-        <div className="row">
+        <div className="row wrap">
           <button className="btn btn-sm" onClick={async () => { try { const r = await get('/audit/verify'); r.ok ? toast.ok(`哈希链完整（${r.count} 条）`) : toast.err(`哈希链在第 ${r.brokenAt} 条处断开，日志可能被篡改`) } catch (e) { toast.err(e) } }}><Icon name="check" size={16} />校验完整性</button>
           <a className="btn btn-sm" href={`/api/audit/export?${qs}`}><Icon name="download" size={16} />导出 CSV</a>
         </div>

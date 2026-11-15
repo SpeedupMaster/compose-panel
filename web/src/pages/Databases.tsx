@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ago, bytes, get, post } from '../api'
 import { useCan } from '../auth'
 import { Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Select, Status, useJobLog, useLoad } from '../components/ui'
+import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
 
 export const exposureName: Record<string, string> = { internal: '仅内部网络', local: '本机 127.0.0.1', public: '公网' }
 
@@ -20,23 +21,52 @@ export default function Databases() {
             还没有数据库实例。面板可以创建 PostgreSQL、MySQL、MariaDB、MongoDB 和 Redis，并自动配置备份。
           </Empty>
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>名称</th><th>引擎</th><th>状态</th><th>访问</th><th>数据量</th><th>最近备份</th></tr></thead>
-              <tbody>
-                {data.map(({ instance: d, lastBackupAt, lastBackupStatus, volumeSize }) => (
-                  <tr key={d.id} className="clickable" onClick={() => nav(`/databases/${d.id}`)}>
-                    <td><Link className="row-link" to={`/databases/${d.id}`} onClick={(e) => e.stopPropagation()}>{d.name}</Link><div className="label mono">{d.host}:{d.port}</div></td>
-                    <td>{engineLabel(d.engine)} <span className="muted">{d.version}</span></td>
-                    <td><Status s={d.status} /></td>
-                    <td>{exposureName[d.exposure] || d.exposure}</td>
-                    <td className="nowrap">{volumeSize > 0 ? bytes(volumeSize) : '—'}</td>
-                    <td className="nowrap">{lastBackupAt ? <span className="row"><Status s={lastBackupStatus} /><span className="muted">{ago(lastBackupAt)}</span></span> : <span className="badge warn">从未备份</span>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ResponsiveTable
+            table={
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>名称</th><th>引擎</th><th>状态</th><th>访问</th><th>数据量</th><th>最近备份</th></tr></thead>
+                  <tbody>
+                    {data.map(({ instance: d, lastBackupAt, lastBackupStatus, volumeSize }) => (
+                      <tr key={d.id} className="clickable" onClick={() => nav(`/databases/${d.id}`)}>
+                        <td><Link className="row-link" to={`/databases/${d.id}`} onClick={(e) => e.stopPropagation()}>{d.name}</Link><div className="label mono">{d.host}:{d.port}</div></td>
+                        <td>{engineLabel(d.engine)} <span className="muted">{d.version}</span></td>
+                        <td><Status s={d.status} /></td>
+                        <td>{exposureName[d.exposure] || d.exposure}</td>
+                        <td className="nowrap">{volumeSize > 0 ? bytes(volumeSize) : '—'}</td>
+                        <td className="nowrap">{lastBackupAt ? <span className="row"><Status s={lastBackupStatus} /><span className="muted">{ago(lastBackupAt)}</span></span> : <span className="badge warn">从未备份</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            }
+            cards={data.map(({ instance: d, lastBackupAt, lastBackupStatus, volumeSize }) => (
+              <MobileCard
+                key={d.id}
+                onClick={() => nav(`/databases/${d.id}`)}
+                title={<Link className="row-link" to={`/databases/${d.id}`} onClick={(e) => e.stopPropagation()}>{d.name}</Link>}
+                sub={<span className="mono">{d.host}:{d.port}</span>}
+                badges={<Status s={d.status} />}
+                meta={[
+                  { label: '引擎', value: `${engineLabel(d.engine)} ${d.version}` },
+                  { label: '访问', value: exposureName[d.exposure] || d.exposure },
+                  { label: '数据量', value: volumeSize > 0 ? bytes(volumeSize) : '—' },
+                  {
+                    label: '最近备份',
+                    value: lastBackupAt ? (
+                      <span className="row" style={{ gap: 6 }}>
+                        <Status s={lastBackupStatus} />
+                        <span className="muted">{ago(lastBackupAt)}</span>
+                      </span>
+                    ) : (
+                      <span className="badge warn">从未备份</span>
+                    ),
+                  },
+                ]}
+              />
+            ))}
+          />
         )}
       </section>
       {creating && <CreateDB onClose={() => setCreating(false)} />}
@@ -99,7 +129,7 @@ function CreateDB({ onClose }: { onClose: () => void }) {
   }
   return (
     <Modal title="新建数据库" onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" disabled={busy || !f.name} onClick={submit}>{busy ? '创建中…' : '创建'}</button></>}>
-      <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8 }}>
+      <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100px, 100%), 1fr))', gap: 8 }}>
         {(engines || []).map((e) => (
           <button key={e.id} className={'btn' + (f.engine === e.id ? ' btn-primary' : '')} style={{ height: 44 }} onClick={() => setF({ ...f, engine: e.id, version: '', port: 0, image: '' })}>{e.name}</button>
         ))}

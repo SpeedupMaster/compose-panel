@@ -4,6 +4,7 @@ import { ago, bytes, del, get, post, put } from '../api'
 import { useCan } from '../auth'
 import { BackupNowModal, BackupSource, BackupTable, SourcePicker, sourceText, useStorages } from '../components/backup'
 import { Drills } from './Drills'
+import { MobileCard, ResponsiveTable, joinInline } from '../components/ResponsiveList'
 import { Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Select, Status, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
 
 type Policy = {
@@ -79,31 +80,64 @@ export default function Backups() {
           {!policies ? <Loading /> : policies.length === 0 ? (
             <Empty action={can.operator && <button className="btn btn-primary" onClick={() => setEdit(blankPolicy({ kind: 'database' }))}>新建策略</button>}>还没有备份策略。建议为每个数据库和重要数据卷设置每日备份。</Empty>
           ) : (
-            <div className="table-wrap">
-              <table>
-                <thead><tr><th>名称</th><th>对象</th><th>计划</th><th>保留</th><th>存储</th><th>上次</th><th>下次</th><th></th></tr></thead>
-                <tbody>
-                  {policies.map((p) => (
-                    <tr key={p.id}>
-                      <td style={{ fontWeight: 600 }}>{p.name}{!p.enabled && <span className="badge off" style={{ marginLeft: 6 }}>停用</span>}</td>
-                      <td>{sourceText(p.source, names)}</td>
-                      <td className="mono">{p.schedule}</td>
-                      <td className="mono" style={{ fontSize: 12 }}>{p.keepDaily}D {p.keepWeekly}W {p.keepMonthly}M {p.keepYearly}Y</td>
-                      <td>{p.storageName}{p.encrypt && <Icon name="lock" size={14} />}</td>
-                      <td className="nowrap">{p.lastRun ? <span className="row"><Status s={p.lastRun.status} /><span className="muted">{ago(p.lastRun.startedAt)}</span></span> : <span className="muted">—</span>}</td>
-                      <td className="muted nowrap">{p.enabled && p.nextRun ? ago(p.nextRun) : '—'}</td>
-                      <td>
-                        <div className="row" style={{ justifyContent: 'flex-end' }}>
-                          {can.operator && <button className="btn btn-sm" onClick={async () => { try { const r = await post(`/backup-policies/${p.id}/run`); openJob(r.jobId, `备份 ${p.name}`) } catch (e) { toast.err(e) } }}>运行</button>}
-                          {can.operator && <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ ...p })}><Icon name="edit" size={16} /></button>}
-                          {can.admin && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(p)}><Icon name="trash" size={16} /></button>}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ResponsiveTable
+              table={
+                <div className="table-wrap">
+                  <table>
+                    <thead><tr><th>名称</th><th>对象</th><th>计划</th><th>保留</th><th>存储</th><th>上次</th><th>下次</th><th></th></tr></thead>
+                    <tbody>
+                      {policies.map((p) => (
+                        <tr key={p.id}>
+                          <td style={{ fontWeight: 600 }}>{p.name}{!p.enabled && <span className="badge off" style={{ marginLeft: 6 }}>停用</span>}</td>
+                          <td>{sourceText(p.source, names)}</td>
+                          <td className="mono">{p.schedule}</td>
+                          <td className="mono" style={{ fontSize: 12 }}>{p.keepDaily}D {p.keepWeekly}W {p.keepMonthly}M {p.keepYearly}Y</td>
+                          <td>{p.storageName}{p.encrypt && <Icon name="lock" size={14} />}</td>
+                          <td className="nowrap">{p.lastRun ? <span className="row"><Status s={p.lastRun.status} /><span className="muted">{ago(p.lastRun.startedAt)}</span></span> : <span className="muted">—</span>}</td>
+                          <td className="muted nowrap">{p.enabled && p.nextRun ? ago(p.nextRun) : '—'}</td>
+                          <td>
+                            <div className="row" style={{ justifyContent: 'flex-end' }}>
+                              {can.operator && <button className="btn btn-sm" onClick={async () => { try { const r = await post(`/backup-policies/${p.id}/run`); openJob(r.jobId, `备份 ${p.name}`) } catch (e) { toast.err(e) } }}>运行</button>}
+                              {can.operator && <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ ...p })}><Icon name="edit" size={16} /></button>}
+                              {can.admin && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(p)}><Icon name="trash" size={16} /></button>}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              }
+              cards={policies.map((p) => (
+                <MobileCard
+                  key={p.id}
+                  title={p.name}
+                  sub={sourceText(p.source, names)}
+                  badges={
+                    <>
+                      {!p.enabled && <span className="badge off">停用</span>}
+                      {p.encrypt && <span className="badge off"><Icon name="lock" size={12} />加密</span>}
+                      {p.lastRun && <Status s={p.lastRun.status} />}
+                    </>
+                  }
+                  meta={[
+                    { label: '计划', value: p.schedule, mono: true },
+                    { label: '存储', value: p.storageName },
+                    { label: '保留', value: `${p.keepDaily}D ${p.keepWeekly}W ${p.keepMonthly}M ${p.keepYearly}Y`, mono: true },
+                    { label: '时间', value: joinInline([p.lastRun && `上次 ${ago(p.lastRun.startedAt)}`, p.enabled && p.nextRun && `下次 ${ago(p.nextRun)}`]) || '—' },
+                  ]}
+                  actions={
+                    can.operator || can.admin ? (
+                      <>
+                        {can.operator && <button className="btn btn-sm" onClick={async () => { try { const r = await post(`/backup-policies/${p.id}/run`); openJob(r.jobId, `备份 ${p.name}`) } catch (e) { toast.err(e) } }}>运行</button>}
+                        {can.operator && <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ ...p })}><Icon name="edit" size={16} /></button>}
+                        {can.admin && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(p)}><Icon name="trash" size={16} /></button>}
+                      </>
+                    ) : undefined
+                  }
+                />
+              ))}
+            />
           )}
         </section>
       )}
@@ -111,8 +145,8 @@ export default function Backups() {
         <section className="card">
           <div className="card-head">
             <div className="row wrap">
-              <input className="input" style={{ width: 240 }} placeholder="搜索" aria-label="搜索备份" value={q} onChange={(e) => setQ(e.target.value)} />
-              <Select style={{ width: 140 }} aria-label="状态" value={status} onChange={(v) => setStatus(v)}>
+              <input className="input filter-input" placeholder="搜索" aria-label="搜索备份" value={q} onChange={(e) => setQ(e.target.value)} />
+              <Select className="filter-select" aria-label="状态" value={status} onChange={(v) => setStatus(v)}>
                 <option value="">全部状态</option>
                 <option value="success">成功</option>
                 <option value="failed">失败</option>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { CSSProperties, useEffect, useRef, useState } from 'react'
 import type { CodeLang, EditorHandle } from './codemirror'
 import { post } from '../api'
 import { Icon } from './ui'
@@ -42,7 +42,7 @@ export function CodeArea({ value, onChange, onSubmit, rows = 22, readOnly, place
   useEffect(() => { ed.current?.setReadOnly(!!readOnly || !onChange) }, [readOnly, !onChange, ready])
 
   return (
-    <div className={'code-area' + (readOnly ? ' readonly' : '')} style={{ height: Math.round(rows * 20.8 + 18) }}>
+    <div className={'code-area' + (readOnly ? ' readonly' : '')} style={{ '--code-h': `${Math.round(rows * 20.8 + 18)}px` } as CSSProperties}>
       <div ref={host} className="code-host" />
       {!ready && <textarea className="code-fallback code" aria-label={label} spellCheck={false} value={value} readOnly={readOnly} placeholder={placeholder} onChange={(e) => onChange?.(e.target.value)} />}
     </div>
@@ -87,8 +87,8 @@ export function EnvEditor({ env, onChange, readOnly }: { env: EnvVar[]; onChange
     <div className="col">
       {env.length === 0 && <div className="muted">没有环境变量。Compose 中用 <code className="mono">${'{'}KEY{'}'}</code> 引用。</div>}
       {env.map((e, i) => (
-        <div className="row" key={i}>
-          <input className="input mono" style={{ maxWidth: 240 }} aria-label="变量名" placeholder="KEY" value={e.key} readOnly={readOnly} onChange={(x) => set(i, { key: x.target.value })} />
+        <div className="env-row" key={i}>
+          <input className="input mono env-row-key" aria-label="变量名" placeholder="KEY" value={e.key} readOnly={readOnly} onChange={(x) => set(i, { key: x.target.value })} />
           <input
             className="input mono grow"
             aria-label="变量值"
@@ -110,7 +110,7 @@ export function EnvEditor({ env, onChange, readOnly }: { env: EnvVar[]; onChange
         </div>
       ))}
       {!readOnly && (
-        <div className="row">
+        <div className="row wrap">
           <button className="btn btn-sm" onClick={() => onChange([...env, { key: '', value: '', secret: false }])}><Icon name="plus" size={16} />添加变量</button>
           <button className="btn btn-sm btn-ghost" onClick={() => setBulk(env.map((e) => `${e.key}=${e.secret ? '' : e.value}`).join('\n'))}>批量编辑</button>
         </div>

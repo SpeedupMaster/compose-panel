@@ -1,5 +1,6 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { bytes, get } from '../api'
+import { calcChartTipLeft, nearestChartIndex } from './geometry'
 import { ErrorBox, Loading, useLoad } from './ui'
 
 // ---------- line chart (hand-rolled SVG) ----------
@@ -46,7 +47,15 @@ export function LineChart({ ts, lines, format, yMax, height = 160, unitBytes }: 
     ro.observe(box.current)
     return () => ro.disconnect()
   }, [])
-  const padL = 58, padR = 10, padT = 10, padB = 22
+  useEffect(() => {
+    if (hover == null) return
+    const onDown = (e: PointerEvent) => {
+      if (box.current && e.target instanceof Node && !box.current.contains(e.target)) setHover(null)
+    }
+    document.addEventListener('pointerdown', onDown)
+    return () => document.removeEventListener('pointerdown', onDown)
+  }, [hover != null])
+  const padL = width < 380 ? 50 : 58, padR = 10, padT = 10, padB = 22
   const w = width - padL - padR
   const h = height - padT - padB
   const maxV = useMemo(() => {
@@ -79,16 +88,21 @@ export function LineChart({ ts, lines, format, yMax, height = 160, unitBytes }: 
   })
   const ticks = [0, 0.25, 0.5, 0.75, 1]
   const xt = Math.min(6, Math.max(2, Math.floor(w / 110)))
-  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    const r = (e.currentTarget as SVGSVGElement).getBoundingClientRect()
-    const t = t0 + ((e.clientX - r.left - padL) / w) * span
-    let best = 0
-    for (let i = 1; i < ts.length; i++) if (Math.abs(ts[i] - t) < Math.abs(ts[best] - t)) best = i
-    setHover(best)
+  const pickAt = (e: React.PointerEvent<SVGSVGElement>) => {
+    const r = e.currentTarget.getBoundingClientRect()
+    setHover(nearestChartIndex(e.clientX, r.left, padL, w, ts))
   }
+  const active = hover != null && hover < ts.length ? hover : null
   return (
     <div ref={box} className="chart">
-      <svg width={width} height={height} onMouseMove={onMove} onMouseLeave={() => setHover(null)} role="img">
+      <svg
+        width={width}
+        height={height}
+        onPointerDown={pickAt}
+        onPointerMove={pickAt}
+        onPointerLeave={(e) => { if (e.pointerType !== 'touch') setHover(null) }}
+        role="img"
+      >
         {ticks.map((k) => (
           <g key={k}>
             <line x1={padL} x2={padL + w} y1={padT + h - k * h} y2={padT + h - k * h} stroke="#EEEEEB" />
@@ -99,21 +113,21 @@ export function LineChart({ ts, lines, format, yMax, height = 160, unitBytes }: 
           <text key={i} x={x(t)} y={height - 6} textAnchor={i === 0 ? 'start' : i === xt ? 'end' : 'middle'} className="chart-axis">{timeLabel(t, span)}</text>
         ))}
         {paths.map((d, i) => <path key={i} d={d} fill="none" stroke={lines[i].color} strokeWidth={1.6} strokeLinejoin="round" />)}
-        {hover != null && (
+        {active != null && (
           <g>
-            <line x1={x(ts[hover])} x2={x(ts[hover])} y1={padT} y2={padT + h} stroke="#9C9EA3" strokeDasharray="3 3" />
-            {lines.map((l, i) => l.values[hover] != null && <circle key={i} cx={x(ts[hover])} cy={y(l.values[hover]!)} r={3} fill={l.color} />)}
+            <line x1={x(ts[active])} x2={x(ts[active])} y1={padT} y2={padT + h} stroke="#9C9EA3" strokeDasharray="3 3" />
+            {lines.map((l, i) => l.values[active] != null && <circle key={i} cx={x(ts[active])} cy={y(l.values[active]!)} r={3} fill={l.color} />)}
           </g>
         )}
       </svg>
-      {hover != null && (
-        <div className="chart-tip" style={{ left: Math.min(x(ts[hover]) + 12, width - 190) }}>
-          <div className="label">{new Date(ts[hover] * 1000).toLocaleString()}</div>
+      {active != null && (
+        <div className="chart-tip" style={{ left: calcChartTipLeft(x(ts[active]), width) }}>
+          <div className="label">{new Date(ts[active] * 1000).toLocaleString()}</div>
           {lines.map((l, i) => (
             <div key={i} className="row" style={{ gap: 6 }}>
               <span className="chart-key" style={{ background: l.color }} />
               <span className="grow ellipsis">{l.label}</span>
-              <b>{l.values[hover] == null ? '—' : format(l.values[hover]!)}</b>
+              <b>{l.values[active] == null ? '—' : format(l.values[active]!)}</b>
             </div>
           ))}
         </div>

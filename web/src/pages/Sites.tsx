@@ -4,6 +4,7 @@ import { del, get, post, put } from '../api'
 import { useCan } from '../auth'
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Select, useLoad, useToast } from '../components/ui'
 import { AccessLogs } from './SiteLogs'
+import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
 
 type Site = {
   id?: number
@@ -59,43 +60,118 @@ export default function Sites() {
         {!data ? <Loading /> : data.sites.length === 0 ? (
           <Empty action={can.operator && <button className="btn btn-primary" onClick={() => setEdit(blank)}>添加站点</button>}>还没有站点。把域名解析到服务器后，在这里绑定到项目的服务。</Empty>
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>域名</th><th>目标</th><th>证书</th><th>选项</th><th></th></tr></thead>
-              <tbody>
-                {data.sites.map(({ site: s, target, cert }: any) => (
-                  <tr
-                    key={s.id}
-                    className={can.operator || s.kind !== 'redirect' ? 'clickable' : undefined}
-                    onClick={() => {
-                      if (can.operator) setEdit({ ...s, basicPassword: '' })
-                      else if (s.kind !== 'redirect') setLogs(s)
-                    }}
-                  >
-                    <td>
-                      {s.domains.map((d: string) => <div key={d}><a className="sub-link mono" href={'https://' + d} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{d}</a></div>)}
+          <ResponsiveTable
+            table={
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>域名</th><th>目标</th><th>证书</th><th>选项</th><th></th></tr></thead>
+                  <tbody>
+                    {data.sites.map(({ site: s, target, cert }: any) => (
+                      <tr
+                        key={s.id}
+                        className={can.operator || s.kind !== 'redirect' ? 'clickable' : undefined}
+                        onClick={() => {
+                          if (can.operator) setEdit({ ...s, basicPassword: '' })
+                          else if (s.kind !== 'redirect') setLogs(s)
+                        }}
+                      >
+                        <td>
+                          {s.domains.map((d: string) => <div key={d}><a className="sub-link mono" href={'https://' + d} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{d}</a></div>)}
+                          {!s.enabled && <span className="badge off">停用</span>}
+                          {s.maintenance && <span className="badge warn"><span className="dot" />维护中</span>}
+                        </td>
+                        <td>
+                          {s.kind === 'redirect' ? <span>跳转 → <span className="mono">{s.upstream}</span></span> : s.projectId ? <><Link className="sub-link" to={`/projects/${s.projectId}`} onClick={(e) => e.stopPropagation()}>{s.projectName}</Link> / <span className="mono">{s.service}:{s.port}</span></> : <span className="mono">{s.upstream}</span>}
+                          <div className="label mono">{target}</div>
+                        </td>
+                        <td>{cert ? cert.source === 'internal' ? <span className="badge ok">本地 CA · 自动续期</span> : <span className={'badge ' + (cert.daysLeft <= 7 ? 'err' : cert.daysLeft <= 14 ? 'warn' : 'ok')}>{cert.source === 'uploaded' ? '上传' : "Let's Encrypt"} · 剩 {cert.daysLeft} 天</span> : <span className="badge off">待签发</span>}</td>
+                        <td className="label">{[s.hsts && 'HSTS', s.compress && '压缩', s.hasBasicAuth && '密码保护', s.ipAllow && 'IP 白名单', s.maxBody && `上限 ${s.maxBody}`, s.loadBalance && '负载均衡', s.healthPath && `健康检查 ${s.healthPath}`, s.accessLog && '访问日志', s.maintenanceDeploy && '部署时维护'].filter(Boolean).join(' · ') || '—'}</td>
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <div className="row" style={{ justifyContent: 'flex-end' }}>
+                            {s.kind !== 'redirect' && <button className="btn btn-sm" onClick={() => setLogs(s)}><Icon name="logs" size={16} />日志</button>}
+                            {can.operator && s.kind !== 'redirect' && <button className={'btn btn-sm' + (s.maintenance ? ' btn-primary' : '')} onClick={() => setMaint(s)}>{s.maintenance ? '结束维护' : '维护'}</button>}
+                            {can.operator && <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ ...s, basicPassword: '' })}><Icon name="edit" size={16} /></button>}
+                            {can.operator && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(s)}><Icon name="trash" size={16} /></button>}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            }
+            cards={data.sites.map(({ site: s, target, cert }: any) => {
+              const opts = [s.hsts && 'HSTS', s.compress && '压缩', s.hasBasicAuth && '密码保护', s.ipAllow && 'IP 白名单', s.maxBody && `上限 ${s.maxBody}`, s.loadBalance && '负载均衡', s.healthPath && `健康检查 ${s.healthPath}`, s.accessLog && '访问日志', s.maintenanceDeploy && '部署时维护'].filter(Boolean).join(' · ')
+              return (
+                <MobileCard
+                  key={s.id}
+                  onClick={
+                    can.operator || s.kind !== 'redirect'
+                      ? () => {
+                          if (can.operator) setEdit({ ...s, basicPassword: '' })
+                          else if (s.kind !== 'redirect') setLogs(s)
+                        }
+                      : undefined
+                  }
+                  title={
+                    <div className="col" style={{ gap: 2 }}>
+                      {s.domains.map((d: string) => (
+                        <a key={d} className="sub-link mono" href={'https://' + d} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+                          {d}
+                        </a>
+                      ))}
+                    </div>
+                  }
+                  sub={<span className="mono">{target}</span>}
+                  badges={
+                    <>
                       {!s.enabled && <span className="badge off">停用</span>}
                       {s.maintenance && <span className="badge warn"><span className="dot" />维护中</span>}
-                    </td>
-                    <td>
-                      {s.kind === 'redirect' ? <span>跳转 → <span className="mono">{s.upstream}</span></span> : s.projectId ? <><Link className="sub-link" to={`/projects/${s.projectId}`} onClick={(e) => e.stopPropagation()}>{s.projectName}</Link> / <span className="mono">{s.service}:{s.port}</span></> : <span className="mono">{s.upstream}</span>}
-                      <div className="label mono">{target}</div>
-                    </td>
-                    <td>{cert ? cert.source === 'internal' ? <span className="badge ok">本地 CA · 自动续期</span> : <span className={'badge ' + (cert.daysLeft <= 7 ? 'err' : cert.daysLeft <= 14 ? 'warn' : 'ok')}>{cert.source === 'uploaded' ? '上传' : "Let's Encrypt"} · 剩 {cert.daysLeft} 天</span> : <span className="badge off">待签发</span>}</td>
-                    <td className="label">{[s.hsts && 'HSTS', s.compress && '压缩', s.hasBasicAuth && '密码保护', s.ipAllow && 'IP 白名单', s.maxBody && `上限 ${s.maxBody}`, s.loadBalance && '负载均衡', s.healthPath && `健康检查 ${s.healthPath}`, s.accessLog && '访问日志', s.maintenanceDeploy && '部署时维护'].filter(Boolean).join(' · ') || '—'}</td>
-                    <td onClick={(e) => e.stopPropagation()}>
-                      <div className="row" style={{ justifyContent: 'flex-end' }}>
+                      {cert ? (
+                        cert.source === 'internal' ? (
+                          <span className="badge ok">本地 CA · 自动续期</span>
+                        ) : (
+                          <span className={'badge ' + (cert.daysLeft <= 7 ? 'err' : cert.daysLeft <= 14 ? 'warn' : 'ok')}>
+                            {cert.source === 'uploaded' ? '上传' : "Let's Encrypt"} · 剩 {cert.daysLeft} 天
+                          </span>
+                        )
+                      ) : (
+                        <span className="badge off">待签发</span>
+                      )}
+                    </>
+                  }
+                  meta={[
+                    {
+                      label: '目标',
+                      value: s.kind === 'redirect' ? (
+                        <span>跳转 → <span className="mono">{s.upstream}</span></span>
+                      ) : s.projectId ? (
+                        <>
+                          <Link className="sub-link" to={`/projects/${s.projectId}`} onClick={(e) => e.stopPropagation()}>{s.projectName}</Link>
+                          {' / '}
+                          <span className="mono">{s.service}:{s.port}</span>
+                        </>
+                      ) : (
+                        <span className="mono">{s.upstream}</span>
+                      ),
+                      full: true,
+                    },
+                    opts ? { label: '选项', value: opts, full: true } : false,
+                  ]}
+                  actions={
+                    s.kind !== 'redirect' || can.operator ? (
+                      <>
                         {s.kind !== 'redirect' && <button className="btn btn-sm" onClick={() => setLogs(s)}><Icon name="logs" size={16} />日志</button>}
                         {can.operator && s.kind !== 'redirect' && <button className={'btn btn-sm' + (s.maintenance ? ' btn-primary' : '')} onClick={() => setMaint(s)}>{s.maintenance ? '结束维护' : '维护'}</button>}
                         {can.operator && <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ ...s, basicPassword: '' })}><Icon name="edit" size={16} /></button>}
                         {can.operator && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(s)}><Icon name="trash" size={16} /></button>}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      </>
+                    ) : undefined
+                  }
+                />
+              )
+            })}
+          />
         )}
       </section>
       {edit && <SiteModal s={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reload() }} />}

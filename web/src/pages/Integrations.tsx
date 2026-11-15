@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ago, bytes, del, get, post, put } from '../api'
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, SecretBox, Select, Tabs, useLoad, useToast } from '../components/ui'
+import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
 
 export default function Integrations() {
   const [tab, setTab] = useState<'storage' | 'notify' | 'key'>('storage')
@@ -32,29 +33,53 @@ function Storage() {
   if (!data) return error ? <ErrorBox error={error} /> : <Loading />
   return (
     <Card title="备份存储位置" actions={<button className="btn btn-sm btn-primary" onClick={() => setEdit({ name: '', kind: 's3', config: { region: 'auto', prefix: '' } })}><Icon name="plus" size={16} />添加</button>} pad={false}>
-      <div className="table-wrap">
-        <table>
-          <thead><tr><th>名称</th><th>类型</th><th>位置</th><th>备份</th><th>连接测试</th><th></th></tr></thead>
-          <tbody>
-            {data.map(({ target: t, backups, size, policies }) => (
-              <tr key={t.id}>
-                <td style={{ fontWeight: 600 }}>{t.name}</td>
-                <td>{storageKind[t.kind] || t.kind}</td>
-                <td className="mono" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{storageLocation(t)}</td>
-                <td>{backups} 份 · {bytes(size)}<div className="label">{policies} 个策略</div></td>
-                <td>{t.lastCheckAt ? <span className={'badge ' + (t.lastCheckOk ? 'ok' : 'err')} title={t.lastCheckMsg}>{t.lastCheckOk ? '正常' : '失败'} · {ago(t.lastCheckAt)}</span> : <span className="muted">未测试</span>}</td>
-                <td>
-                  <div className="row" style={{ justifyContent: 'flex-end' }}>
-                    <button className="btn btn-sm" onClick={async () => { try { const r = await post(`/storage/${t.id}/test`); r.ok ? toast.ok(`连接正常（${r.elapsedMs} ms）`) : toast.err(r.message); reload() } catch (e) { toast.err(e) } }}>测试</button>
-                    <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ id: t.id, name: t.name, kind: t.kind, config: { ...t.config } })}><Icon name="edit" size={16} /></button>
-                    <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(t)}><Icon name="trash" size={16} /></button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <ResponsiveTable
+        table={
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>名称</th><th>类型</th><th>位置</th><th>备份</th><th>连接测试</th><th></th></tr></thead>
+              <tbody>
+                {data.map(({ target: t, backups, size, policies }) => (
+                  <tr key={t.id}>
+                    <td style={{ fontWeight: 600 }}>{t.name}</td>
+                    <td>{storageKind[t.kind] || t.kind}</td>
+                    <td className="mono" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{storageLocation(t)}</td>
+                    <td>{backups} 份 · {bytes(size)}<div className="label">{policies} 个策略</div></td>
+                    <td>{t.lastCheckAt ? <span className={'badge ' + (t.lastCheckOk ? 'ok' : 'err')} title={t.lastCheckMsg}>{t.lastCheckOk ? '正常' : '失败'} · {ago(t.lastCheckAt)}</span> : <span className="muted">未测试</span>}</td>
+                    <td>
+                      <div className="row" style={{ justifyContent: 'flex-end' }}>
+                        <button className="btn btn-sm" onClick={async () => { try { const r = await post(`/storage/${t.id}/test`); r.ok ? toast.ok(`连接正常（${r.elapsedMs} ms）`) : toast.err(r.message); reload() } catch (e) { toast.err(e) } }}>测试</button>
+                        <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ id: t.id, name: t.name, kind: t.kind, config: { ...t.config } })}><Icon name="edit" size={16} /></button>
+                        <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(t)}><Icon name="trash" size={16} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        }
+        cards={data.map(({ target: t, backups, size, policies }) => (
+          <MobileCard
+            key={t.id}
+            title={t.name}
+            sub={<span className="mono">{storageLocation(t)}</span>}
+            badges={t.lastCheckAt ? <span className={'badge ' + (t.lastCheckOk ? 'ok' : 'err')} title={t.lastCheckMsg}>{t.lastCheckOk ? '正常' : '失败'} · {ago(t.lastCheckAt)}</span> : <span className="badge off">未测试</span>}
+            meta={[
+              { label: '类型', value: storageKind[t.kind] || t.kind },
+              { label: '备份', value: `${backups} 份 · ${bytes(size)}` },
+              { label: '策略', value: `${policies} 个策略`, full: true },
+            ]}
+            actions={
+              <>
+                <button className="btn btn-sm" onClick={async () => { try { const r = await post(`/storage/${t.id}/test`); r.ok ? toast.ok(`连接正常（${r.elapsedMs} ms）`) : toast.err(r.message); reload() } catch (e) { toast.err(e) } }}>测试连接</button>
+                <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ id: t.id, name: t.name, kind: t.kind, config: { ...t.config } })}><Icon name="edit" size={16} /></button>
+                <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(t)}><Icon name="trash" size={16} /></button>
+              </>
+            }
+          />
+        ))}
+      />
       {edit && <StorageModal t={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reload() }} />}
       {rm && <Confirm title={`删除存储 ${rm.name}`} danger confirmText="删除" onClose={() => setRm(null)} onConfirm={async () => { await del(`/storage/${rm.id}`); reload() }}>只删除面板中的配置，存储中的备份文件不会被删除。仍被策略使用的存储无法删除。</Confirm>}
     </Card>
@@ -156,47 +181,98 @@ function Notify() {
     <>
       <Card title="通知渠道" actions={<button className="btn btn-sm btn-primary" onClick={() => setEdit({ name: '', kind: 'telegram', config: {}, enabled: true })}><Icon name="plus" size={16} />添加渠道</button>} pad={false}>
         {data.channels.length === 0 ? <Empty>还没有通知渠道。部署失败、备份失败、容器崩溃、证书过期等事件可以推送到 Telegram、企业微信、钉钉、飞书、Bark、邮件或 Webhook。</Empty> : (
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>名称</th><th>类型</th><th>最近发送</th><th></th></tr></thead>
-              <tbody>
-                {data.channels.map((c: any) => (
-                  <tr key={c.id}>
-                    <td style={{ fontWeight: 600 }}>{c.name}{!c.enabled && <span className="badge off" style={{ marginLeft: 6 }}>停用</span>}</td>
-                    <td>{kindName[c.kind]}</td>
-                    <td>{c.lastSentAt ? <span className="row"><span className={'badge ' + (c.lastStatus === 'ok' ? 'ok' : 'err')} title={c.lastStatus}>{c.lastStatus === 'ok' ? '成功' : '失败'}</span><span className="muted">{ago(c.lastSentAt)}</span></span> : <span className="muted">—</span>}</td>
-                    <td>
-                      <div className="row" style={{ justifyContent: 'flex-end' }}>
-                        <button className="btn btn-sm" onClick={async () => { try { const r = await post(`/notify/channels/${c.id}/test`); r.ok ? toast.ok(r.message) : toast.err(r.message); reload() } catch (e) { toast.err(e) } }}>发送测试</button>
-                        <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ id: c.id, name: c.name, kind: c.kind, config: { ...c.config }, enabled: c.enabled })}><Icon name="edit" size={16} /></button>
-                        <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(c)}><Icon name="trash" size={16} /></button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ResponsiveTable
+            table={
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>名称</th><th>类型</th><th>最近发送</th><th></th></tr></thead>
+                  <tbody>
+                    {data.channels.map((c: any) => (
+                      <tr key={c.id}>
+                        <td style={{ fontWeight: 600 }}>{c.name}{!c.enabled && <span className="badge off" style={{ marginLeft: 6 }}>停用</span>}</td>
+                        <td>{kindName[c.kind]}</td>
+                        <td>{c.lastSentAt ? <span className="row"><span className={'badge ' + (c.lastStatus === 'ok' ? 'ok' : 'err')} title={c.lastStatus}>{c.lastStatus === 'ok' ? '成功' : '失败'}</span><span className="muted">{ago(c.lastSentAt)}</span></span> : <span className="muted">—</span>}</td>
+                        <td>
+                          <div className="row" style={{ justifyContent: 'flex-end' }}>
+                            <button className="btn btn-sm" onClick={async () => { try { const r = await post(`/notify/channels/${c.id}/test`); r.ok ? toast.ok(r.message) : toast.err(r.message); reload() } catch (e) { toast.err(e) } }}>发送测试</button>
+                            <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ id: c.id, name: c.name, kind: c.kind, config: { ...c.config }, enabled: c.enabled })}><Icon name="edit" size={16} /></button>
+                            <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(c)}><Icon name="trash" size={16} /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            }
+            cards={data.channels.map((c: any) => (
+              <MobileCard
+                key={c.id}
+                title={c.name}
+                sub={kindName[c.kind]}
+                badges={
+                  <>
+                    {!c.enabled && <span className="badge off">停用</span>}
+                    {c.lastSentAt ? (
+                      <span className={'badge ' + (c.lastStatus === 'ok' ? 'ok' : 'err')} title={c.lastStatus}>
+                        {c.lastStatus === 'ok' ? '成功' : '失败'} · {ago(c.lastSentAt)}
+                      </span>
+                    ) : (
+                      <span className="badge off">未发送</span>
+                    )}
+                  </>
+                }
+                actions={
+                  <>
+                    <button className="btn btn-sm" onClick={async () => { try { const r = await post(`/notify/channels/${c.id}/test`); r.ok ? toast.ok(r.message) : toast.err(r.message); reload() } catch (e) { toast.err(e) } }}>发送测试</button>
+                    <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ id: c.id, name: c.name, kind: c.kind, config: { ...c.config }, enabled: c.enabled })}><Icon name="edit" size={16} /></button>
+                    <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(c)}><Icon name="trash" size={16} /></button>
+                  </>
+                }
+              />
+            ))}
+          />
         )}
       </Card>
       {data.channels.length > 0 && (
         <Card title="事件订阅" actions={<button className="btn btn-sm btn-primary" disabled={!dirty} onClick={async () => { try { await put('/notify/rules', rules); toast.ok('已保存'); reload() } catch (e) { toast.err(e) } }}>保存</button>} pad={false}>
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>事件</th>{data.channels.map((c: any) => <th key={c.id}>{c.name}</th>)}</tr></thead>
-              <tbody>
-                {data.events.map((ev: any) => (
-                  <tr key={ev.id}>
-                    <td>{ev.name}</td>
-                    {data.channels.map((c: any) => (
-                      <td key={c.id}><input type="checkbox" aria-label={`${ev.name} → ${c.name}`} style={{ width: 16, height: 16, accentColor: '#B54708' }} checked={(rules[ev.id] || []).includes(c.id)} onChange={() => toggle(ev.id, c.id)} /></td>
+          <ResponsiveTable
+            table={
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>事件</th>{data.channels.map((c: any) => <th key={c.id}>{c.name}</th>)}</tr></thead>
+                  <tbody>
+                    {data.events.map((ev: any) => (
+                      <tr key={ev.id}>
+                        <td>{ev.name}</td>
+                        {data.channels.map((c: any) => (
+                          <td key={c.id}><input type="checkbox" aria-label={`${ev.name} → ${c.name}`} style={{ width: 16, height: 16, accentColor: '#B54708' }} checked={(rules[ev.id] || []).includes(c.id)} onChange={() => toggle(ev.id, c.id)} /></td>
+                        ))}
+                      </tr>
                     ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="label" style={{ padding: '0 16px 12px', margin: 0 }}>同一对象的同类事件 30 分钟内只通知一次。</p>
+                  </tbody>
+                </table>
+              </div>
+            }
+            cards={data.events.map((ev: any) => (
+              <MobileCard
+                key={ev.id}
+                tight
+                title={ev.name}
+                extra={
+                  <div className="row wrap" style={{ gap: '4px 14px' }}>
+                    {data.channels.map((c: any) => (
+                      <label key={c.id} className="check">
+                        <input type="checkbox" checked={(rules[ev.id] || []).includes(c.id)} onChange={() => toggle(ev.id, c.id)} />
+                        <span>{c.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                }
+              />
+            ))}
+          />
+          <p className="label" style={{ padding: '8px 16px 12px', margin: 0 }}>同一对象的同类事件 30 分钟内只通知一次。</p>
         </Card>
       )}
       {edit && <ChannelModal c={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reload() }} />}

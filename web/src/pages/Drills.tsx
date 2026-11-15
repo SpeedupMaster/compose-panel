@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ago, dateTime, del, get, post, put } from '../api'
 import { useCan } from '../auth'
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, JobStatus, Loading, Modal, Select, useAction, useJobLog, useLoad, useToast } from '../components/ui'
+import { MobileCard, ResponsiveTable, joinInline } from '../components/ResponsiveList'
 
 type Drill = { id?: number; policyId: number; policy?: string; label?: string; kind?: string; schedule: string; checkSql: string; minRows: number; enabled: boolean; next?: number; lastRun?: DrillRun | null }
 type DrillRun = { id: number; drillId: number; backupId: number; label: string; status: string; report: string; jobId: string; startedAt: number; finishedAt: number }
@@ -40,58 +41,117 @@ export function Drills({ policies }: { policies: any[] }) {
         actions={can.operator && <button className="btn btn-sm btn-primary" disabled={policies.length === 0} onClick={() => setEdit({ policyId: policies[0]?.id, schedule: '0 5 * * 0', checkSql: '', minRows: 0, enabled: true })}><Icon name="plus" size={16} />新建演练</button>}
       >
         {data.drills.length === 0 ? <Empty>{policies.length === 0 ? '先创建备份策略，再为它设置恢复演练。' : '还没有恢复演练。建议为每个重要数据库每周演练一次。'}</Empty> : (
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>备份策略</th><th>类型</th><th>计划</th><th>检查</th><th>上次结果</th><th>下次</th><th /></tr></thead>
-              <tbody>
-                {data.drills.map((d) => (
-                  <tr key={d.id}>
-                    <td style={{ fontWeight: 600 }}>{d.policy}{!d.enabled && <span className="badge off" style={{ marginLeft: 6 }}>停用</span>}<div className="label">{d.label}</div></td>
-                    <td>{kindText[d.kind || ''] || d.kind}</td>
-                    <td className="mono">{d.schedule}</td>
-                    <td className="mono ellipsis" style={{ maxWidth: 220, fontSize: 12 }} title={d.checkSql}>{d.checkSql || <span className="muted">默认</span>}{d.minRows > 0 && <div className="label">≥ {d.minRows}</div>}</td>
-                    <td className="nowrap">{d.lastRun ? <button className="link-btn" style={{ textDecoration: 'none' }} onClick={() => setReport(d.lastRun!)}><JobStatus s={d.lastRun.status} /> <span className="label">{ago(d.lastRun.startedAt)}</span></button> : <span className="muted">—</span>}</td>
-                    <td className="muted nowrap">{d.enabled && d.next ? ago(d.next) : '—'}</td>
-                    <td>
-                      {can.operator && (
-                        <div className="row" style={{ justifyContent: 'flex-end' }}>
-                          <button className="btn btn-sm" onClick={() => run(d)}><Icon name="play" size={14} />立即演练</button>
-                          <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ ...d })}><Icon name="edit" size={16} /></button>
-                          <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(d)}><Icon name="trash" size={16} /></button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ResponsiveTable
+            table={
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>备份策略</th><th>类型</th><th>计划</th><th>检查</th><th>上次结果</th><th>下次</th><th /></tr></thead>
+                  <tbody>
+                    {data.drills.map((d) => (
+                      <tr key={d.id}>
+                        <td style={{ fontWeight: 600 }}>{d.policy}{!d.enabled && <span className="badge off" style={{ marginLeft: 6 }}>停用</span>}<div className="label">{d.label}</div></td>
+                        <td>{kindText[d.kind || ''] || d.kind}</td>
+                        <td className="mono">{d.schedule}</td>
+                        <td className="mono ellipsis" style={{ maxWidth: 220, fontSize: 12 }} title={d.checkSql}>{d.checkSql || <span className="muted">默认</span>}{d.minRows > 0 && <div className="label">≥ {d.minRows}</div>}</td>
+                        <td className="nowrap">{d.lastRun ? <button className="link-btn" style={{ textDecoration: 'none' }} onClick={() => setReport(d.lastRun!)}><JobStatus s={d.lastRun.status} /> <span className="label">{ago(d.lastRun.startedAt)}</span></button> : <span className="muted">—</span>}</td>
+                        <td className="muted nowrap">{d.enabled && d.next ? ago(d.next) : '—'}</td>
+                        <td>
+                          {can.operator && (
+                            <div className="row" style={{ justifyContent: 'flex-end' }}>
+                              <button className="btn btn-sm" onClick={() => run(d)}><Icon name="play" size={14} />立即演练</button>
+                              <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ ...d })}><Icon name="edit" size={16} /></button>
+                              <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(d)}><Icon name="trash" size={16} /></button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            }
+            cards={data.drills.map((d) => (
+              <MobileCard
+                key={d.id}
+                title={d.policy || `策略 #${d.policyId}`}
+                sub={d.label}
+                badges={
+                  <>
+                    {!d.enabled && <span className="badge off">停用</span>}
+                    {d.lastRun && <JobStatus s={d.lastRun.status} />}
+                  </>
+                }
+                meta={[
+                  { label: '类型', value: kindText[d.kind || ''] || d.kind },
+                  { label: '计划', value: d.schedule, mono: true },
+                  { label: '检查', value: (d.checkSql || '默认') + (d.minRows > 0 ? ` (≥ ${d.minRows})` : ''), mono: Boolean(d.checkSql), full: true },
+                  { label: '时间', value: joinInline([d.lastRun && `上次 ${ago(d.lastRun.startedAt)}`, d.enabled && d.next && `下次 ${ago(d.next)}`]) || '—', full: true },
+                ]}
+                actions={
+                  can.operator ? (
+                    <>
+                      <button className="btn btn-sm" onClick={() => run(d)}><Icon name="play" size={14} />立即演练</button>
+                      {d.lastRun && <button className="btn btn-sm btn-ghost" onClick={() => setReport(d.lastRun!)}>上次报告</button>}
+                      <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit({ ...d })}><Icon name="edit" size={16} /></button>
+                      <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(d)}><Icon name="trash" size={16} /></button>
+                    </>
+                  ) : undefined
+                }
+              />
+            ))}
+          />
         )}
       </Card>
       <Card title="演练记录" pad={false}>
         {data.runs.length === 0 ? <Empty>还没有演练记录。</Empty> : (
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>备份</th><th>结果</th><th>开始</th><th>耗时</th><th>报告</th><th /></tr></thead>
-              <tbody>
-                {data.runs.map((r) => (
-                  <tr key={r.id}>
-                    <td>{r.label}<div className="label mono">备份 #{r.backupId || '—'}</div></td>
-                    <td><JobStatus s={r.status} /></td>
-                    <td className="muted nowrap" title={dateTime(r.startedAt)}>{ago(r.startedAt)}</td>
-                    <td className="muted nowrap">{r.finishedAt ? Math.max(0, r.finishedAt - r.startedAt) + ' 秒' : '—'}</td>
-                    <td className="ellipsis" style={{ maxWidth: 320, fontSize: 13 }} title={r.report}>{(r.report || '').split('\n').filter(Boolean).slice(-1)[0] || '—'}</td>
-                    <td>
-                      <div className="row" style={{ justifyContent: 'flex-end' }}>
-                        <button className="btn btn-sm" onClick={() => setReport(r)}>报告</button>
-                        {r.jobId && <button className="btn btn-sm btn-ghost" onClick={() => openJob(r.jobId, '恢复演练')}>日志</button>}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ResponsiveTable
+            table={
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>备份</th><th>结果</th><th>开始</th><th>耗时</th><th>报告</th><th /></tr></thead>
+                  <tbody>
+                    {data.runs.map((r) => (
+                      <tr key={r.id}>
+                        <td>{r.label}<div className="label mono">备份 #{r.backupId || '—'}</div></td>
+                        <td><JobStatus s={r.status} /></td>
+                        <td className="muted nowrap" title={dateTime(r.startedAt)}>{ago(r.startedAt)}</td>
+                        <td className="muted nowrap">{r.finishedAt ? Math.max(0, r.finishedAt - r.startedAt) + ' 秒' : '—'}</td>
+                        <td className="ellipsis" style={{ maxWidth: 320, fontSize: 13 }} title={r.report}>{(r.report || '').split('\n').filter(Boolean).slice(-1)[0] || '—'}</td>
+                        <td>
+                          <div className="row" style={{ justifyContent: 'flex-end' }}>
+                            <button className="btn btn-sm" onClick={() => setReport(r)}>报告</button>
+                            {r.jobId && <button className="btn btn-sm btn-ghost" onClick={() => openJob(r.jobId, '恢复演练')}>日志</button>}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            }
+            cards={data.runs.map((r) => {
+              const tail = (r.report || '').split('\n').filter(Boolean).slice(-1)[0]
+              return (
+                <MobileCard
+                  key={r.id}
+                  title={r.label}
+                  sub={<span className="mono">备份 #{r.backupId || '—'}</span>}
+                  badges={<JobStatus s={r.status} />}
+                  extra={tail ? <div className="label" style={{ overflowWrap: 'anywhere' }}>{tail}</div> : undefined}
+                  meta={[
+                    { label: '开始', value: ago(r.startedAt) },
+                    { label: '耗时', value: r.finishedAt ? Math.max(0, r.finishedAt - r.startedAt) + ' 秒' : '—' },
+                  ]}
+                  actions={
+                    <>
+                      <button className="btn btn-sm" onClick={() => setReport(r)}>报告</button>
+                      {r.jobId && <button className="btn btn-sm btn-ghost" onClick={() => openJob(r.jobId, '恢复演练')}>日志</button>}
+                    </>
+                  }
+                />
+              )
+            })}
+          />
         )}
       </Card>
       {edit && <DrillModal d={edit} policies={policies} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reload() }} />}

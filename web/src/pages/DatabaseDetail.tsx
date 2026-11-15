@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { bytes, del, get, post, put } from '../api'
 import { useCan } from '../auth'
 import { BackupNowModal, BackupTable } from '../components/backup'
+import { MobileCard, ResponsiveTable, joinInline } from '../components/ResponsiveList'
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, SecretBox, Select, Status, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
 import { defaultImage, engineLabel, exposureName, ImageField } from './Databases'
 import { ImportExport, SlowQueries, SqlConsole, TableBrowser } from './DatabaseTools'
@@ -121,21 +122,34 @@ function DbsTab({ id }: { id: string }) {
   return (
     <Card title="库" actions={can.operator && <button className="btn btn-sm btn-primary" onClick={() => setCreating({ name: '', user: '' })}><Icon name="plus" size={16} />新建库</button>} pad={false}>
       {data.length === 0 ? <Empty>没有库。</Empty> : (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>名称</th><th>所有者</th><th>大小</th><th></th></tr></thead>
-            <tbody>
-              {data.map((x) => (
-                <tr key={x.name}>
-                  <td className="mono">{x.name}</td>
-                  <td>{x.owner || '—'}</td>
-                  <td>{x.size ? bytes(x.size) : '—'}</td>
-                  <td><div className="row" style={{ justifyContent: 'flex-end' }}>{can.admin && <button className="btn btn-sm btn-ghost btn-icon" aria-label={'删除库 ' + x.name} onClick={() => setDrop(x.name)}><Icon name="trash" size={16} /></button>}</div></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ResponsiveTable
+          table={
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>名称</th><th>所有者</th><th>大小</th><th></th></tr></thead>
+                <tbody>
+                  {data.map((x) => (
+                    <tr key={x.name}>
+                      <td className="mono">{x.name}</td>
+                      <td>{x.owner || '—'}</td>
+                      <td>{x.size ? bytes(x.size) : '—'}</td>
+                      <td><div className="row" style={{ justifyContent: 'flex-end' }}>{can.admin && <button className="btn btn-sm btn-ghost btn-icon" aria-label={'删除库 ' + x.name} onClick={() => setDrop(x.name)}><Icon name="trash" size={16} /></button>}</div></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          }
+          cards={data.map((x) => (
+            <MobileCard
+              key={x.name}
+              tight
+              title={<span className="mono">{x.name}</span>}
+              sub={joinInline([`所有者：${x.owner || '—'}`, x.size ? bytes(x.size) : '—'])}
+              badges={can.admin ? <button className="btn btn-sm btn-ghost btn-icon" aria-label={'删除库 ' + x.name} onClick={() => setDrop(x.name)}><Icon name="trash" size={16} /></button> : undefined}
+            />
+          ))}
+        />
       )}
       {creating && (
         <Modal title="新建库" onClose={() => setCreating(null)} footer={<><button className="btn" onClick={() => setCreating(null)}>取消</button><button className="btn btn-primary" onClick={async () => { try { const r = await post(`/databases/${id}/dbs`, creating); setCreating(null); reload(); if (r.password) setShown(r) } catch (e) { toast.err(e) } }}>创建</button></>}>
@@ -160,26 +174,46 @@ function UsersTab({ id }: { id: string }) {
   if (!data) return error ? <ErrorBox error={error} /> : <Loading />
   return (
     <Card title="用户" actions={can.operator && <button className="btn btn-sm btn-primary" onClick={() => setCreating({ name: '', databases: [], readOnly: false })}><Icon name="plus" size={16} />新建用户</button>} pad={false}>
-      <div className="table-wrap">
-        <table>
-          <thead><tr><th>用户</th><th>权限</th><th>可访问库</th><th></th></tr></thead>
-          <tbody>
-            {data.map((u) => (
-              <tr key={u.name + (u.host || '')}>
-                <td className="mono">{u.name}{u.host && <span className="muted">@{u.host}</span>}</td>
-                <td>{u.superuser ? <span className="badge warn">超级用户</span> : <span className="badge off">普通</span>}</td>
-                <td className="mono" style={{ fontSize: 13 }}>{u.databases || '—'}</td>
-                <td>
-                  <div className="row" style={{ justifyContent: 'flex-end' }}>
-                    {can.operator && !u.superuser && <button className="btn btn-sm" onClick={async () => { try { setShown(await post(`/databases/${id}/users/${encodeURIComponent(u.name)}/password`)) } catch (e) { toast.err(e) } }}>重置密码</button>}
-                    {can.admin && !u.superuser && <button className="btn btn-sm btn-ghost btn-icon" aria-label={'删除用户 ' + u.name} onClick={() => setDrop(u.name)}><Icon name="trash" size={16} /></button>}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <ResponsiveTable
+        table={
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>用户</th><th>权限</th><th>可访问库</th><th></th></tr></thead>
+              <tbody>
+                {data.map((u) => (
+                  <tr key={u.name + (u.host || '')}>
+                    <td className="mono">{u.name}{u.host && <span className="muted">@{u.host}</span>}</td>
+                    <td>{u.superuser ? <span className="badge warn">超级用户</span> : <span className="badge off">普通</span>}</td>
+                    <td className="mono" style={{ fontSize: 13 }}>{u.databases || '—'}</td>
+                    <td>
+                      <div className="row" style={{ justifyContent: 'flex-end' }}>
+                        {can.operator && !u.superuser && <button className="btn btn-sm" onClick={async () => { try { setShown(await post(`/databases/${id}/users/${encodeURIComponent(u.name)}/password`)) } catch (e) { toast.err(e) } }}>重置密码</button>}
+                        {can.admin && !u.superuser && <button className="btn btn-sm btn-ghost btn-icon" aria-label={'删除用户 ' + u.name} onClick={() => setDrop(u.name)}><Icon name="trash" size={16} /></button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        }
+        cards={data.map((u) => (
+          <MobileCard
+            key={u.name + (u.host || '')}
+            title={<span className="mono">{u.name}{u.host && <span className="muted">@{u.host}</span>}</span>}
+            sub={u.databases ? <span className="mono">库：{u.databases}</span> : '未授权特定库'}
+            badges={u.superuser ? <span className="badge warn">超级用户</span> : <span className="badge off">普通</span>}
+            actions={
+              !u.superuser && (can.operator || can.admin) ? (
+                <>
+                  {can.operator && <button className="btn btn-sm" onClick={async () => { try { setShown(await post(`/databases/${id}/users/${encodeURIComponent(u.name)}/password`)) } catch (e) { toast.err(e) } }}>重置密码</button>}
+                  {can.admin && <button className="btn btn-sm btn-ghost btn-icon" aria-label={'删除用户 ' + u.name} onClick={() => setDrop(u.name)}><Icon name="trash" size={16} /></button>}
+                </>
+              ) : undefined
+            }
+          />
+        ))}
+      />
       {creating && (
         <Modal title="新建用户" onClose={() => setCreating(null)} footer={<><button className="btn" onClick={() => setCreating(null)}>取消</button><button className="btn btn-primary" onClick={async () => { try { const r = await post(`/databases/${id}/users`, creating); setCreating(null); reload(); setShown(r) } catch (e) { toast.err(e) } }}>创建</button></>}>
           <Field label="用户名"><input className="input mono" value={creating.name} onChange={(e) => setCreating({ ...creating, name: e.target.value })} autoFocus /></Field>
@@ -206,25 +240,39 @@ function SessionsTab({ id }: { id: string }) {
   if (!data) return error ? <ErrorBox error={error} /> : <Loading />
   return (
     <Card title={`会话（${data.length}）`} pad={false}>
-      <div className="table-wrap">
-        <table>
-          <thead><tr><th>PID</th><th>用户</th><th>库</th><th>客户端</th><th>状态</th><th>耗时</th><th>语句</th><th></th></tr></thead>
-          <tbody>
-            {data.map((s) => (
-              <tr key={s.pid}>
-                <td className="mono">{s.pid}</td>
-                <td>{s.user}</td>
-                <td className="mono">{s.database}</td>
-                <td className="mono" style={{ fontSize: 12 }}>{s.client}</td>
-                <td>{s.state}</td>
-                <td className="mono">{s.seconds}s</td>
-                <td className="mono ellipsis" style={{ maxWidth: 360, fontSize: 12 }} title={s.query}>{s.query}</td>
-                <td>{can.operator && <button className="btn btn-sm" onClick={async () => { try { await del(`/databases/${id}/sessions/${s.pid}`); reload() } catch (e) { toast.err(e) } }}>终止</button>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <ResponsiveTable
+        table={
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>PID</th><th>用户</th><th>库</th><th>客户端</th><th>状态</th><th>耗时</th><th>语句</th><th></th></tr></thead>
+              <tbody>
+                {data.map((s) => (
+                  <tr key={s.pid}>
+                    <td className="mono">{s.pid}</td>
+                    <td>{s.user}</td>
+                    <td className="mono">{s.database}</td>
+                    <td className="mono" style={{ fontSize: 12 }}>{s.client}</td>
+                    <td>{s.state}</td>
+                    <td className="mono">{s.seconds}s</td>
+                    <td className="mono ellipsis" style={{ maxWidth: 360, fontSize: 12 }} title={s.query}>{s.query}</td>
+                    <td>{can.operator && <button className="btn btn-sm" onClick={async () => { try { await del(`/databases/${id}/sessions/${s.pid}`); reload() } catch (e) { toast.err(e) } }}>终止</button>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        }
+        cards={data.map((s) => (
+          <MobileCard
+            key={s.pid}
+            title={<span className="mono">PID {s.pid} · {s.user}</span>}
+            sub={joinInline([s.database && <span key="db" className="mono">{s.database}</span>, s.client && <span key="c" className="mono">{s.client}</span>])}
+            badges={<span className="badge off">{s.state} · {s.seconds}s</span>}
+            extra={s.query ? <code className="mono" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{s.query}</code> : undefined}
+            actions={can.operator ? <button className="btn btn-sm btn-danger" onClick={async () => { try { await del(`/databases/${id}/sessions/${s.pid}`); reload() } catch (e) { toast.err(e) } }}>终止会话</button> : undefined}
+          />
+        ))}
+      />
     </Card>
   )
 }
@@ -241,16 +289,29 @@ function BackupsTab({ d }: { d: any }) {
     <>
       <Card title="备份策略" actions={<Link className="btn btn-sm" to={`/backups?new=database&instance=${d.id}`}>新建策略</Link>} pad={false}>
         {mine.length === 0 ? <Empty>这个实例还没有定时备份。</Empty> : (
-          <div className="table-wrap"><table><tbody>
-            {mine.map((p) => <tr key={p.id}><td>{p.name}</td><td className="mono">{p.source.database}</td><td className="mono">{p.schedule}</td><td>{p.storageName}</td><td>{p.enabled ? <span className="badge ok">启用</span> : <span className="badge off">停用</span>}</td></tr>)}
-          </tbody></table></div>
+          <ResponsiveTable
+            table={
+              <div className="table-wrap"><table><tbody>
+                {mine.map((p) => <tr key={p.id}><td>{p.name}</td><td className="mono">{p.source.database}</td><td className="mono">{p.schedule}</td><td>{p.storageName}</td><td>{p.enabled ? <span className="badge ok">启用</span> : <span className="badge off">停用</span>}</td></tr>)}
+              </tbody></table></div>
+            }
+            cards={mine.map((p) => (
+              <MobileCard
+                key={p.id}
+                tight
+                title={p.name}
+                sub={joinInline([<span key="db" className="mono">{p.source.database}</span>, <span key="sc" className="mono">{p.schedule}</span>, p.storageName])}
+                badges={p.enabled ? <span className="badge ok">启用</span> : <span className="badge off">停用</span>}
+              />
+            ))}
+          />
         )}
       </Card>
       <Card
         title="备份记录"
         actions={can.operator && (dbs || []).length > 0 && (
-          <div className="row">
-            <Select className="sm" style={{ width: 160 }} aria-label="选择库" value={bkDb || dbs?.[0]?.name} onChange={setBkDb}>
+          <div className="row wrap">
+            <Select className="sm filter-select" style={{ width: 160 }} aria-label="选择库" value={bkDb || dbs?.[0]?.name} onChange={setBkDb}>
               {(dbs || []).map((x) => <option key={x.name}>{x.name}</option>)}
             </Select>
             <button className="btn btn-sm btn-primary" onClick={() => setNow(bkDb || dbs?.[0]?.name)}>立即备份</button>

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ago, bytes, dateTime, del, get, post } from '../api'
 import { useCan } from '../auth'
 import { Confirm, Empty, ErrorBox, Field, Icon, Modal, Select, Status, useJobLog, useLoad, useToast } from './ui'
+import { MobileCard, ResponsiveTable } from './ResponsiveList'
 
 export type BackupSource = { kind: 'database' | 'volume' | 'dir' | 'panel'; instanceId?: number; database?: string; volume?: string; projectId?: number; path?: string }
 
@@ -189,50 +190,85 @@ export function BackupTable({ list, reload, names }: { list: any[]; reload: () =
   const [restore, setRestore] = useState<any>(null)
   const [rm, setRm] = useState<any>(null)
   if (list.length === 0) return <Empty>没有备份记录。</Empty>
+  const renderActions = (b: any) => (
+    <>
+      {b.jobId && <button className="btn btn-sm btn-ghost" onClick={() => openJob(b.jobId)}>日志</button>}
+      {b.status === 'success' && (
+        <>
+          {can.operator && <button className="btn btn-sm" onClick={async () => { try { const r = await post(`/backups/${b.id}/verify`); openJob(r.jobId, '校验备份') } catch (e) { toast.err(e) } }}>校验</button>}
+          {can.admin && <a className="btn btn-sm" href={`/api/backups/${b.id}/download${b.encrypted ? '?plain=1' : ''}`} title={b.encrypted ? '下载解密后的文件' : '下载'}><Icon name="download" size={16} /></a>}
+          {can.admin && <button className="btn btn-sm" onClick={() => setRestore(b)}>恢复</button>}
+        </>
+      )}
+      {can.admin && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除备份" onClick={() => setRm(b)}><Icon name="trash" size={16} /></button>}
+    </>
+  )
   return (
-    <div className="table-wrap">
-      <table>
-        <thead><tr><th>对象</th><th>状态</th><th>时间</th><th>大小</th><th>存储</th><th>保留</th><th></th></tr></thead>
-        <tbody>
-          {list.map((b) => (
-            <tr key={b.id}>
-              <td>
-                <div style={{ fontWeight: 500 }}>{sourceText(b.source, names)}</div>
-                <div className="label mono ellipsis" style={{ maxWidth: 320 }} title={b.objectKey}>{b.objectKey || b.label}</div>
-              </td>
-              <td>
-                <Status s={b.status} />
-                {b.encrypted && <span className="badge off" style={{ marginLeft: 6 }}><Icon name="lock" size={12} />加密</span>}
-                {b.verifiedAt > 0 && <span className="badge ok" style={{ marginLeft: 6 }} title={'恢复演练通过：' + dateTime(b.verifiedAt)}><Icon name="check" size={12} />已演练</span>}
-                {b.error && <div className="label ellipsis" style={{ maxWidth: 240, color: '#A41E14' }} title={b.error}>{b.error}</div>}
-              </td>
-              <td className="nowrap muted">{ago(b.startedAt)}</td>
-              <td className="nowrap">{b.size ? bytes(b.size) : '—'}</td>
-              <td>{b.storageName}</td>
-              <td className="mono" style={{ fontSize: 12 }}>{b.tiers || '—'}</td>
-              <td>
-                <div className="row" style={{ justifyContent: 'flex-end' }}>
-                  {b.jobId && <button className="btn btn-sm btn-ghost" onClick={() => openJob(b.jobId)}>日志</button>}
-                  {b.status === 'success' && (
-                    <>
-                      {can.operator && <button className="btn btn-sm" onClick={async () => { try { const r = await post(`/backups/${b.id}/verify`); openJob(r.jobId, '校验备份') } catch (e) { toast.err(e) } }}>校验</button>}
-                      {can.admin && <a className="btn btn-sm" href={`/api/backups/${b.id}/download${b.encrypted ? '?plain=1' : ''}`} title={b.encrypted ? '下载解密后的文件' : '下载'}><Icon name="download" size={16} /></a>}
-                      {can.admin && <button className="btn btn-sm" onClick={() => setRestore(b)}>恢复</button>}
-                    </>
-                  )}
-                  {can.admin && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除备份" onClick={() => setRm(b)}><Icon name="trash" size={16} /></button>}
-                </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <>
+      <ResponsiveTable
+        table={
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>对象</th><th>状态</th><th>时间</th><th>大小</th><th>存储</th><th>保留</th><th></th></tr></thead>
+              <tbody>
+                {list.map((b) => (
+                  <tr key={b.id}>
+                    <td>
+                      <div style={{ fontWeight: 500 }}>{sourceText(b.source, names)}</div>
+                      <div className="label mono ellipsis" style={{ maxWidth: 320 }} title={b.objectKey}>{b.objectKey || b.label}</div>
+                    </td>
+                    <td>
+                      <Status s={b.status} />
+                      {b.encrypted && <span className="badge off" style={{ marginLeft: 6 }}><Icon name="lock" size={12} />加密</span>}
+                      {b.verifiedAt > 0 && <span className="badge ok" style={{ marginLeft: 6 }} title={'恢复演练通过：' + dateTime(b.verifiedAt)}><Icon name="check" size={12} />已演练</span>}
+                      {b.error && <div className="label ellipsis" style={{ maxWidth: 240, color: '#A41E14' }} title={b.error}>{b.error}</div>}
+                    </td>
+                    <td className="nowrap muted">{ago(b.startedAt)}</td>
+                    <td className="nowrap">{b.size ? bytes(b.size) : '—'}</td>
+                    <td>{b.storageName}</td>
+                    <td className="mono" style={{ fontSize: 12 }}>{b.tiers || '—'}</td>
+                    <td>
+                      <div className="row" style={{ justifyContent: 'flex-end' }}>
+                        {renderActions(b)}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        }
+        cards={
+          list.map((b) => (
+            <MobileCard
+              key={b.id}
+              title={sourceText(b.source, names)}
+              sub={<span className="mono">{b.objectKey || b.label}</span>}
+              badges={
+                <>
+                  <Status s={b.status} />
+                  {b.encrypted && <span className="badge off"><Icon name="lock" size={12} />加密</span>}
+                  {b.verifiedAt > 0 && <span className="badge ok" title={'恢复演练通过：' + dateTime(b.verifiedAt)}><Icon name="check" size={12} />已演练</span>}
+                </>
+              }
+              extra={b.error ? <div className="label" style={{ color: '#A41E14', overflowWrap: 'anywhere' }}>{b.error}</div> : undefined}
+              meta={[
+                { label: '时间', value: ago(b.startedAt) },
+                { label: '大小', value: b.size ? bytes(b.size) : '—' },
+                { label: '存储', value: b.storageName },
+                { label: '保留', value: b.tiers || '—', mono: true },
+              ]}
+              actions={renderActions(b)}
+            />
+          ))
+        }
+      />
       {restore && <RestoreModal backup={restore} onClose={() => setRestore(null)} />}
       {rm && (
         <Confirm title="删除备份" danger confirmText="删除" onClose={() => setRm(null)} onConfirm={async () => { await del(`/backups/${rm.id}`); reload() }}>
           同时删除存储中的备份文件 <code className="mono">{rm.objectKey}</code>，不可恢复。
         </Confirm>
       )}
-    </div>
+    </>
   )
 }

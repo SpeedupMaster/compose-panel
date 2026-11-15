@@ -4,6 +4,7 @@ import { ago, bytes, del, get, post, put } from '../api'
 import { useCan } from '../auth'
 import { CodeArea, EnvEditor, EnvVar, langForPath, validateCompose, Validation, ValidationResult } from '../components/editors'
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, JobStatus, Loading, Page, SecretBox, Status, Tabs, useAction, useJobLog, useLoad, useToast } from '../components/ui'
+import { MobileCard, ResponsiveTable, joinInline } from '../components/ResponsiveList'
 import { triggerName } from './Overview'
 import { sourceName } from './Projects'
 import { CronTasks, ImagesTab, SaveTemplateModal } from './ProjectExtras'
@@ -143,34 +144,66 @@ function OverviewTab({ data, onAction, onRecreate }: { data: any; onAction: (a: 
         {data.containers.length === 0 ? (
           <Empty>还没有容器。点击「部署」启动这个项目。</Empty>
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>服务</th><th>状态</th><th>镜像</th><th>CPU</th><th>内存</th><th>端口</th><th></th></tr></thead>
-              <tbody>
-                {data.containers.map((c: any) => {
-                  const st = stats?.[c.id]
-                  return (
-                    <tr key={c.id} className="clickable" onClick={() => nav(`/containers/${c.id}`)}>
-                      <td><Link className="row-link" to={`/containers/${c.id}`} onClick={(e) => e.stopPropagation()}>{c.service || c.name}</Link><div className="label mono">{c.name}</div></td>
-                      <td><Status s={c.health === 'unhealthy' ? 'unhealthy' : c.state} /><div className="label">{c.status}</div></td>
-                      <td className="mono ellipsis" style={{ maxWidth: 240, fontSize: 13 }} title={c.image}>{c.image}</td>
-                      <td className="mono">{st ? st.cpuPercent.toFixed(1) + '%' : '—'}</td>
-                      <td className="mono nowrap">{st ? bytes(st.memUsage) : '—'}</td>
-                      <td className="mono" style={{ fontSize: 12 }}>{portsText(c.ports)}</td>
-                      <td onClick={(e) => e.stopPropagation()}>
-                        <div className="row" style={{ justifyContent: 'flex-end' }}>
-                          <Link className="btn btn-sm" to={`/containers/${c.id}?tab=logs`}>日志</Link>
-                          {can.operator && c.state === 'running' && <Link className="btn btn-sm" to={`/containers/${c.id}?tab=terminal`}>终端</Link>}
-                          {can.operator && c.service && <button className="btn btn-sm" onClick={() => onAction('restart', c.service)}>重启</button>}
-                          {can.operator && !isDB && c.service && <button className="btn btn-sm" title="强制拉取最新镜像并重建该服务容器" onClick={() => onRecreate(c.service)}>重建</button>}
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+          <ResponsiveTable
+            table={
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>服务</th><th>状态</th><th>镜像</th><th>CPU</th><th>内存</th><th>端口</th><th></th></tr></thead>
+                  <tbody>
+                    {data.containers.map((c: any) => {
+                      const st = stats?.[c.id]
+                      return (
+                        <tr key={c.id} className="clickable" onClick={() => nav(`/containers/${c.id}`)}>
+                          <td><Link className="row-link" to={`/containers/${c.id}`} onClick={(e) => e.stopPropagation()}>{c.service || c.name}</Link><div className="label mono">{c.name}</div></td>
+                          <td><Status s={c.health === 'unhealthy' ? 'unhealthy' : c.state} /><div className="label">{c.status}</div></td>
+                          <td className="mono ellipsis" style={{ maxWidth: 240, fontSize: 13 }} title={c.image}>{c.image}</td>
+                          <td className="mono">{st ? st.cpuPercent.toFixed(1) + '%' : '—'}</td>
+                          <td className="mono nowrap">{st ? bytes(st.memUsage) : '—'}</td>
+                          <td className="mono" style={{ fontSize: 12 }}>{portsText(c.ports)}</td>
+                          <td onClick={(e) => e.stopPropagation()}>
+                            <div className="row" style={{ justifyContent: 'flex-end' }}>
+                              <Link className="btn btn-sm" to={`/containers/${c.id}?tab=logs`}>日志</Link>
+                              {can.operator && c.state === 'running' && <Link className="btn btn-sm" to={`/containers/${c.id}?tab=terminal`}>终端</Link>}
+                              {can.operator && c.service && <button className="btn btn-sm" onClick={() => onAction('restart', c.service)}>重启</button>}
+                              {can.operator && !isDB && c.service && <button className="btn btn-sm" title="强制拉取最新镜像并重建该服务容器" onClick={() => onRecreate(c.service)}>重建</button>}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            }
+            cards={data.containers.map((c: any) => {
+              const st = stats?.[c.id]
+              const ports = portsText(c.ports)
+              return (
+                <MobileCard
+                  key={c.id}
+                  onClick={() => nav(`/containers/${c.id}`)}
+                  title={<Link className="row-link" to={`/containers/${c.id}`} onClick={(e) => e.stopPropagation()}>{c.service || c.name}</Link>}
+                  sub={<span className="mono">{c.name}</span>}
+                  badges={<Status s={c.health === 'unhealthy' ? 'unhealthy' : c.state} />}
+                  meta={[
+                    { label: '镜像', value: c.image, mono: true, full: true },
+                    { label: '运行态', value: c.status, full: true },
+                    { label: 'CPU', value: st ? st.cpuPercent.toFixed(1) + '%' : '—', mono: true },
+                    { label: '内存', value: st ? bytes(st.memUsage) : '—', mono: true },
+                    ports !== '—' ? { label: '端口', value: ports, mono: true, full: true } : false,
+                  ]}
+                  actions={
+                    <>
+                      <Link className="btn btn-sm" to={`/containers/${c.id}?tab=logs`}>日志</Link>
+                      {can.operator && c.state === 'running' && <Link className="btn btn-sm" to={`/containers/${c.id}?tab=terminal`}>终端</Link>}
+                      {can.operator && c.service && <button className="btn btn-sm" onClick={() => onAction('restart', c.service)}>重启</button>}
+                      {can.operator && !isDB && c.service && <button className="btn btn-sm" onClick={() => onRecreate(c.service)}>重建</button>}
+                    </>
+                  }
+                />
+              )
+            })}
+          />
         )}
       </Card>
     </>
@@ -194,24 +227,44 @@ function DeploymentsTab({ id }: { id: string }) {
       {data.length === 0 ? (
         <Empty>还没有部署记录。</Empty>
       ) : (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>#</th><th>状态</th><th>触发</th><th>提交</th><th>开始</th><th>耗时</th><th></th></tr></thead>
-            <tbody>
-              {data.map((d) => (
-                <tr key={d.id} className="clickable" onClick={() => nav(`/deployments/${d.id}`)}>
-                  <td className="mono">#{d.number}</td>
-                  <td><JobStatus s={d.status} />{d.error && <div className="label ellipsis" style={{ maxWidth: 260, color: '#A41E14' }} title={d.error}>{d.error}</div>}</td>
-                  <td>{triggerName(d.trigger)} <span className="muted">· {d.actor}</span></td>
-                  <td className="mono" style={{ fontSize: 12 }}>{d.commitSha ? d.commitSha.slice(0, 8) + ' ' + (d.commitMsg || '').slice(0, 40) : '—'}</td>
-                  <td className="muted nowrap">{ago(d.createdAt)}</td>
-                  <td className="muted nowrap">{d.finishedAt ? Math.max(0, d.finishedAt - d.createdAt) + ' 秒' : '—'}</td>
-                  <td>{d.jobId && <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); openJob(d.jobId, `部署 #${d.number}`) }}>日志</button>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ResponsiveTable
+          table={
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>#</th><th>状态</th><th>触发</th><th>提交</th><th>开始</th><th>耗时</th><th></th></tr></thead>
+                <tbody>
+                  {data.map((d) => (
+                    <tr key={d.id} className="clickable" onClick={() => nav(`/deployments/${d.id}`)}>
+                      <td className="mono">#{d.number}</td>
+                      <td><JobStatus s={d.status} />{d.error && <div className="label ellipsis" style={{ maxWidth: 260, color: '#A41E14' }} title={d.error}>{d.error}</div>}</td>
+                      <td>{triggerName(d.trigger)} <span className="muted">· {d.actor}</span></td>
+                      <td className="mono" style={{ fontSize: 12 }}>{d.commitSha ? d.commitSha.slice(0, 8) + ' ' + (d.commitMsg || '').slice(0, 40) : '—'}</td>
+                      <td className="muted nowrap">{ago(d.createdAt)}</td>
+                      <td className="muted nowrap">{d.finishedAt ? Math.max(0, d.finishedAt - d.createdAt) + ' 秒' : '—'}</td>
+                      <td>{d.jobId && <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); openJob(d.jobId, `部署 #${d.number}`) }}>日志</button>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          }
+          cards={data.map((d) => (
+            <MobileCard
+              key={d.id}
+              onClick={() => nav(`/deployments/${d.id}`)}
+              title={<span className="mono">部署 #{d.number}</span>}
+              sub={joinInline([triggerName(d.trigger), d.actor])}
+              badges={<JobStatus s={d.status} />}
+              extra={d.error ? <div className="label" style={{ color: '#A41E14', overflowWrap: 'anywhere' }}>{d.error}</div> : undefined}
+              meta={[
+                { label: '开始', value: ago(d.createdAt) },
+                { label: '耗时', value: d.finishedAt ? Math.max(0, d.finishedAt - d.createdAt) + ' 秒' : '—' },
+                d.commitSha ? { label: '提交', value: d.commitSha.slice(0, 8) + ' ' + (d.commitMsg || '').slice(0, 60), mono: true, full: true } : false,
+              ]}
+              actions={d.jobId ? <button className="btn btn-sm" onClick={() => openJob(d.jobId, `部署 #${d.number}`)}>日志</button> : undefined}
+            />
+          ))}
+        />
       )}
     </section>
   )
@@ -277,7 +330,7 @@ function ConfigTab({ project, onSaved }: { project: any; onSaved: () => void }) 
         </Card>
       )}
       {can.operator && project.kind !== 'database' && (
-        <div className="row" style={{ justifyContent: 'flex-end' }}>
+        <div className="row wrap" style={{ justifyContent: 'flex-end' }}>
           {dirty && <span className="label">有未保存的修改</span>}
           <button className="btn" disabled={busy || !dirty} onClick={() => save(false)}>保存</button>
           <button className="btn btn-primary" disabled={busy} onClick={() => save(true)}>保存并部署</button>
@@ -322,8 +375,8 @@ function FilesTab({ id }: { id: string }) {
       {files.length === 0 ? (
         <Empty>没有附加文件。</Empty>
       ) : (
-        <div className="row" style={{ alignItems: 'stretch', gap: 16, flexWrap: 'wrap' }}>
-          <div className="col" style={{ width: 220, gap: 4 }}>
+        <div className="tool-split">
+          <div className="col tool-side" style={{ gap: 4 }}>
             {files.map((x, i) => (
               <button key={i} className={'btn btn-sm' + (i === sel ? ' btn-primary' : ' btn-ghost')} style={{ justifyContent: 'flex-start' }} onClick={() => setSel(i)}>
                 <span className="mono ellipsis">{x.path}</span>
@@ -331,9 +384,9 @@ function FilesTab({ id }: { id: string }) {
             ))}
           </div>
           {f && (
-            <div className="col grow" style={{ minWidth: 280 }}>
-              <div className="row">
-                <input className="input mono" aria-label="文件路径" value={f.path} readOnly={!can.operator} onChange={(e) => setFiles(files.map((x, i) => (i === sel ? { ...x, path: e.target.value } : x)))} />
+            <div className="tool-main">
+              <div className="row wrap">
+                <input className="input mono grow" style={{ minWidth: 'min(200px, 100%)' }} aria-label="文件路径" value={f.path} readOnly={!can.operator} onChange={(e) => setFiles(files.map((x, i) => (i === sel ? { ...x, path: e.target.value } : x)))} />
                 {can.operator && <button className="btn btn-danger btn-sm" onClick={() => { setFiles(files.filter((_, i) => i !== sel)); setSel(0) }}>删除</button>}
               </div>
               <CodeArea key={f.path} label={f.path} lang={langForPath(f.path)} value={f.content} readOnly={!can.operator} onChange={(c) => setFiles(files.map((x, i) => (i === sel ? { ...x, content: c } : x)))} rows={20} />
@@ -407,7 +460,7 @@ function SettingsTab({ data, onSaved }: { data: any; onSaved: () => void }) {
             {hook && <SecretBox label="签名密钥（只显示这一次，填到仓库的 Secret / Token 中）" value={hook.secret} />}
             {!hook && <span className="label">{data.hasWebhookSecret ? '已设置签名密钥。' : '尚未设置签名密钥，建议生成。'}</span>}
             {can.operator && (
-              <div className="row">
+              <div className="row wrap">
                 <button className="btn btn-sm" onClick={async () => { try { setHook(await post(`/projects/${p.id}/webhook/rotate`)); toast.ok('已生成新的 Webhook 地址和密钥') } catch (e) { toast.err(e) } }}>重新生成 Webhook 地址与密钥</button>
               </div>
             )}

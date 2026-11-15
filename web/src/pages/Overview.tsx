@@ -2,6 +2,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ago, bytes, duration, get, pct } from '../api'
 import { MetricsPanel } from '../components/charts'
 import { Card, Empty, ErrorBox, JobStatus, Loading, Meter, Page, Status, useJobLog, useLoad } from '../components/ui'
+import { MobileCard, ResponsiveTable, joinInline } from '../components/ResponsiveList'
 
 // Rows shown per list card; the API returns at most 8 deployments and jobs.
 const ROWS = 8
@@ -30,19 +31,32 @@ export default function Overview() {
     <Page title="总览" sub={h.uptime ? `主机已运行 ${duration(h.uptime)}` : undefined}>
       {issues.length > 0 && (
         <Card title={`需要关注（${issues.length}）`} pad={false}>
-          <div className="table-wrap">
-            <table>
-              <tbody>
-                {issues.slice(0, 8).map((i, k) => (
-                  <tr key={k} className="clickable" onClick={() => nav(i.to)}>
-                    <td>{i.kind === 'info' ? <span className="badge run"><span className="dot" />更新</span> : <span className="badge err"><span className="dot" />问题</span>}</td>
-                    <td className="grow">{i.text}</td>
-                    <td style={{ textAlign: 'right' }}><Link className="row-link" to={i.to} onClick={(e) => e.stopPropagation()}>查看</Link></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ResponsiveTable
+            table={
+              <div className="table-wrap">
+                <table>
+                  <tbody>
+                    {issues.slice(0, 8).map((i, k) => (
+                      <tr key={k} className="clickable" onClick={() => nav(i.to)}>
+                        <td>{i.kind === 'info' ? <span className="badge run"><span className="dot" />更新</span> : <span className="badge err"><span className="dot" />问题</span>}</td>
+                        <td className="grow">{i.text}</td>
+                        <td style={{ textAlign: 'right' }}><Link className="row-link" to={i.to} onClick={(e) => e.stopPropagation()}>查看</Link></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            }
+            cards={issues.slice(0, 8).map((i, k) => (
+              <MobileCard
+                key={k}
+                tight
+                onClick={() => nav(i.to)}
+                title={i.text}
+                badges={i.kind === 'info' ? <span className="badge run"><span className="dot" />更新</span> : <span className="badge err"><span className="dot" />问题</span>}
+              />
+            ))}
+          />
         </Card>
       )}
 
@@ -80,20 +94,34 @@ export default function Overview() {
           {o.projects.length === 0 ? (
             <Empty icon="projects" action={<Link className="btn btn-primary" to="/projects/new">新建项目</Link>}>还没有项目。</Empty>
           ) : (
-            <div className="table-wrap">
-              <table>
-                <thead><tr><th>名称</th><th className="c-status">状态</th><th className="c-time">容器</th></tr></thead>
-                <tbody>
-                  {o.projects.slice(0, ROWS).map((p: any) => (
-                    <tr key={p.id} className="clickable" onClick={() => nav(`/projects/${p.id}`)}>
-                      <td><div className="name"><Link className="row-link" to={`/projects/${p.id}`} onClick={(e) => e.stopPropagation()} title={p.name}>{p.name}</Link>{p.kind === 'database' && <span className="tag">数据库</span>}</div></td>
-                      <td><Status s={p.status} /></td>
-                      <td className="c-time mono">{p.running}/{p.total}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ResponsiveTable
+              table={
+                <div className="table-wrap">
+                  <table>
+                    <thead><tr><th>名称</th><th className="c-status">状态</th><th className="c-time">容器</th></tr></thead>
+                    <tbody>
+                      {o.projects.slice(0, ROWS).map((p: any) => (
+                        <tr key={p.id} className="clickable" onClick={() => nav(`/projects/${p.id}`)}>
+                          <td><div className="name"><Link className="row-link" to={`/projects/${p.id}`} onClick={(e) => e.stopPropagation()} title={p.name}>{p.name}</Link>{p.kind === 'database' && <span className="tag">数据库</span>}</div></td>
+                          <td><Status s={p.status} /></td>
+                          <td className="c-time mono">{p.running}/{p.total}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              }
+              cards={o.projects.slice(0, ROWS).map((p: any) => (
+                <MobileCard
+                  key={p.id}
+                  tight
+                  onClick={() => nav(`/projects/${p.id}`)}
+                  title={<><Link className="row-link" to={`/projects/${p.id}`} onClick={(e) => e.stopPropagation()}>{p.name}</Link>{p.kind === 'database' && <span className="tag">数据库</span>}</>}
+                  sub={<span className="mono">容器 {p.running}/{p.total}</span>}
+                  badges={<Status s={p.status} />}
+                />
+              ))}
+            />
           )}
         </Card>
 
@@ -101,26 +129,40 @@ export default function Overview() {
           {o.deployments.length === 0 ? (
             <Empty icon="rocket">还没有部署记录。</Empty>
           ) : (
-            <div className="table-wrap">
-              <table>
-                <thead><tr><th>项目</th><th className="c-status">状态</th><th className="c-trigger">触发</th><th className="c-time">时间</th></tr></thead>
-                <tbody>
-                  {o.deployments.slice(0, ROWS).map((d: any) => (
-                    <tr key={d.deployment.id} className="clickable" onClick={() => nav(`/deployments/${d.deployment.id}`)}>
-                      <td>
-                        <div className="name">
-                          <Link className="row-link" to={`/deployments/${d.deployment.id}`} onClick={(e) => e.stopPropagation()} title={`${d.project} #${d.deployment.number}`}>{d.project}</Link>
-                          <span className="dash-num">#{d.deployment.number}</span>
-                        </div>
-                      </td>
-                      <td><JobStatus s={d.deployment.status} /></td>
-                      <td className="c-trigger muted" title={`${triggerName(d.deployment.trigger)} · ${d.deployment.actor}`}>{triggerName(d.deployment.trigger)} · {d.deployment.actor}</td>
-                      <td className="c-time muted">{ago(d.deployment.createdAt)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ResponsiveTable
+              table={
+                <div className="table-wrap">
+                  <table>
+                    <thead><tr><th>项目</th><th className="c-status">状态</th><th className="c-trigger">触发</th><th className="c-time">时间</th></tr></thead>
+                    <tbody>
+                      {o.deployments.slice(0, ROWS).map((d: any) => (
+                        <tr key={d.deployment.id} className="clickable" onClick={() => nav(`/deployments/${d.deployment.id}`)}>
+                          <td>
+                            <div className="name">
+                              <Link className="row-link" to={`/deployments/${d.deployment.id}`} onClick={(e) => e.stopPropagation()} title={`${d.project} #${d.deployment.number}`}>{d.project}</Link>
+                              <span className="dash-num">#{d.deployment.number}</span>
+                            </div>
+                          </td>
+                          <td><JobStatus s={d.deployment.status} /></td>
+                          <td className="c-trigger muted" title={`${triggerName(d.deployment.trigger)} · ${d.deployment.actor}`}>{triggerName(d.deployment.trigger)} · {d.deployment.actor}</td>
+                          <td className="c-time muted">{ago(d.deployment.createdAt)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              }
+              cards={o.deployments.slice(0, ROWS).map((d: any) => (
+                <MobileCard
+                  key={d.deployment.id}
+                  tight
+                  onClick={() => nav(`/deployments/${d.deployment.id}`)}
+                  title={<><Link className="row-link" to={`/deployments/${d.deployment.id}`} onClick={(e) => e.stopPropagation()}>{d.project}</Link><span className="dash-num">#{d.deployment.number}</span></>}
+                  sub={joinInline([triggerName(d.deployment.trigger), d.deployment.actor, ago(d.deployment.createdAt)])}
+                  badges={<JobStatus s={d.deployment.status} />}
+                />
+              ))}
+            />
           )}
         </Card>
 
@@ -128,20 +170,34 @@ export default function Overview() {
           {o.jobs.length === 0 ? (
             <Empty icon="jobs">最近 6 小时没有任务。</Empty>
           ) : (
-            <div className="table-wrap">
-              <table>
-                <thead><tr><th>任务</th><th className="c-status">状态</th><th className="c-time">时间</th></tr></thead>
-                <tbody>
-                  {o.jobs.slice(0, ROWS).map((j: any) => (
-                    <tr key={j.id} className="clickable" onClick={() => openJob(j.id, j.title)}>
-                      <td title={j.title}>{j.title}</td>
-                      <td><JobStatus s={j.status} /></td>
-                      <td className="c-time muted">{ago(j.createdAt)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ResponsiveTable
+              table={
+                <div className="table-wrap">
+                  <table>
+                    <thead><tr><th>任务</th><th className="c-status">状态</th><th className="c-time">时间</th></tr></thead>
+                    <tbody>
+                      {o.jobs.slice(0, ROWS).map((j: any) => (
+                        <tr key={j.id} className="clickable" onClick={() => openJob(j.id, j.title)}>
+                          <td title={j.title}>{j.title}</td>
+                          <td><JobStatus s={j.status} /></td>
+                          <td className="c-time muted">{ago(j.createdAt)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              }
+              cards={o.jobs.slice(0, ROWS).map((j: any) => (
+                <MobileCard
+                  key={j.id}
+                  tight
+                  onClick={() => openJob(j.id, j.title)}
+                  title={j.title}
+                  sub={ago(j.createdAt)}
+                  badges={<JobStatus s={j.status} />}
+                />
+              ))}
+            />
           )}
         </Card>
 
@@ -149,19 +205,31 @@ export default function Overview() {
           {o.certs.length === 0 ? (
             <Empty icon="certs">近期没有即将过期的证书。</Empty>
           ) : (
-            <div className="table-wrap">
-              <table>
-                <thead><tr><th>域名</th><th className="c-time">剩余</th></tr></thead>
-                <tbody>
-                  {o.certs.slice(0, ROWS).map((c: any) => (
-                    <tr key={c.id + c.name}>
-                      <td className="mono" title={c.domains?.join(', ')}>{c.domains?.join(', ')}</td>
-                      <td className="c-time"><span className={'badge ' + (c.daysLeft <= 7 ? 'err' : 'warn')}>剩 {c.daysLeft} 天</span></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ResponsiveTable
+              table={
+                <div className="table-wrap">
+                  <table>
+                    <thead><tr><th>域名</th><th className="c-time">剩余</th></tr></thead>
+                    <tbody>
+                      {o.certs.slice(0, ROWS).map((c: any) => (
+                        <tr key={c.id + c.name}>
+                          <td className="mono" title={c.domains?.join(', ')}>{c.domains?.join(', ')}</td>
+                          <td className="c-time"><span className={'badge ' + (c.daysLeft <= 7 ? 'err' : 'warn')}>剩 {c.daysLeft} 天</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              }
+              cards={o.certs.slice(0, ROWS).map((c: any) => (
+                <MobileCard
+                  key={c.id + c.name}
+                  tight
+                  title={<span className="mono">{c.domains?.join(', ')}</span>}
+                  badges={<span className={'badge ' + (c.daysLeft <= 7 ? 'err' : 'warn')}>剩 {c.daysLeft} 天</span>}
+                />
+              ))}
+            />
           )}
         </Card>
       </div>

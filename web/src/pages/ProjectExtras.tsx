@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ago, dateTime, del, get, post, put } from '../api'
 import { useCan } from '../auth'
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, JobStatus, Loading, Modal, Select, useAction, useJobLog, useLoad, useToast } from '../components/ui'
+import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
 
 // ---------- image updates ----------
 
@@ -29,9 +30,9 @@ export function ImagesTab({ project, onDeploy }: { project: any; onDeploy: () =>
   return (
     <>
       {updates > 0 && (
-        <div className="alert run">
+        <div className="alert run" style={{ flexWrap: 'wrap' }}>
           <Icon name="alert" />
-          <div className="grow">有 {updates} 个服务的镜像有新版本。重新部署（开启「部署前拉取最新镜像」）即可更新。</div>
+          <div className="grow" style={{ minWidth: 'min(220px, 100%)' }}>有 {updates} 个服务的镜像有新版本。重新部署（开启「部署前拉取最新镜像」）即可更新。</div>
           {can.operator && <button className="btn btn-sm btn-primary" onClick={onDeploy}><Icon name="rocket" size={16} />部署更新</button>}
         </div>
       )}
@@ -39,7 +40,7 @@ export function ImagesTab({ project, onDeploy }: { project: any; onDeploy: () =>
         title="镜像版本"
         pad={false}
         actions={
-          <div className="row">
+          <div className="row wrap">
             <span className="label">{project.options?.autoUpdate ? '已开启自动更新' : '自动更新未开启（在「设置」中开启）'}</span>
             {can.operator && <button className="btn btn-sm" disabled={!!busy} onClick={check}><Icon name="refresh" size={16} />{busy ? '检查中…' : '立即检查'}</button>}
           </div>
@@ -48,26 +49,47 @@ export function ImagesTab({ project, onDeploy }: { project: any; onDeploy: () =>
         {error ? <div className="card-body"><ErrorBox error={error} /></div> : !data ? <Loading /> : data.length === 0 ? (
           <Empty>还没有检查记录。面板会按「设置」中的计划定期对比镜像仓库的 digest。</Empty>
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>服务</th><th>镜像</th><th>状态</th><th>本地</th><th>仓库</th><th>检查时间</th></tr></thead>
-              <tbody>
-                {data.map((c) => {
-                  const [k, t] = imageStatus[c.status] || ['off', c.status]
-                  return (
-                    <tr key={c.service}>
-                      <td style={{ fontWeight: 600 }}>{c.service}</td>
-                      <td className="mono" style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{c.image}</td>
-                      <td><span className={'badge ' + k}>{t}</span>{c.error && <div className="label" style={{ color: '#A41E14', maxWidth: 280 }}>{c.error}</div>}</td>
-                      <td className="mono" title={c.localDigest}>{short(c.localDigest)}</td>
-                      <td className="mono" title={c.remoteDigest}>{short(c.remoteDigest)}</td>
-                      <td className="muted nowrap">{ago(c.checkedAt)}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+          <ResponsiveTable
+            table={
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>服务</th><th>镜像</th><th>状态</th><th>本地</th><th>仓库</th><th>检查时间</th></tr></thead>
+                  <tbody>
+                    {data.map((c) => {
+                      const [k, t] = imageStatus[c.status] || ['off', c.status]
+                      return (
+                        <tr key={c.service}>
+                          <td style={{ fontWeight: 600 }}>{c.service}</td>
+                          <td className="mono" style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{c.image}</td>
+                          <td><span className={'badge ' + k}>{t}</span>{c.error && <div className="label" style={{ color: '#A41E14', maxWidth: 280 }}>{c.error}</div>}</td>
+                          <td className="mono" title={c.localDigest}>{short(c.localDigest)}</td>
+                          <td className="mono" title={c.remoteDigest}>{short(c.remoteDigest)}</td>
+                          <td className="muted nowrap">{ago(c.checkedAt)}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            }
+            cards={data.map((c) => {
+              const [k, t] = imageStatus[c.status] || ['off', c.status]
+              return (
+                <MobileCard
+                  key={c.service}
+                  title={c.service}
+                  sub={<span className="mono">{c.image}</span>}
+                  badges={<span className={'badge ' + k}>{t}</span>}
+                  extra={c.error ? <div className="label" style={{ color: '#A41E14', overflowWrap: 'anywhere' }}>{c.error}</div> : undefined}
+                  meta={[
+                    { label: '本地', value: short(c.localDigest), mono: true },
+                    { label: '仓库', value: short(c.remoteDigest), mono: true },
+                    { label: '检查时间', value: ago(c.checkedAt), full: true },
+                  ]}
+                />
+              )
+            })}
+          />
         )}
       </Card>
     </>
@@ -152,39 +174,81 @@ export function CronTasks({ projectId, services }: { projectId?: number; service
       {error ? <div className="card-body"><ErrorBox error={error} /></div> : !data ? <Loading /> : data.length === 0 ? (
         <Empty>没有定时任务。可以在服务容器内按计划执行命令，例如清理缓存、生成报表、调用 artisan / manage.py。</Empty>
       ) : (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>名称</th>{!projectId && <th>项目</th>}<th>服务 / 命令</th><th>计划</th><th>上次执行</th><th>下次</th><th /></tr></thead>
-            <tbody>
-              {data.map((t) => (
-                <tr key={t.id}>
-                  <td style={{ fontWeight: 600 }}>{t.name}{!t.enabled && <span className="badge off" style={{ marginLeft: 6 }}>已停用</span>}</td>
-                  {!projectId && <td>{t.projectName}</td>}
-                  <td><span className="tag">{t.service}</span> <span className="mono ellipsis" style={{ display: 'inline-block', maxWidth: 280, verticalAlign: 'middle', fontSize: 12.5 }} title={t.command}>{t.command}</span></td>
-                  <td className="mono nowrap">{t.schedule}</td>
-                  <td className="nowrap">
-                    {t.lastRunAt ? (
-                      <button className="link-btn" style={{ textDecoration: 'none' }} disabled={!t.lastJobId} onClick={() => openJob(t.lastJobId, `定时任务 ${t.name}`)}>
-                        <JobStatus s={t.lastStatus} /> <span className="label">{ago(t.lastRunAt)}</span>
-                      </button>
-                    ) : <span className="muted">—</span>}
-                  </td>
-                  <td className="muted nowrap" title={t.next ? dateTime(t.next) : ''}>{t.enabled && t.next ? ago(t.next) : '—'}</td>
-                  <td>
-                    {can.operator && (
-                      <div className="row" style={{ justifyContent: 'flex-end' }}>
-                        <button className="btn btn-sm" onClick={() => runNow(t)}><Icon name="play" size={14} />执行</button>
-                        <button className="btn btn-sm" onClick={() => toggle(t)}>{t.enabled ? '停用' : '启用'}</button>
-                        <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit(t)}><Icon name="edit" size={16} /></button>
-                        <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(t)}><Icon name="trash" size={16} /></button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ResponsiveTable
+          table={
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>名称</th>{!projectId && <th>项目</th>}<th>服务 / 命令</th><th>计划</th><th>上次执行</th><th>下次</th><th /></tr></thead>
+                <tbody>
+                  {data.map((t) => (
+                    <tr key={t.id}>
+                      <td style={{ fontWeight: 600 }}>{t.name}{!t.enabled && <span className="badge off" style={{ marginLeft: 6 }}>已停用</span>}</td>
+                      {!projectId && <td>{t.projectName}</td>}
+                      <td><span className="tag">{t.service}</span> <span className="mono ellipsis" style={{ display: 'inline-block', maxWidth: 280, verticalAlign: 'middle', fontSize: 12.5 }} title={t.command}>{t.command}</span></td>
+                      <td className="mono nowrap">{t.schedule}</td>
+                      <td className="nowrap">
+                        {t.lastRunAt ? (
+                          <button className="link-btn" style={{ textDecoration: 'none' }} disabled={!t.lastJobId} onClick={() => openJob(t.lastJobId, `定时任务 ${t.name}`)}>
+                            <JobStatus s={t.lastStatus} /> <span className="label">{ago(t.lastRunAt)}</span>
+                          </button>
+                        ) : <span className="muted">—</span>}
+                      </td>
+                      <td className="muted nowrap" title={t.next ? dateTime(t.next) : ''}>{t.enabled && t.next ? ago(t.next) : '—'}</td>
+                      <td>
+                        {can.operator && (
+                          <div className="row" style={{ justifyContent: 'flex-end' }}>
+                            <button className="btn btn-sm" onClick={() => runNow(t)}><Icon name="play" size={14} />执行</button>
+                            <button className="btn btn-sm" onClick={() => toggle(t)}>{t.enabled ? '停用' : '启用'}</button>
+                            <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit(t)}><Icon name="edit" size={16} /></button>
+                            <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(t)}><Icon name="trash" size={16} /></button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          }
+          cards={data.map((t) => (
+            <MobileCard
+              key={t.id}
+              title={
+                <>
+                  <span>{t.name}</span>
+                  <span className="tag">{t.service}</span>
+                </>
+              }
+              sub={(!projectId && t.projectName ? `${t.projectName} · ` : '') + t.command}
+              badges={!t.enabled ? <span className="badge off">已停用</span> : t.lastStatus ? <JobStatus s={t.lastStatus} /> : undefined}
+              meta={[
+                { label: '计划', value: t.schedule, mono: true },
+                { label: '下次', value: t.enabled && t.next ? ago(t.next) : '—' },
+                t.lastRunAt
+                  ? {
+                      label: '上次执行',
+                      value: (
+                        <button className="link-btn" style={{ textDecoration: 'none' }} disabled={!t.lastJobId} onClick={() => openJob(t.lastJobId, `定时任务 ${t.name}`)}>
+                          <JobStatus s={t.lastStatus} /> <span className="label">{ago(t.lastRunAt)}</span>
+                        </button>
+                      ),
+                      full: true,
+                    }
+                  : false,
+              ]}
+              actions={
+                can.operator ? (
+                  <>
+                    <button className="btn btn-sm" onClick={() => runNow(t)}><Icon name="play" size={14} />执行</button>
+                    <button className="btn btn-sm" onClick={() => toggle(t)}>{t.enabled ? '停用' : '启用'}</button>
+                    <button className="btn btn-sm btn-ghost btn-icon" aria-label="编辑" onClick={() => setEdit(t)}><Icon name="edit" size={16} /></button>
+                    <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除" onClick={() => setRm(t)}><Icon name="trash" size={16} /></button>
+                  </>
+                ) : undefined
+              }
+            />
+          ))}
+        />
       )}
       {edit && <CronForm task={edit} services={services} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reload() }} />}
       {rm && <Confirm title={`删除定时任务 ${rm.name}`} danger confirmText="删除" onClose={() => setRm(null)} onConfirm={async () => { await del(`/cron-tasks/${rm.id}`); reload() }}>删除后不再执行，历史执行记录保留在任务中心。</Confirm>}

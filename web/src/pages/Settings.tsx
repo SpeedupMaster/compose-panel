@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { ago, bytes, dateTime, del, duration, get, post, put } from '../api'
 import { useAuth, useCan } from '../auth'
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, SecretBox, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
+import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
 
 type Tab = 'panel' | 'account' | 'system' | 'import'
 
@@ -112,7 +113,7 @@ function Account() {
               <SecretBox label="密钥" value={totp.secret} />
               <a className="mono" style={{ fontSize: 12, overflowWrap: 'anywhere' }} href={totp.uri}>{totp.uri}</a>
               <Field label="输入 6 位动态码确认"><input className="input mono" inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value)} /></Field>
-              <div className="row">
+              <div className="row wrap">
                 <button className="btn btn-primary" onClick={async () => { try { const r = await post('/me/totp/enable', { code: code.trim() }); setCodes(r.recoveryCodes); setTotp(null); refresh() } catch (e) { toast.err(e) } }}>开启</button>
                 <button className="btn" onClick={() => setTotp(null)}>取消</button>
               </div>
@@ -127,22 +128,39 @@ function Account() {
       </div>
       <Card title="登录会话" pad={false}>
         {!sessions ? <Loading /> : sessions.length === 0 ? <Empty>没有会话。</Empty> : (
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>设备</th><th>IP</th><th>登录</th><th>最近活动</th><th></th></tr></thead>
-              <tbody>
-                {sessions.map((s) => (
-                  <tr key={s.id}>
-                    <td className="ellipsis" style={{ maxWidth: 360 }} title={s.userAgent}>{s.userAgent || '—'}{s.current && <span className="badge run" style={{ marginLeft: 6 }}>当前</span>}</td>
-                    <td className="mono">{s.ip}</td>
-                    <td className="muted nowrap">{dateTime(s.createdAt)}</td>
-                    <td className="muted nowrap">{ago(s.lastSeenAt)}</td>
-                    <td>{!s.current && <button className="btn btn-sm" onClick={async () => { try { await del(`/me/sessions/${s.id}`); reloadSessions() } catch (e) { toast.err(e) } }}>注销</button>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ResponsiveTable
+            table={
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>设备</th><th>IP</th><th>登录</th><th>最近活动</th><th></th></tr></thead>
+                  <tbody>
+                    {sessions.map((s) => (
+                      <tr key={s.id}>
+                        <td className="ellipsis" style={{ maxWidth: 360 }} title={s.userAgent}>{s.userAgent || '—'}{s.current && <span className="badge run" style={{ marginLeft: 6 }}>当前</span>}</td>
+                        <td className="mono">{s.ip}</td>
+                        <td className="muted nowrap">{dateTime(s.createdAt)}</td>
+                        <td className="muted nowrap">{ago(s.lastSeenAt)}</td>
+                        <td>{!s.current && <button className="btn btn-sm" onClick={async () => { try { await del(`/me/sessions/${s.id}`); reloadSessions() } catch (e) { toast.err(e) } }}>注销</button>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            }
+            cards={sessions.map((s) => (
+              <MobileCard
+                key={s.id}
+                title={s.userAgent || '未知设备'}
+                sub={<span className="mono">{s.ip}</span>}
+                badges={s.current ? <span className="badge run">当前会话</span> : undefined}
+                meta={[
+                  { label: '登录', value: dateTime(s.createdAt) },
+                  { label: '最近活动', value: ago(s.lastSeenAt) },
+                ]}
+                actions={!s.current ? <button className="btn btn-sm" onClick={async () => { try { await del(`/me/sessions/${s.id}`); reloadSessions() } catch (e) { toast.err(e) } }}>注销</button> : undefined}
+              />
+            ))}
+          />
         )}
       </Card>
       {codes && (
@@ -207,22 +225,39 @@ function Import() {
     <Card title="导入已有的 Compose 项目" actions={<button className="btn btn-sm" onClick={reload}><Icon name="refresh" size={16} />重新扫描</button>} pad={false}>
       <p className="label" style={{ padding: '12px 16px 0', margin: 0 }}>扫描主机上由 docker compose 启动、但尚未被面板管理的项目。导入后面板会在原目录中执行 compose 命令，不会移动文件。项目目录需要挂载进面板容器（同路径）。</p>
       {list.length === 0 ? <Empty>没有发现可导入的项目。</Empty> : (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>项目</th><th>目录</th><th>服务</th><th>容器</th><th></th></tr></thead>
-            <tbody>
-              {list.map((x) => (
-                <tr key={x.name}>
-                  <td style={{ fontWeight: 600 }}>{x.name}</td>
-                  <td className="mono" style={{ fontSize: 12 }}>{x.workdir}<div className="label">{x.files?.join(', ')}</div></td>
-                  <td>{x.services?.join(', ')}</td>
-                  <td>{x.running}/{x.containers}</td>
-                  <td><button className="btn btn-sm btn-primary" onClick={async () => { try { const r = await post('/import', { name: x.name, workdir: x.workdir, files: x.files }); toast.ok('已导入'); nav(`/projects/${r.id}`) } catch (e) { toast.err(e) } }}>导入</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ResponsiveTable
+          table={
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>项目</th><th>目录</th><th>服务</th><th>容器</th><th></th></tr></thead>
+                <tbody>
+                  {list.map((x) => (
+                    <tr key={x.name}>
+                      <td style={{ fontWeight: 600 }}>{x.name}</td>
+                      <td className="mono" style={{ fontSize: 12 }}>{x.workdir}<div className="label">{x.files?.join(', ')}</div></td>
+                      <td>{x.services?.join(', ')}</td>
+                      <td>{x.running}/{x.containers}</td>
+                      <td><button className="btn btn-sm btn-primary" onClick={async () => { try { const r = await post('/import', { name: x.name, workdir: x.workdir, files: x.files }); toast.ok('已导入'); nav(`/projects/${r.id}`) } catch (e) { toast.err(e) } }}>导入</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          }
+          cards={list.map((x) => (
+            <MobileCard
+              key={x.name}
+              title={x.name}
+              sub={<span className="mono">{x.workdir}</span>}
+              badges={<span className="badge off">{x.running}/{x.containers} 容器</span>}
+              meta={[
+                x.files?.length ? { label: '文件', value: x.files.join(', '), mono: true, full: true } : false,
+                x.services?.length ? { label: '服务', value: x.services.join(', '), full: true } : false,
+              ]}
+              actions={<button className="btn btn-sm btn-primary" onClick={async () => { try { const r = await post('/import', { name: x.name, workdir: x.workdir, files: x.files }); toast.ok('已导入'); nav(`/projects/${r.id}`) } catch (e) { toast.err(e) } }}>导入</button>}
+            />
+          ))}
+        />
       )}
     </Card>
   )

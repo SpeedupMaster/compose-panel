@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ago, dateTime, get, post, qs } from '../api'
 import { useCan } from '../auth'
 import { CronTasks } from './ProjectExtras'
+import { MobileCard, ResponsiveTable, joinInline } from '../components/ResponsiveList'
 import { Card, Empty, ErrorBox, JobStatus, Loading, Page, Pager, Select, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
 
 export default function Jobs() {
@@ -32,14 +33,14 @@ function JobList() {
     <section className="card">
       <div className="card-head">
         <div className="row wrap">
-          <Select style={{ width: 140 }} aria-label="状态" value={status} onChange={(v) => { setStatus(v); setPage(1) }}>
+          <Select className="filter-select" aria-label="状态" value={status} onChange={(v) => { setStatus(v); setPage(1) }}>
             <option value="">全部状态</option>
             <option value="active">进行中/排队</option>
             <option value="success">成功</option>
             <option value="failed">失败</option>
             <option value="canceled">已取消</option>
           </Select>
-          <Select style={{ width: 140 }} aria-label="类型" value={kind} onChange={(v) => { setKind(v); setPage(1) }}>
+          <Select className="filter-select" aria-label="类型" value={kind} onChange={(v) => { setKind(v); setPage(1) }}>
             {kinds.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
           </Select>
         </div>
@@ -47,22 +48,40 @@ function JobList() {
       <ErrorBox error={error} />
       {!items ? <Loading /> : items.length === 0 ? <Empty>没有任务。</Empty> : (
         <>
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>任务</th><th>状态</th><th>发起人</th><th>创建</th><th>耗时</th></tr></thead>
-            <tbody>
-              {items.map((j) => (
-                <tr key={j.id} className="clickable" onClick={() => openJob(j.id, j.title)}>
-                  <td><div style={{ fontWeight: 500 }}>{j.title}</div><div className="label mono">{j.kind}</div></td>
-                  <td><JobStatus s={j.status} />{j.error && <div className="label ellipsis" style={{ maxWidth: 320, color: '#A41E14' }} title={j.error}>{j.error}</div>}</td>
-                  <td>{j.actor}</td>
-                  <td className="muted nowrap" title={dateTime(j.createdAt)}>{ago(j.createdAt)}</td>
-                  <td className="muted nowrap">{j.finishedAt && j.startedAt ? `${j.finishedAt - j.startedAt} 秒` : j.status === 'running' ? '…' : '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ResponsiveTable
+          table={
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>任务</th><th>状态</th><th>发起人</th><th>创建</th><th>耗时</th></tr></thead>
+                <tbody>
+                  {items.map((j) => (
+                    <tr key={j.id} className="clickable" onClick={() => openJob(j.id, j.title)}>
+                      <td><div style={{ fontWeight: 500 }}>{j.title}</div><div className="label mono">{j.kind}</div></td>
+                      <td><JobStatus s={j.status} />{j.error && <div className="label ellipsis" style={{ maxWidth: 320, color: '#A41E14' }} title={j.error}>{j.error}</div>}</td>
+                      <td>{j.actor}</td>
+                      <td className="muted nowrap" title={dateTime(j.createdAt)}>{ago(j.createdAt)}</td>
+                      <td className="muted nowrap">{j.finishedAt && j.startedAt ? `${j.finishedAt - j.startedAt} 秒` : j.status === 'running' ? '…' : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          }
+          cards={items.map((j) => (
+            <MobileCard
+              key={j.id}
+              onClick={() => openJob(j.id, j.title)}
+              title={j.title}
+              sub={joinInline([<span key="k" className="mono">{j.kind}</span>, j.actor, ago(j.createdAt)])}
+              badges={<JobStatus s={j.status} />}
+              extra={j.error ? <div className="label" style={{ color: '#A41E14', overflowWrap: 'anywhere' }}>{j.error}</div> : undefined}
+              meta={[
+                { label: '创建时间', value: dateTime(j.createdAt) },
+                { label: '耗时', value: j.finishedAt && j.startedAt ? `${j.finishedAt - j.startedAt} 秒` : j.status === 'running' ? '进行中' : '—' },
+              ]}
+            />
+          ))}
+        />
         <Pager page={data!.page} pageSize={data!.pageSize} total={data!.total} onPage={setPage}
           onPageSize={(n) => { localStorage.setItem('jobs.pageSize', String(n)); setPageSize(n); setPage(1) }} />
         </>
@@ -79,23 +98,41 @@ function Schedules() {
   if (!data) return error ? <ErrorBox error={error} /> : <Loading />
   return (
     <Card title={`定时计划（时区 ${data.timezone}）`} pad={false}>
-      <div className="table-wrap">
-        <table>
-          <thead><tr><th>名称</th><th>类型</th><th>计划</th><th>上次</th><th>下次</th><th></th></tr></thead>
-          <tbody>
-            {data.items.map((s: any) => (
-              <tr key={s.key}>
-                <td>{s.name}{s.target && <div className="label">{s.target}</div>}</td>
-                <td>{({ backup: '备份策略', cron: '容器定时任务', drill: '恢复演练' } as Record<string, string>)[s.kind] || '系统'}</td>
-                <td className="mono">{s.spec}</td>
-                <td className="muted nowrap">{s.prev ? ago(s.prev) : '—'}</td>
-                <td className="muted nowrap">{s.next ? dateTime(s.next) : '—'}</td>
-                <td>{can.operator && <button className="btn btn-sm" onClick={async () => { try { const r = await post(`/schedules/${encodeURIComponent(s.key)}/run`); if (r.jobId) openJob(r.jobId, s.name); else toast.ok('已执行') } catch (e) { toast.err(e) } }}>立即运行</button>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <ResponsiveTable
+        table={
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>名称</th><th>类型</th><th>计划</th><th>上次</th><th>下次</th><th></th></tr></thead>
+              <tbody>
+                {data.items.map((s: any) => (
+                  <tr key={s.key}>
+                    <td>{s.name}{s.target && <div className="label">{s.target}</div>}</td>
+                    <td>{({ backup: '备份策略', cron: '容器定时任务', drill: '恢复演练' } as Record<string, string>)[s.kind] || '系统'}</td>
+                    <td className="mono">{s.spec}</td>
+                    <td className="muted nowrap">{s.prev ? ago(s.prev) : '—'}</td>
+                    <td className="muted nowrap">{s.next ? dateTime(s.next) : '—'}</td>
+                    <td>{can.operator && <button className="btn btn-sm" onClick={async () => { try { const r = await post(`/schedules/${encodeURIComponent(s.key)}/run`); if (r.jobId) openJob(r.jobId, s.name); else toast.ok('已执行') } catch (e) { toast.err(e) } }}>立即运行</button>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        }
+        cards={data.items.map((s: any) => (
+          <MobileCard
+            key={s.key}
+            title={s.name}
+            sub={s.target}
+            badges={<span className="badge off">{({ backup: '备份策略', cron: '容器定时任务', drill: '恢复演练' } as Record<string, string>)[s.kind] || '系统'}</span>}
+            meta={[
+              { label: '计划', value: s.spec, mono: true },
+              { label: '上次', value: s.prev ? ago(s.prev) : '—' },
+              { label: '下次', value: s.next ? dateTime(s.next) : '—', full: true },
+            ]}
+            actions={can.operator ? <button className="btn btn-sm" onClick={async () => { try { const r = await post(`/schedules/${encodeURIComponent(s.key)}/run`); if (r.jobId) openJob(r.jobId, s.name); else toast.ok('已执行') } catch (e) { toast.err(e) } }}>立即运行</button> : undefined}
+          />
+        ))}
+      />
     </Card>
   )
 }

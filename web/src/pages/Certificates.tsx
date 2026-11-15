@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { dateTime, del, get, post } from '../api'
 import { useCan } from '../auth'
 import { Confirm, Empty, ErrorBox, Field, FileButton, Icon, Loading, Modal, Page, useLoad, useToast } from '../components/ui'
+import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
 
 export default function Certificates() {
   const { data, error, reload } = useLoad(() => get<any[]>('/certificates'), [], 60000)
@@ -13,24 +14,43 @@ export default function Certificates() {
       <ErrorBox error={error} />
       <section className="card">
         {!data ? <Loading /> : data.length === 0 ? <Empty>还没有证书。添加站点后 Caddy 会自动申请。</Empty> : (
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>域名</th><th>剩余</th><th>到期</th><th>签发者</th><th>来源</th><th>使用站点</th><th></th></tr></thead>
-              <tbody>
-                {data.map((c) => (
-                  <tr key={c.source + c.id + c.serial}>
-                    <td className="mono" style={{ fontSize: 13 }}>{c.domains.join(', ')}{c.name && <div className="label">{c.name}</div>}</td>
-                    <td>{c.source === 'internal' ? <span className="badge ok">自动续期</span> : <span className={'badge ' + (c.daysLeft <= 7 ? 'err' : c.daysLeft <= 14 ? 'warn' : 'ok')}>{c.daysLeft} 天</span>}</td>
-                    <td className="nowrap muted">{dateTime(Date.parse(c.notAfter) / 1000)}</td>
-                    <td>{c.issuer}</td>
-                    <td>{c.source === 'uploaded' ? '上传' : c.source === 'internal' ? '本地 CA' : '自动（ACME）'}<div className="label">{c.keyType}</div></td>
-                    <td className="mono" style={{ fontSize: 12 }}>{c.sites?.join(', ') || '—'}</td>
-                    <td>{can.admin && c.source === 'uploaded' && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除证书" onClick={() => setRm(c)}><Icon name="trash" size={16} /></button>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ResponsiveTable
+            table={
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>域名</th><th>剩余</th><th>到期</th><th>签发者</th><th>来源</th><th>使用站点</th><th></th></tr></thead>
+                  <tbody>
+                    {data.map((c) => (
+                      <tr key={c.source + c.id + c.serial}>
+                        <td className="mono" style={{ fontSize: 13 }}>{c.domains.join(', ')}{c.name && <div className="label">{c.name}</div>}</td>
+                        <td>{c.source === 'internal' ? <span className="badge ok">自动续期</span> : <span className={'badge ' + (c.daysLeft <= 7 ? 'err' : c.daysLeft <= 14 ? 'warn' : 'ok')}>{c.daysLeft} 天</span>}</td>
+                        <td className="nowrap muted">{dateTime(Date.parse(c.notAfter) / 1000)}</td>
+                        <td>{c.issuer}</td>
+                        <td>{c.source === 'uploaded' ? '上传' : c.source === 'internal' ? '本地 CA' : '自动（ACME）'}<div className="label">{c.keyType}</div></td>
+                        <td className="mono" style={{ fontSize: 12 }}>{c.sites?.join(', ') || '—'}</td>
+                        <td>{can.admin && c.source === 'uploaded' && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除证书" onClick={() => setRm(c)}><Icon name="trash" size={16} /></button>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            }
+            cards={data.map((c) => (
+              <MobileCard
+                key={c.source + c.id + c.serial}
+                title={<span className="mono">{c.domains.join(', ')}</span>}
+                sub={c.name || undefined}
+                badges={c.source === 'internal' ? <span className="badge ok">自动续期</span> : <span className={'badge ' + (c.daysLeft <= 7 ? 'err' : c.daysLeft <= 14 ? 'warn' : 'ok')}>{c.daysLeft} 天</span>}
+                meta={[
+                  { label: '来源', value: `${c.source === 'uploaded' ? '上传' : c.source === 'internal' ? '本地 CA' : '自动（ACME）'} · ${c.keyType}` },
+                  { label: '到期', value: dateTime(Date.parse(c.notAfter) / 1000) },
+                  { label: '签发者', value: c.issuer, full: true },
+                  c.sites?.length ? { label: '使用站点', value: c.sites.join(', '), mono: true, full: true } : false,
+                ]}
+                actions={can.admin && c.source === 'uploaded' ? <button className="btn btn-sm btn-danger" onClick={() => setRm(c)}><Icon name="trash" size={16} />删除证书</button> : undefined}
+              />
+            ))}
+          />
         )}
       </section>
       {upload && <UploadModal onClose={() => setUpload(false)} onDone={() => { setUpload(false); reload() }} />}
@@ -45,7 +65,7 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
   const [err, setErr] = useState<unknown>()
   const readFile = (k: 'cert' | 'key') => (file: File) => file.text().then((t) => setF((x) => ({ ...x, [k]: t })))
   const fieldHead = (title: string, accept: string, k: 'cert' | 'key') => (
-    <span className="row" style={{ justifyContent: 'space-between' }}>{title}<FileButton accept={accept} onFile={readFile(k)}>从文件读取</FileButton></span>
+    <span className="row wrap" style={{ justifyContent: 'space-between' }}>{title}<FileButton accept={accept} onFile={readFile(k)}>从文件读取</FileButton></span>
   )
   return (
     <Modal title="上传证书" wide onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" onClick={async () => { try { const r = await post('/certificates', f); toast.ok('已上传：' + (r.domains || []).join(', ')); if (r.warning) toast.err(r.warning); onDone() } catch (e) { setErr(e) } }}>上传</button></>}>

@@ -30,28 +30,28 @@ export function AccessLogs({ site, onClose }: { site: any; onClose: () => void }
     <Modal title={<>访问日志 · <span className="mono">{site.domains[0]}</span></>} wide onClose={onClose}>
       {data && !data.enabled && <div className="alert warn"><Icon name="alert" />这个站点没有开启访问日志，下面只显示之前记录的内容。在站点设置中开启「记录访问日志」。</div>}
       <form className="row wrap" onSubmit={(e) => { e.preventDefault(); apply() }}>
-        <Select style={{ width: 120 }} aria-label="时间范围" value={hours} onChange={(v) => setHours(Number(v))}>
+        <Select className="filter-select" style={{ width: 120 }} aria-label="时间范围" value={hours} onChange={(v) => setHours(Number(v))}>
           <option value={1}>1 小时</option>
           <option value={6}>6 小时</option>
           <option value={24}>24 小时</option>
           <option value={72}>3 天</option>
           <option value={168}>7 天</option>
         </Select>
-        <Select style={{ width: 110 }} aria-label="状态码" value={status} onChange={(v) => { setStatus(v); setApplied({ status: v, path, ip }) }}>
+        <Select className="filter-select" style={{ width: 110 }} aria-label="状态码" value={status} onChange={(v) => { setStatus(v); setApplied({ status: v, path, ip }) }}>
           <option value="">全部状态</option>
           <option value="2xx">2xx</option>
           <option value="3xx">3xx</option>
           <option value="4xx">4xx</option>
           <option value="5xx">5xx</option>
         </Select>
-        <input className="input mono" style={{ width: 200 }} placeholder="路径包含" aria-label="路径" value={path} onChange={(e) => setPath(e.target.value)} />
-        <input className="input mono" style={{ width: 150 }} placeholder="IP 前缀" aria-label="IP" value={ip} onChange={(e) => setIp(e.target.value)} />
+        <input className="input mono filter-input" style={{ width: 'min(200px, 100%)', flex: '1 1 160px' }} placeholder="路径包含" aria-label="路径" value={path} onChange={(e) => setPath(e.target.value)} />
+        <input className="input mono filter-input" style={{ width: 'min(150px, 100%)', flex: '1 1 130px' }} placeholder="IP 前缀" aria-label="IP" value={ip} onChange={(e) => setIp(e.target.value)} />
         <button className="btn btn-sm" type="submit"><Icon name="search" size={16} />筛选</button>
         <button className="btn btn-sm btn-ghost btn-icon" type="button" aria-label="刷新" disabled={loading} onClick={reload}><Icon name="refresh" size={16} /></button>
       </form>
       {error ? <ErrorBox error={error} /> : !data ? <Loading /> : (
         <>
-          <div className="grid" style={{ gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
+          <div className="grid" style={{ gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(min(115px, 100%), 1fr))' }}>
             <div className="card stat" style={{ padding: 12 }}><span className="label">请求数</span><div className="big" style={{ fontSize: 20 }}>{total}</div></div>
             <div className="card stat" style={{ padding: 12 }}><span className="label">平均耗时</span><div className="big" style={{ fontSize: 20 }}>{data.avgMs}<small> ms</small></div></div>
             {['2xx', '3xx', '4xx', '5xx'].map((c) => (
