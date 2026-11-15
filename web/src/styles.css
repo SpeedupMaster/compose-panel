@@ -248,7 +248,9 @@ tr.clickable:hover td { background: #FAFAF8; }
 .empty { padding: 40px 16px; text-align: center; color: var(--muted); display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .empty-icon { width: 44px; height: 44px; border-radius: 50%; background: #F0F0ED; color: #8A8D93; display: flex; align-items: center; justify-content: center; }
 
-/* overview list cards: same header, column header and row height in every card so they line up side by side */
+/* overview list cards: 2-column grid on desktop with matching header, column header and row height */
+.dash-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+@media (max-width: 1280px) { .dash-grid { grid-template-columns: minmax(0, 1fr); } }
 .dash { display: flex; flex-direction: column; min-width: 0; }
 .dash > .table-wrap { flex: 1; }
 .dash table { table-layout: fixed; }
@@ -257,12 +259,20 @@ tr.clickable:hover td { background: #FAFAF8; }
 .dash tr > :first-child { padding-left: 16px; }
 .dash tr > :last-child { padding-right: 16px; }
 .dash .c-status { width: 96px; }
-.dash .c-time { width: 96px; text-align: right; }
+.dash .c-trigger { width: 148px; }
+.dash .c-time { width: 88px; text-align: right; }
+@media (max-width: 560px) { .dash .c-trigger { display: none; } }
 .dash td.c-time { font-variant-numeric: tabular-nums; }
 .dash .name { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .dash .name > :first-child { overflow: hidden; text-overflow: ellipsis; }
-.dash .name .tag { flex: none; }
+.dash .name .tag, .dash .name .dash-num { flex: none; }
+.dash .tag { font-family: var(--font); color: #4A4D52; }
+.dash .dash-num { font-family: var(--mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .dash > .empty { flex: 1; justify-content: center; }
+.row-link, .sub-link { color: var(--ink); font-weight: 500; text-decoration: none; transition: color .12s; }
+tr.clickable:hover .row-link, .row-link:hover, .sub-link:hover { color: var(--accent-hover); }
+.sub-link:hover { text-decoration: underline; }
+.row-link:focus-visible, .sub-link:focus-visible { outline: 2px solid #E8A16B; outline-offset: 2px; border-radius: 3px; }
 
 /* modal & drawer */
 .overlay { position: fixed; inset: 0; background: rgba(24,25,27,.45); z-index: 100; display: flex; align-items: flex-start; justify-content: center; padding: 6vh 16px; overflow-y: auto; }

@@ -91,6 +91,7 @@ export default function ProjectDetail() {
 
 function OverviewTab({ data, onAction }: { data: any; onAction: (a: string, s?: string) => void }) {
   const can = useCan()
+  const nav = useNavigate()
   const { data: stats } = useLoad(() => get<Record<string, any>>('/containers/stats'), [], 10000)
   const p = data.project
   return (
@@ -100,7 +101,7 @@ function OverviewTab({ data, onAction }: { data: any; onAction: (a: string, s?: 
           <span className="label">最近部署</span>
           {data.lastDeploy ? (
             <>
-              <div className="row"><JobStatus s={data.lastDeploy.status} /><Link to={`/deployments/${data.lastDeploy.id}`}>#{data.lastDeploy.number}</Link></div>
+              <div className="row"><JobStatus s={data.lastDeploy.status} /><Link className="sub-link" to={`/deployments/${data.lastDeploy.id}`}>#{data.lastDeploy.number}</Link></div>
               <span className="label">{triggerName(data.lastDeploy.trigger)} · {data.lastDeploy.actor} · {ago(data.lastDeploy.createdAt)}</span>
             </>
           ) : (
@@ -109,7 +110,7 @@ function OverviewTab({ data, onAction }: { data: any; onAction: (a: string, s?: 
         </div>
         <div className="card stat">
           <span className="label">域名</span>
-          {data.domains?.length ? data.domains.map((d: string) => <a key={d} className="mono" href={'https://' + d} target="_blank" rel="noreferrer">{d}</a>) : <span className="muted">未绑定 · <Link to="/sites">添加站点</Link></span>}
+          {data.domains?.length ? data.domains.map((d: string) => <div key={d}><a className="sub-link mono" href={'https://' + d} target="_blank" rel="noreferrer">{d}</a></div>) : <span className="muted">未绑定 · <Link className="sub-link" to="/sites">添加站点</Link></span>}
         </div>
         <div className="card stat">
           <span className="label">目录</span>
@@ -128,14 +129,14 @@ function OverviewTab({ data, onAction }: { data: any; onAction: (a: string, s?: 
                 {data.containers.map((c: any) => {
                   const st = stats?.[c.id]
                   return (
-                    <tr key={c.id}>
-                      <td><Link to={`/containers/${c.id}`} style={{ fontWeight: 600 }}>{c.service || c.name}</Link><div className="label mono">{c.name}</div></td>
+                    <tr key={c.id} className="clickable" onClick={() => nav(`/containers/${c.id}`)}>
+                      <td><Link className="row-link" to={`/containers/${c.id}`} onClick={(e) => e.stopPropagation()}>{c.service || c.name}</Link><div className="label mono">{c.name}</div></td>
                       <td><Status s={c.health === 'unhealthy' ? 'unhealthy' : c.state} /><div className="label">{c.status}</div></td>
                       <td className="mono ellipsis" style={{ maxWidth: 240, fontSize: 13 }} title={c.image}>{c.image}</td>
                       <td className="mono">{st ? st.cpuPercent.toFixed(1) + '%' : '—'}</td>
                       <td className="mono nowrap">{st ? bytes(st.memUsage) : '—'}</td>
                       <td className="mono" style={{ fontSize: 12 }}>{portsText(c.ports)}</td>
-                      <td>
+                      <td onClick={(e) => e.stopPropagation()}>
                         <div className="row" style={{ justifyContent: 'flex-end' }}>
                           <Link className="btn btn-sm" to={`/containers/${c.id}?tab=logs`}>日志</Link>
                           {can.operator && c.state === 'running' && <Link className="btn btn-sm" to={`/containers/${c.id}?tab=terminal`}>终端</Link>}

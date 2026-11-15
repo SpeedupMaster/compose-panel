@@ -26,7 +26,7 @@ export default function Databases() {
               <tbody>
                 {data.map(({ instance: d, lastBackupAt, lastBackupStatus, volumeSize }) => (
                   <tr key={d.id} className="clickable" onClick={() => nav(`/databases/${d.id}`)}>
-                    <td><Link to={`/databases/${d.id}`} onClick={(e) => e.stopPropagation()} style={{ fontWeight: 600 }}>{d.name}</Link><div className="label mono">{d.host}:{d.port}</div></td>
+                    <td><Link className="row-link" to={`/databases/${d.id}`} onClick={(e) => e.stopPropagation()}>{d.name}</Link><div className="label mono">{d.host}:{d.port}</div></td>
                     <td>{engineLabel(d.engine)} <span className="muted">{d.version}</span></td>
                     <td><Status s={d.status} /></td>
                     <td>{exposureName[d.exposure] || d.exposure}</td>

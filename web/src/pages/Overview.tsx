@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { ago, bytes, duration, get, pct } from '../api'
 import { MetricsPanel } from '../components/charts'
 import { Card, Empty, ErrorBox, JobStatus, Loading, Meter, Page, Status, useJobLog, useLoad } from '../components/ui'
@@ -9,6 +9,7 @@ const ROWS = 8
 export default function Overview() {
   const { data: o, error } = useLoad(() => get<any>('/overview'), [], 15000)
   const openJob = useJobLog()
+  const nav = useNavigate()
   const { data: updates } = useLoad(() => get<any[]>('/image-updates'), [], 300000)
   if (!o) return <Page title="总览">{error ? <ErrorBox error={error} /> : <Loading />}</Page>
   const h = o.host || {}
@@ -33,10 +34,10 @@ export default function Overview() {
             <table>
               <tbody>
                 {issues.slice(0, 8).map((i, k) => (
-                  <tr key={k}>
+                  <tr key={k} className="clickable" onClick={() => nav(i.to)}>
                     <td>{i.kind === 'info' ? <span className="badge run"><span className="dot" />更新</span> : <span className="badge err"><span className="dot" />问题</span>}</td>
                     <td className="grow">{i.text}</td>
-                    <td style={{ textAlign: 'right' }}><Link to={i.to}>查看</Link></td>
+                    <td style={{ textAlign: 'right' }}><Link className="row-link" to={i.to} onClick={(e) => e.stopPropagation()}>查看</Link></td>
                   </tr>
                 ))}
               </tbody>
@@ -74,7 +75,7 @@ export default function Overview() {
 
       <MetricsPanel url="/metrics/host" host />
 
-      <div className="grid-2">
+      <div className="dash-grid">
         <Card className="dash" title="项目" actions={<Link className="btn btn-sm" to="/projects">全部项目</Link>} pad={false}>
           {o.projects.length === 0 ? (
             <Empty icon="projects" action={<Link className="btn btn-primary" to="/projects/new">新建项目</Link>}>还没有项目。</Empty>
@@ -84,8 +85,8 @@ export default function Overview() {
                 <thead><tr><th>名称</th><th className="c-status">状态</th><th className="c-time">容器</th></tr></thead>
                 <tbody>
                   {o.projects.slice(0, ROWS).map((p: any) => (
-                    <tr key={p.id}>
-                      <td><div className="name"><Link to={`/projects/${p.id}`} title={p.name}>{p.name}</Link>{p.kind === 'database' && <span className="tag">数据库</span>}</div></td>
+                    <tr key={p.id} className="clickable" onClick={() => nav(`/projects/${p.id}`)}>
+                      <td><div className="name"><Link className="row-link" to={`/projects/${p.id}`} onClick={(e) => e.stopPropagation()} title={p.name}>{p.name}</Link>{p.kind === 'database' && <span className="tag">数据库</span>}</div></td>
                       <td><Status s={p.status} /></td>
                       <td className="c-time mono">{p.running}/{p.total}</td>
                     </tr>
@@ -102,13 +103,18 @@ export default function Overview() {
           ) : (
             <div className="table-wrap">
               <table>
-                <thead><tr><th>项目</th><th className="c-status">状态</th><th>触发</th><th className="c-time">时间</th></tr></thead>
+                <thead><tr><th>项目</th><th className="c-status">状态</th><th className="c-trigger">触发</th><th className="c-time">时间</th></tr></thead>
                 <tbody>
                   {o.deployments.slice(0, ROWS).map((d: any) => (
-                    <tr key={d.deployment.id}>
-                      <td><Link to={`/deployments/${d.deployment.id}`} title={`${d.project} #${d.deployment.number}`}>{d.project} #{d.deployment.number}</Link></td>
+                    <tr key={d.deployment.id} className="clickable" onClick={() => nav(`/deployments/${d.deployment.id}`)}>
+                      <td>
+                        <div className="name">
+                          <Link className="row-link" to={`/deployments/${d.deployment.id}`} onClick={(e) => e.stopPropagation()} title={`${d.project} #${d.deployment.number}`}>{d.project}</Link>
+                          <span className="dash-num">#{d.deployment.number}</span>
+                        </div>
+                      </td>
                       <td><JobStatus s={d.deployment.status} /></td>
-                      <td className="muted" title={`${triggerName(d.deployment.trigger)} · ${d.deployment.actor}`}>{triggerName(d.deployment.trigger)} · {d.deployment.actor}</td>
+                      <td className="c-trigger muted" title={`${triggerName(d.deployment.trigger)} · ${d.deployment.actor}`}>{triggerName(d.deployment.trigger)} · {d.deployment.actor}</td>
                       <td className="c-time muted">{ago(d.deployment.createdAt)}</td>
                     </tr>
                   ))}

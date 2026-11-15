@@ -1,5 +1,5 @@
 import { ReactNode, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ago, bytes, del, get, post } from '../api'
 import { useCan } from '../auth'
 import { Card, Combobox, ComboOption, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Status, Tabs, useLoad, useToast } from '../components/ui'
@@ -92,6 +92,7 @@ export default function DockerResources() {
 
 function Containers() {
   const { data, error } = useLoad(() => get<any[]>('/containers'), [], 10000)
+  const nav = useNavigate()
   const [q, setQ] = useState('')
   if (!data) return error ? <ErrorBox error={error} /> : <Loading />
   const list = data.filter((c) => !q || c.name.includes(q) || c.image.includes(q) || c.project.includes(q))
@@ -103,8 +104,8 @@ function Containers() {
           <thead><tr><th>名称</th><th>项目</th><th>状态</th><th>镜像</th><th>端口</th><th>创建</th></tr></thead>
           <tbody>
             {list.map((c) => (
-              <tr key={c.id}>
-                <td><Link to={`/containers/${c.id}`}>{c.name}</Link></td>
+              <tr key={c.id} className="clickable" onClick={() => nav(`/containers/${c.id}`)}>
+                <td><Link className="row-link" to={`/containers/${c.id}`} onClick={(e) => e.stopPropagation()}>{c.name}</Link></td>
                 <td>{c.project || <span className="muted">—</span>}</td>
                 <td><Status s={c.health === 'unhealthy' ? 'unhealthy' : c.state} /><div className="label">{c.status}</div></td>
                 <td className="mono ellipsis" style={{ maxWidth: 260, fontSize: 13 }} title={c.image}>{c.image}</td>

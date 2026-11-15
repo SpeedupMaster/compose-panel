@@ -55,7 +55,7 @@ export default function Projects() {
                 {list.map((p) => (
                   <tr key={p.id} className="clickable" onClick={() => nav(`/projects/${p.id}`)}>
                     <td>
-                      <Link to={`/projects/${p.id}`} onClick={(e) => e.stopPropagation()} style={{ fontWeight: 600 }}>{p.name}</Link>
+                      <Link className="row-link" to={`/projects/${p.id}`} onClick={(e) => e.stopPropagation()}>{p.name}</Link>
                       {p.kind === 'database' && <span className="tag" style={{ marginLeft: 8 }}>数据库</span>}
                       {p.description && <div className="label ellipsis" style={{ maxWidth: 320 }}>{p.description}</div>}
                     </td>
