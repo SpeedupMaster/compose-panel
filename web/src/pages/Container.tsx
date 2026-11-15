@@ -31,7 +31,7 @@ export default function ContainerPage() {
     <Page
       title={c.service || c.name}
       crumbs={c.project ? <><Link to="/projects">项目</Link> / {c.project} / {c.name}</> : <><Link to="/docker">Docker 资源</Link> / {c.name}</>}
-      sub={<span className="row wrap"><Status s={state} /><span className="mono">{c.image}</span>{c.restartCount > 0 && <span className="badge warn">重启 {c.restartCount} 次</span>}{c.oomKilled && <span className="badge err">OOM</span>}</span>}
+      sub={<span className="row wrap"><Status s={state} /><span className="mono" style={{ overflowWrap: 'anywhere' }}>{c.image}</span>{c.restartCount > 0 && <span className="badge warn">重启 {c.restartCount} 次</span>}{c.oomKilled && <span className="badge err">OOM</span>}</span>}
       actions={
         can.operator && (
           <>
@@ -114,17 +114,38 @@ function Logs({ id, running }: { id: string; running: boolean }) {
 
 function Term({ id }: { id: string }) {
   const ref = useRef<HTMLDivElement>(null)
+  const termRef = useRef<Terminal | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+  const sendKey = (seq: string) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'input', data: seq }))
+    }
+    termRef.current?.focus()
+  }
   const [shell, setShell] = useState('auto')
   const [user, setUser] = useState('')
   const [session, setSession] = useState(0)
   const [state, setState] = useState<'connecting' | 'open' | 'closed'>('connecting')
   useEffect(() => {
-    if (!ref.current) return
-    const term = new Terminal({ fontFamily: "'IBM Plex Mono', 'Microsoft YaHei UI', 'PingFang SC', Consolas, monospace", fontSize: 13, cursorBlink: true, theme: { background: '#121315' }, scrollback: 5000 })
+    const el = ref.current
+    if (!el) return
+    let disposed = false
+    let rafId = 0
+    const term = new Terminal({ fontFamily: "'IBM Plex Mono', 'Microsoft YaHei UI', 'PingFang SC', Consolas, monospace", fontSize: window.innerWidth <= 860 ? 12 : 13, cursorBlink: true, theme: { background: '#121315' }, scrollback: 5000 })
     const fit = new FitAddon()
     term.loadAddon(fit)
-    term.open(ref.current)
-    fit.fit()
+    termRef.current = term
+    const fitSafe = () => {
+      if (disposed || !el.isConnected || el.clientWidth === 0 || el.clientHeight === 0) return false
+      try {
+        fit.fit()
+        return true
+      } catch {
+        return false
+      }
+    }
+    term.open(el)
+    fitSafe()
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const qs = new URLSearchParams()
     if (shell !== 'auto') qs.set('shell', shell)
@@ -132,30 +153,56 @@ function Term({ id }: { id: string }) {
     const ws = new WebSocket(`${proto}//${location.host}/api/containers/${id}/terminal?${qs}`)
     ws.binaryType = 'arraybuffer'
     setState('connecting')
-    const sendSize = () => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+    wsRef.current = ws
+    const sendSize = () => !disposed && ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+    rafId = requestAnimationFrame(() => {
+      if (!disposed) {
+        fitSafe()
+        sendSize()
+      }
+    })
     ws.onopen = () => {
+      if (disposed) return
       setState('open')
       sendSize()
       term.focus()
     }
-    ws.onmessage = (e) => term.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data))
-    ws.onclose = () => {
-      setState('closed')
-      term.write('\r\n\x1b[90m[连接已关闭]\x1b[0m\r\n')
+    ws.onmessage = (e) => {
+      if (!disposed) term.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data))
     }
-    const d = term.onData((data) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: 'input', data })))
-    const ro = new ResizeObserver(() => {
+    ws.onclose = () => {
+      if (disposed) return
+      setState('closed')
       try {
-        fit.fit()
-        sendSize()
+        term.write('\r\n\x1b[90m[连接已关闭]\x1b[0m\r\n')
       } catch {}
+    }
+    const d = term.onData((data) => !disposed && ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: 'input', data })))
+    const ro = new ResizeObserver(() => {
+      if (disposed) return
+      fitSafe()
+      sendSize()
     })
-    ro.observe(ref.current)
+    ro.observe(el)
     return () => {
+      disposed = true
+      if (rafId) cancelAnimationFrame(rafId)
+      ws.onopen = null
+      ws.onmessage = null
+      ws.onerror = null
+      ws.onclose = null
       ro.disconnect()
       d.dispose()
+      if (wsRef.current === ws) wsRef.current = null
+      if (termRef.current === term) termRef.current = null
       ws.close()
-      term.dispose()
+      try {
+        term.dispose()
+      } catch {}
+      // @xterm/xterm@5.5.0 Viewport schedules an untracked setTimeout(() => this.syncScrollArea())
+      // in its constructor; silence it after dispose so React StrictMode remounts do not throw.
+      const core = (term as unknown as { _core?: { viewport?: { syncScrollArea?: () => void } } })._core
+      if (core?.viewport) core.viewport.syncScrollArea = () => {}
     }
   }, [id, session]) // eslint-disable-line react-hooks/exhaustive-deps
   return (
@@ -171,6 +218,16 @@ function Term({ id }: { id: string }) {
           <button className="btn btn-sm" onClick={() => setSession(session + 1)}>{state === 'closed' ? '重新连接' : '重新打开'}</button>
         </div>
         <span className={'badge ' + (state === 'open' ? 'ok' : state === 'connecting' ? 'run' : 'off')}><span className="dot" />{state === 'open' ? '已连接' : state === 'connecting' ? '连接中' : '已断开'}</span>
+      </div>
+      <div className="term-keys" role="toolbar" aria-label="终端快捷键">
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => sendKey('\x1b')}>Esc</button>
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => sendKey('\t')}>Tab</button>
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => sendKey('\x03')}>Ctrl+C</button>
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => sendKey('\x04')}>Ctrl+D</button>
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => sendKey('\x1b[A')}>↑</button>
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => sendKey('\x1b[B')}>↓</button>
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => sendKey('/')}>/</button>
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => sendKey('|')}>|</button>
       </div>
       <div className="term"><div ref={ref} style={{ height: '100%' }} /></div>
       <div className="label" style={{ padding: '8px 16px' }}>终端会话的开始与结束会记录到审计日志。</div>
@@ -201,13 +258,13 @@ function Info({ c, id }: { c: any; id: string }) {
             <dt>重启策略</dt><dd className="mono">{c.restartPolicy || 'no'}</dd>
             <dt>内存限制</dt><dd>{c.memoryLimit ? bytes(c.memoryLimit) : '不限'}</dd>
             <dt>CPU 限制</dt><dd>{c.nanoCpus ? c.nanoCpus / 1e9 + ' 核' : '不限'}</dd>
-            <dt>命令</dt><dd className="mono">{[...(c.entrypoint || []), ...(c.cmd || [])].join(' ') || '—'}</dd>
+            <dt>命令</dt><dd className="mono" style={{ overflowWrap: 'anywhere' }}>{[...(c.entrypoint || []), ...(c.cmd || [])].join(' ') || '—'}</dd>
           </dl>
         </Card>
         <Card title="网络与挂载">
           <div className="col" style={{ gap: 12 }}>
             {c.networks.map((n: any) => (
-              <div key={n.name}><span className="tag">{n.name}</span> <span className="mono">{n.ip || '—'}</span> {n.aliases?.length > 0 && <span className="label">别名 {n.aliases.join(', ')}</span>}</div>
+              <div key={n.name} style={{ overflowWrap: 'anywhere' }}><span className="tag">{n.name}</span> <span className="mono">{n.ip || '—'}</span> {n.aliases?.length > 0 && <span className="label">别名 {n.aliases.join(', ')}</span>}</div>
             ))}
             {c.mounts.length === 0 && <span className="muted">没有挂载</span>}
             {c.mounts.map((m: any, i: number) => (

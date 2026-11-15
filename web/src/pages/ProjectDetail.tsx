@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ago, bytes, del, get, post, put } from '../api'
 import { useCan } from '../auth'
 import { CodeArea, EnvEditor, EnvVar, langForPath, validateCompose, Validation, ValidationResult } from '../components/editors'
-import { Card, Confirm, Empty, ErrorBox, Field, Icon, JobStatus, Loading, Page, SecretBox, Status, Tabs, useAction, useJobLog, useLoad, useToast } from '../components/ui'
+import { Card, Confirm, Empty, ErrorBox, Field, Icon, JobStatus, Loading, Modal, Page, SecretBox, Status, Tabs, useAction, useJobLog, useLoad, useToast } from '../components/ui'
 import { MobileCard, ResponsiveTable, joinInline } from '../components/ResponsiveList'
 import { triggerName } from './Overview'
 import { sourceName } from './Projects'
@@ -137,7 +137,7 @@ function OverviewTab({ data, onAction, onRecreate }: { data: any; onAction: (a: 
         <div className="card stat">
           <span className="label">目录</span>
           <span className="mono" style={{ overflowWrap: 'anywhere' }}>{data.dir}</span>
-          {p.source === 'git' && <span className="label mono">{p.gitUrl} @ {p.gitBranch}</span>}
+          {p.source === 'git' && <span className="label mono" style={{ overflowWrap: 'anywhere' }}>{p.gitUrl} @ {p.gitBranch}</span>}
         </div>
       </div>
       <Card title="容器" pad={false}>
@@ -346,9 +346,24 @@ function FilesTab({ id }: { id: string }) {
   const { data, reload } = useLoad(() => get<{ path: string; content: string }[]>(`/projects/${id}/files`), [id])
   const [files, setFiles] = useState<{ path: string; content: string }[]>([])
   const [sel, setSel] = useState(0)
+  const [creating, setCreating] = useState(false)
+  const [newPath, setNewPath] = useState('')
   useEffect(() => {
     if (data) setFiles(data)
   }, [data])
+  const createFile = () => {
+    const p = newPath.trim()
+    if (!p) return
+    const existing = files.findIndex((x) => x.path === p)
+    if (existing >= 0) {
+      setSel(existing)
+      setCreating(false)
+      return
+    }
+    setFiles([...files, { path: p, content: '' }])
+    setSel(files.length)
+    setCreating(false)
+  }
   const save = async () => {
     try {
       await put(`/projects/${id}/files`, files)
@@ -360,41 +375,68 @@ function FilesTab({ id }: { id: string }) {
   }
   const f = files[sel]
   return (
-    <Card
-      title="附加文件"
-      actions={
-        can.operator && (
-          <>
-            <button className="btn btn-sm" onClick={() => { const p = prompt('文件路径（相对于项目目录），例如 nginx/default.conf'); if (p) { setFiles([...files, { path: p, content: '' }]); setSel(files.length) } }}><Icon name="plus" size={16} />新建文件</button>
-            <button className="btn btn-sm btn-primary" onClick={save}>保存全部</button>
-          </>
-        )
-      }
-    >
-      <p className="label" style={{ marginTop: 0 }}>配置文件等会在部署时写到 compose.yml 旁边，可以在 Compose 中用相对路径挂载（如 <code className="mono">./nginx/default.conf</code>）。</p>
-      {files.length === 0 ? (
-        <Empty>没有附加文件。</Empty>
-      ) : (
-        <div className="tool-split">
-          <div className="col tool-side" style={{ gap: 4 }}>
-            {files.map((x, i) => (
-              <button key={i} className={'btn btn-sm' + (i === sel ? ' btn-primary' : ' btn-ghost')} style={{ justifyContent: 'flex-start' }} onClick={() => setSel(i)}>
-                <span className="mono ellipsis">{x.path}</span>
-              </button>
-            ))}
-          </div>
-          {f && (
-            <div className="tool-main">
-              <div className="row wrap">
-                <input className="input mono grow" style={{ minWidth: 'min(200px, 100%)' }} aria-label="文件路径" value={f.path} readOnly={!can.operator} onChange={(e) => setFiles(files.map((x, i) => (i === sel ? { ...x, path: e.target.value } : x)))} />
-                {can.operator && <button className="btn btn-danger btn-sm" onClick={() => { setFiles(files.filter((_, i) => i !== sel)); setSel(0) }}>删除</button>}
-              </div>
-              <CodeArea key={f.path} label={f.path} lang={langForPath(f.path)} value={f.content} readOnly={!can.operator} onChange={(c) => setFiles(files.map((x, i) => (i === sel ? { ...x, content: c } : x)))} rows={20} />
+    <>
+      <Card
+        title="附加文件"
+        actions={
+          can.operator && (
+            <>
+              <button className="btn btn-sm" onClick={() => { setNewPath(''); setCreating(true) }}><Icon name="plus" size={16} />新建文件</button>
+              <button className="btn btn-sm btn-primary" onClick={save}>保存全部</button>
+            </>
+          )
+        }
+      >
+        <p className="label" style={{ marginTop: 0 }}>配置文件等会在部署时写到 compose.yml 旁边，可以在 Compose 中用相对路径挂载（如 <code className="mono">./nginx/default.conf</code>）。</p>
+        {files.length === 0 ? (
+          <Empty>没有附加文件。</Empty>
+        ) : (
+          <div className="tool-split">
+            <div className="col tool-side" style={{ gap: 4 }}>
+              {files.map((x, i) => (
+                <button key={i} className={'btn btn-sm' + (i === sel ? ' btn-primary' : ' btn-ghost')} style={{ justifyContent: 'flex-start', maxWidth: '100%' }} onClick={() => setSel(i)}>
+                  <span className="mono ellipsis" style={{ minWidth: 0 }}>{x.path}</span>
+                </button>
+              ))}
             </div>
-          )}
-        </div>
+            {f && (
+              <div className="tool-main">
+                <div className="row wrap">
+                  <input className="input mono grow" style={{ minWidth: 'min(200px, 100%)' }} aria-label="文件路径" value={f.path} readOnly={!can.operator} onChange={(e) => setFiles(files.map((x, i) => (i === sel ? { ...x, path: e.target.value } : x)))} />
+                  {can.operator && <button className="btn btn-danger btn-sm" onClick={() => { setFiles(files.filter((_, i) => i !== sel)); setSel(0) }}>删除</button>}
+                </div>
+                <CodeArea key={f.path} label={f.path} lang={langForPath(f.path)} value={f.content} readOnly={!can.operator} onChange={(c) => setFiles(files.map((x, i) => (i === sel ? { ...x, content: c } : x)))} rows={20} />
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+      {creating && (
+        <Modal
+          title="新建附加文件"
+          onClose={() => setCreating(false)}
+          footer={
+            <>
+              <button className="btn" onClick={() => setCreating(false)}>取消</button>
+              <button className="btn btn-primary" disabled={!newPath.trim()} onClick={createFile}>添加</button>
+            </>
+          }
+        >
+          <Field label="文件路径" hint="相对于项目目录，例如 nginx/default.conf">
+            <input
+              className="input mono"
+              value={newPath}
+              autoFocus
+              placeholder="nginx/default.conf"
+              onChange={(e) => setNewPath(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') createFile()
+              }}
+            />
+          </Field>
+        </Modal>
       )}
-    </Card>
+    </>
   )
 }
 

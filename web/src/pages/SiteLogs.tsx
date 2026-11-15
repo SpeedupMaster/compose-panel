@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { bytes, get, qs } from '../api'
 import { ErrorBox, Icon, Loading, Modal, Select, useLoad } from '../components/ui'
+import { MobileCard, ResponsiveTable, joinInline } from '../components/ResponsiveList'
 
 type Entry = { ts: number; ip: string; method: string; host: string; uri: string; proto: string; status: number; size: number; durationMs: number; ua: string; referer: string }
 type Resp = { enabled: boolean; entries: Entry[]; total: number; avgMs: number; classes: Record<string, number>; topPaths: { key: string; count: number }[]; topIps: { key: string; count: number }[]; files: number }
@@ -20,6 +21,10 @@ export function AccessLogs({ site, onClose }: { site: any; onClose: () => void }
   const [hours, setHours] = useState(24)
   const [applied, setApplied] = useState({ status: '', path: '', ip: '' })
   const [sel, setSel] = useState<Entry | null>(null)
+  const detailRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (sel) detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, [sel])
   const { data, error, loading, reload } = useLoad(
     () => get<Resp>(`/sites/${site.id}/access-logs` + qs({ ...applied, hours, limit: 300 })),
     [site.id, applied, hours],
@@ -68,38 +73,65 @@ export function AccessLogs({ site, onClose }: { site: any; onClose: () => void }
             </div>
           )}
           <section className="card" style={{ overflow: 'hidden' }}>
-            <div className="table-wrap" style={{ maxHeight: 420, overflowY: 'auto' }}>
-              <table className="sql-grid">
-                <thead><tr><th>时间</th><th>状态</th><th>方法</th><th>路径</th><th>IP</th><th>大小</th><th>耗时</th></tr></thead>
-                <tbody>
-                  {data.entries.map((e, i) => (
-                    <tr key={i} className="clickable" onClick={() => setSel(e)}>
-                      <td>{time(e.ts)}</td>
-                      <td><span className={'badge ' + statusKind(e.status)}>{e.status}</span></td>
-                      <td>{e.method}</td>
-                      <td title={e.uri} style={{ maxWidth: 320 }}>{e.uri}</td>
-                      <td>{e.ip}</td>
-                      <td>{bytes(e.size)}</td>
-                      <td>{e.durationMs} ms</td>
-                    </tr>
-                  ))}
-                  {data.entries.length === 0 && <tr><td colSpan={7} className="muted" style={{ textAlign: 'center', padding: 24, fontFamily: 'var(--font)' }}>没有匹配的请求</td></tr>}
-                </tbody>
-              </table>
-            </div>
+            <ResponsiveTable
+              table={
+                <div className="table-wrap" style={{ maxHeight: 420, overflowY: 'auto' }}>
+                  <table className="sql-grid">
+                    <thead><tr><th>时间</th><th>状态</th><th>方法</th><th>路径</th><th>IP</th><th>大小</th><th>耗时</th></tr></thead>
+                    <tbody>
+                      {data.entries.map((e, i) => (
+                        <tr key={i} className="clickable" onClick={() => setSel(e)}>
+                          <td>{time(e.ts)}</td>
+                          <td><span className={'badge ' + statusKind(e.status)}>{e.status}</span></td>
+                          <td>{e.method}</td>
+                          <td title={e.uri} style={{ maxWidth: 320 }}>{e.uri}</td>
+                          <td>{e.ip}</td>
+                          <td>{bytes(e.size)}</td>
+                          <td>{e.durationMs} ms</td>
+                        </tr>
+                      ))}
+                      {data.entries.length === 0 && <tr><td colSpan={7} className="muted" style={{ textAlign: 'center', padding: 24, fontFamily: 'var(--font)' }}>没有匹配的请求</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              }
+              cardsStyle={{ padding: 12, maxHeight: '48dvh', overflowY: 'auto' }}
+              cards={
+                data.entries.length === 0 ? (
+                  <div className="muted" style={{ textAlign: 'center', padding: 16 }}>没有匹配的请求</div>
+                ) : (
+                  data.entries.map((e, i) => (
+                    <MobileCard
+                      tight
+                      key={i}
+                      onClick={() => setSel(e)}
+                      title={<span className="mono">{e.method} {e.uri}</span>}
+                      sub={joinInline([time(e.ts), <span className="mono">{e.ip}</span>])}
+                      badges={
+                        <>
+                          <span className={'badge ' + statusKind(e.status)}>{e.status}</span>
+                          <span className="tag mono">{e.durationMs} ms</span>
+                        </>
+                      }
+                      meta={[{ label: '响应大小', value: bytes(e.size), mono: true }]}
+                    />
+                  ))
+                )
+              }
+            />
             <div className="label" style={{ padding: '8px 16px', borderTop: '1px solid var(--line-soft)' }}>显示最近 {data.entries.length} 条（共 {total} 条匹配）· 日志按 20MB 轮转，保留 7 天</div>
           </section>
           {sel && (
-            <section className="card">
+            <section ref={detailRef} className="card">
               <div className="card-head"><span className="st">请求详情</span><button className="btn btn-sm btn-ghost btn-icon" aria-label="关闭" onClick={() => setSel(null)}><Icon name="x" size={16} /></button></div>
               <div className="card-body">
                 <dl className="kv">
                   <dt>时间</dt><dd>{new Date(sel.ts * 1000).toLocaleString()}</dd>
-                  <dt>请求</dt><dd className="mono">{sel.method} {sel.host}{sel.uri} {sel.proto}</dd>
+                  <dt>请求</dt><dd className="mono" style={{ overflowWrap: 'anywhere' }}>{sel.method} {sel.host}{sel.uri} {sel.proto}</dd>
                   <dt>状态</dt><dd>{sel.status} · {bytes(sel.size)} · {sel.durationMs} ms</dd>
                   <dt>客户端</dt><dd className="mono">{sel.ip}</dd>
-                  <dt>User-Agent</dt><dd className="mono" style={{ fontSize: 12 }}>{sel.ua || '—'}</dd>
-                  <dt>Referer</dt><dd className="mono" style={{ fontSize: 12 }}>{sel.referer || '—'}</dd>
+                  <dt>User-Agent</dt><dd className="mono" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{sel.ua || '—'}</dd>
+                  <dt>Referer</dt><dd className="mono" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{sel.referer || '—'}</dd>
                 </dl>
               </div>
             </section>

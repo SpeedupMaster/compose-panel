@@ -249,24 +249,50 @@ function Audit() {
       <ErrorBox error={error} />
       {!data ? <Loading /> : (
         <>
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>时间</th><th>用户</th><th>操作</th><th>对象</th><th>详情</th><th>IP</th><th>结果</th></tr></thead>
-              <tbody>
-                {data.items.map((a: any) => (
-                  <tr key={a.id}>
-                    <td className="muted nowrap" title={dateTime(a.ts)}>{dateTime(a.ts)}</td>
-                    <td>{a.actor}</td>
-                    <td className="mono" style={{ fontSize: 12 }}>{a.action}</td>
-                    <td className="mono" style={{ fontSize: 12 }}>{a.target}</td>
-                    <td className="ellipsis" style={{ maxWidth: 320 }} title={a.detail}>{a.detail}</td>
-                    <td className="mono" style={{ fontSize: 12 }}>{a.ip}</td>
-                    <td>{a.result === 'ok' ? <span className="badge ok">成功</span> : <span className="badge err" title={a.result}>失败</span>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ResponsiveTable
+            table={
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>时间</th><th>用户</th><th>操作</th><th>对象</th><th>详情</th><th>IP</th><th>结果</th></tr></thead>
+                  <tbody>
+                    {data.items.map((a: any) => (
+                      <tr key={a.id}>
+                        <td className="muted nowrap" title={dateTime(a.ts)}>{dateTime(a.ts)}</td>
+                        <td>{a.actor}</td>
+                        <td className="mono" style={{ fontSize: 12 }}>{a.action}</td>
+                        <td className="mono" style={{ fontSize: 12 }}>{a.target}</td>
+                        <td className="ellipsis" style={{ maxWidth: 320 }} title={a.detail}>{a.detail}</td>
+                        <td className="mono" style={{ fontSize: 12 }}>{a.ip}</td>
+                        <td>{a.result === 'ok' ? <span className="badge ok">成功</span> : <span className="badge err" title={a.result}>失败</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            }
+            cardsStyle={{ padding: 12 }}
+            cards={
+              data.items.length === 0 ? (
+                <div className="muted" style={{ padding: '12px 4px', textAlign: 'center' }}>暂无审计记录。</div>
+              ) : (
+                data.items.map((a: any) => (
+                  <MobileCard
+                    tight
+                    key={a.id}
+                    title={<span className="mono">{a.action}</span>}
+                    sub={a.target ? <span className="mono">{a.target}</span> : undefined}
+                    badges={a.result === 'ok' ? <span className="badge ok">成功</span> : <span className="badge err" title={a.result}>失败</span>}
+                    meta={[
+                      { label: '用户', value: a.actor || '—' },
+                      { label: 'IP', value: a.ip || '—', mono: true },
+                      { label: '时间', value: <span title={dateTime(a.ts)}>{ago(a.ts)} · {dateTime(a.ts)}</span>, full: true },
+                      a.detail ? { label: '详情', value: a.detail, full: true } : null,
+                    ]}
+                  />
+                ))
+              )
+            }
+          />
           <Pager page={page} pageSize={pageSize} total={data.total} onPage={setPage} onPageSize={(n) => { setPageSize(n); setPage(1) }} sizes={[50, 100, 200]} />
         </>
       )}

@@ -145,10 +145,10 @@ export default function ProjectNew() {
                     <div className="grid" style={{ gap: 10 }}>
                       {list.map((t) => (
                         <div key={t.id} className="card row" style={{ padding: 12, alignItems: 'flex-start', borderColor: tpl?.id === t.id ? 'var(--accent)' : undefined }}>
-                          <button className="grow" style={{ textAlign: 'left', background: 'none', border: 0, padding: 0, cursor: 'pointer' }} onClick={() => applyTemplate(t)}>
+                          <button className="grow" style={{ textAlign: 'left', background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'inherit', minWidth: 0 }} onClick={() => applyTemplate(t)}>
                             <div style={{ fontWeight: 600 }}>{t.name}</div>
                             <div className="label">{t.description || '—'}</div>
-                            {(t.vars?.length || 0) > 0 && <div className="label mono" style={{ marginTop: 4 }}>{t.vars!.map((v) => '${' + v + '}').join(' ')}</div>}
+                            {(t.vars?.length || 0) > 0 && <div className="label mono" style={{ marginTop: 4, overflowWrap: 'anywhere' }}>{t.vars!.map((v) => '${' + v + '}').join(' ')}</div>}
                           </button>
                           {t.custom && can.operator && (
                             <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除模板" title="删除模板" onClick={() => setRmTpl(t)}><Icon name="trash" size={16} /></button>
@@ -172,7 +172,7 @@ export default function ProjectNew() {
               <div className="col" style={{ gap: 6 }}>
                 {files.map((f, i) => (
                   <div key={i} className="row">
-                    <Icon name="file" size={16} /><span className="mono grow">{f.path}</span>
+                    <Icon name="file" size={16} /><span className="mono grow" style={{ overflowWrap: 'anywhere', minWidth: 0 }}>{f.path}</span>
                     <button className="btn btn-sm btn-ghost" onClick={() => setFiles(files.filter((_, j) => j !== i))}>移除</button>
                   </div>
                 ))}

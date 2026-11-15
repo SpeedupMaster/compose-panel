@@ -159,7 +159,7 @@ export function Drills({ policies }: { policies: any[] }) {
       {report && (
         <Modal title={`演练报告 · ${report.label}`} wide onClose={() => setReport(null)} footer={<>{report.jobId && <button className="btn" onClick={() => openJob(report.jobId, '恢复演练')}>完整日志</button>}<button className="btn btn-primary" onClick={() => setReport(null)}>关闭</button></>}>
           <div className="row"><JobStatus s={report.status} /><span className="label">{dateTime(report.startedAt)}{report.finishedAt ? ` · 用时 ${Math.max(0, report.finishedAt - report.startedAt)} 秒` : ''}</span></div>
-          <pre className="log" style={{ margin: 0, borderRadius: 6, maxHeight: 420 }}>{report.report || '（没有报告）'}</pre>
+          <pre className="log log-auto" style={{ margin: 0, borderRadius: 6 }}>{report.report || '（没有报告）'}</pre>
         </Modal>
       )}
     </>

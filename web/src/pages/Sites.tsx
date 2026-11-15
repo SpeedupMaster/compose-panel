@@ -181,7 +181,7 @@ export default function Sites() {
       {cfg && (
         <Modal title="Caddy 配置（只读）" wide onClose={() => setCfg(null)}>
           <div>Caddy 状态：{cfg.caddy === 'ok' ? <span className="badge ok">正常</span> : <span className="badge err">{cfg.caddy}</span>}</div>
-          <pre className="diff" style={{ margin: 0, padding: 12, maxHeight: 480 }}>{JSON.stringify(cfg.config, null, 2)}</pre>
+          <pre className="diff" style={{ margin: 0, padding: 12 }}>{JSON.stringify(cfg.config, null, 2)}</pre>
         </Modal>
       )}
     </Page>
@@ -229,7 +229,7 @@ function SiteModal({ s, onClose, onSaved }: { s: Site; onClose: () => void; onSa
         <button className="btn btn-sm" onClick={precheck}>检查 DNS 解析</button>
         {check && (check.error ? <span className="badge err">{check.error}</span> : (
           <span className="row wrap">
-            <span className="mono" style={{ fontSize: 13 }}>{check.domain} → {check.ips.join(', ') || '无记录'}</span>
+            <span className="mono" style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{check.domain} → {check.ips.join(', ') || '无记录'}</span>
             {check.publicIp && (check.matches ? <span className="badge ok">指向本机</span> : <span className="badge warn">未指向 {check.publicIp}</span>)}
             {check.note && <span className="badge warn">{check.note}</span>}
           </span>
@@ -264,7 +264,7 @@ function SiteModal({ s, onClose, onSaved }: { s: Site; onClose: () => void; onSa
         <label className="check"><input type="checkbox" checked={f.hsts} onChange={(e) => setF({ ...f, hsts: e.target.checked })} />HSTS</label>
         <label className="check"><input type="checkbox" checked={f.compress} onChange={(e) => setF({ ...f, compress: e.target.checked })} />gzip / zstd 压缩</label>
         <label className="check"><input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} />启用</label>
-        <button className="link-btn" onClick={() => setAdv(!adv)}>{adv ? '收起高级选项' : '高级选项'}</button>
+        <button className="btn btn-sm btn-ghost" onClick={() => setAdv(!adv)}>{adv ? '收起高级选项' : '高级选项'}</button>
       </div>
       {mode !== 'redirect' && (
         <Card title="可用性与日志">

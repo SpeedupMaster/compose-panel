@@ -3,6 +3,7 @@ import { downloadCSV, get, post, qs, upload } from '../api'
 import { useCan } from '../auth'
 import { CodeArea } from '../components/editors'
 import { Card, Confirm, Empty, ErrorBox, Field, FilePicker, Icon, Loading, Select, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
+import { MobileCard, ResponsiveTable, joinInline } from '../components/ResponsiveList'
 
 type QueryResult = { columns?: string[]; rows?: string[][]; truncated?: boolean; elapsedMs?: number; error?: string; needConfirm?: boolean; reasons?: string[] }
 
@@ -176,7 +177,7 @@ function TableView({ id, db, table }: { id: string; db: string; table: string })
   return (
     <section className="card" style={{ overflow: 'hidden' }}>
       <div className="card-head" style={{ paddingBottom: 0, borderBottom: 0 }}>
-        <span className="st mono">{table}</span>
+        <span className="st mono" style={{ overflowWrap: 'anywhere' }}>{table}</span>
         {tab === 'data' && rows && (
           <div className="row wrap">
             <button className="btn btn-sm" disabled={page <= 1 || loading} onClick={() => setPage(page - 1)}>上一页</button>
@@ -191,41 +192,79 @@ function TableView({ id, db, table }: { id: string; db: string; table: string })
       </div>
       {tab === 'data' && (rowsErr ? <div className="card-body"><ErrorBox error={rowsErr} /></div> : !rows ? <Loading /> : <ResultGrid res={rows} />)}
       {tab !== 'data' && (infoErr ? <div className="card-body"><ErrorBox error={infoErr} /></div> : !info ? <Loading /> : tab === 'columns' ? (
-        <div className="table-wrap">
-          <table className="sql-grid">
-            <thead><tr><th>字段</th><th>类型</th><th>可空</th><th>默认值</th><th>键</th><th>其他</th></tr></thead>
-            <tbody>
-              {info.columns.map((c: any) => (
-                <tr key={c.name}>
-                  <td style={{ fontWeight: 600 }}>{c.name}</td>
-                  <td>{c.type}</td>
-                  <td>{c.nullable ? '是' : '否'}</td>
-                  <td title={c.default}>{c.default || <span className="muted">—</span>}</td>
-                  <td>{c.key && <span className="tag">{c.key}</span>}</td>
-                  <td>{c.extra}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ResponsiveTable
+          table={
+            <div className="table-wrap">
+              <table className="sql-grid">
+                <thead><tr><th>字段</th><th>类型</th><th>可空</th><th>默认值</th><th>键</th><th>其他</th></tr></thead>
+                <tbody>
+                  {info.columns.map((c: any) => (
+                    <tr key={c.name}>
+                      <td style={{ fontWeight: 600 }}>{c.name}</td>
+                      <td>{c.type}</td>
+                      <td>{c.nullable ? '是' : '否'}</td>
+                      <td title={c.default}>{c.default || <span className="muted">—</span>}</td>
+                      <td>{c.key && <span className="tag">{c.key}</span>}</td>
+                      <td>{c.extra}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          }
+          cardsStyle={{ padding: 12 }}
+          cards={info.columns.map((c: any) => (
+            <MobileCard
+              tight
+              key={c.name}
+              title={<span className="mono">{c.name}</span>}
+              sub={<span className="mono">{c.type}</span>}
+              badges={
+                <>
+                  {c.key && <span className="tag">{c.key}</span>}
+                  <span className={'badge ' + (c.nullable ? '' : 'warn')}>{c.nullable ? '可空' : '非空'}</span>
+                </>
+              }
+              meta={[
+                c.default ? { label: '默认值', value: c.default, mono: true } : null,
+                c.extra ? { label: '其他', value: c.extra, mono: true } : null,
+              ]}
+            />
+          ))}
+        />
       ) : (
-        <div className="table-wrap">
-          {info.indexes.length === 0 ? <Empty>没有索引。</Empty> : (
-            <table className="sql-grid">
-              <thead><tr><th>索引</th><th>字段</th><th>唯一</th><th>定义</th></tr></thead>
-              <tbody>
-                {info.indexes.map((x: any) => (
-                  <tr key={x.name}>
-                    <td style={{ fontWeight: 600 }}>{x.name}</td>
-                    <td>{x.columns}</td>
-                    <td>{x.unique ? <span className="badge ok">唯一</span> : '—'}</td>
-                    <td title={x.def}>{x.def || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+        info.indexes.length === 0 ? <Empty>没有索引。</Empty> : (
+          <ResponsiveTable
+            table={
+              <div className="table-wrap">
+                <table className="sql-grid">
+                  <thead><tr><th>索引</th><th>字段</th><th>唯一</th><th>定义</th></tr></thead>
+                  <tbody>
+                    {info.indexes.map((x: any) => (
+                      <tr key={x.name}>
+                        <td style={{ fontWeight: 600 }}>{x.name}</td>
+                        <td>{x.columns}</td>
+                        <td>{x.unique ? <span className="badge ok">唯一</span> : '—'}</td>
+                        <td title={x.def}>{x.def || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            }
+            cardsStyle={{ padding: 12 }}
+            cards={info.indexes.map((x: any) => (
+              <MobileCard
+                tight
+                key={x.name}
+                title={<span className="mono">{x.name}</span>}
+                sub={<span className="mono">{x.columns}</span>}
+                badges={x.unique ? <span className="badge ok">唯一</span> : undefined}
+                meta={x.def ? [{ label: '定义', value: x.def, mono: true, full: true }] : undefined}
+              />
+            ))}
+          />
+        )
       ))}
     </section>
   )
@@ -241,22 +280,39 @@ export function SlowQueries({ id, engine }: { id: string; engine: string }) {
         <>
           {data.hint && <div className="alert warn" style={{ margin: 16 }}><Icon name="alert" /><div style={{ whiteSpace: 'pre-wrap' }}>{data.hint}</div></div>}
           {data.items.length === 0 ? !data.hint && <Empty>暂无统计数据。</Empty> : (
-            <div className="table-wrap">
-              <table>
-                <thead><tr><th>语句</th><th>调用次数</th><th>总耗时</th><th>平均</th><th>返回行</th></tr></thead>
-                <tbody>
-                  {data.items.map((q, i) => (
-                    <tr key={i}>
-                      <td className="mono" style={{ fontSize: 12, maxWidth: 560, overflowWrap: 'anywhere' }}>{q.query}</td>
-                      <td className="mono">{q.calls}</td>
-                      <td className="mono nowrap">{fmtMs(q.totalMs)}</td>
-                      <td className="mono nowrap">{fmtMs(q.meanMs)}</td>
-                      <td className="mono">{q.rows}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ResponsiveTable
+              table={
+                <div className="table-wrap">
+                  <table>
+                    <thead><tr><th>语句</th><th>调用次数</th><th>总耗时</th><th>平均</th><th>返回行</th></tr></thead>
+                    <tbody>
+                      {data.items.map((q, i) => (
+                        <tr key={i}>
+                          <td className="mono" style={{ fontSize: 12, maxWidth: 560, overflowWrap: 'anywhere' }}>{q.query}</td>
+                          <td className="mono">{q.calls}</td>
+                          <td className="mono nowrap">{fmtMs(q.totalMs)}</td>
+                          <td className="mono nowrap">{fmtMs(q.meanMs)}</td>
+                          <td className="mono">{q.rows}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              }
+              cardsStyle={{ padding: 12 }}
+              cards={data.items.map((q, i) => (
+                <MobileCard
+                  tight
+                  key={i}
+                  title={joinInline([`${q.calls} 次调用`, `平均 ${fmtMs(q.meanMs)}`])}
+                  sub={`返回 ${q.rows} 行`}
+                  badges={<span className="tag mono">总 {fmtMs(q.totalMs)}</span>}
+                  meta={[
+                    { label: 'SQL 语句', value: <span className="mono" style={{ fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{q.query}</span>, full: true },
+                  ]}
+                />
+              ))}
+            />
           )}
           <div className="label" style={{ padding: '8px 16px' }}>{engine === 'postgres' ? '数据来自 pg_stat_statements。' : '数据来自 performance_schema 语句摘要。'}</div>
         </>

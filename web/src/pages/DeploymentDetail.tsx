@@ -36,7 +36,7 @@ export default function DeploymentDetail() {
     <Page
       title={`${p.name} · 部署 #${d.number}`}
       crumbs={<><Link to="/projects">项目</Link> / <Link to={`/projects/${p.id}?tab=deployments`}>{p.name}</Link> / #{d.number}</>}
-      sub={<span className="row wrap"><JobStatus s={d.status} /><span>{triggerName(d.trigger)} · {d.actor} · {dateTime(d.createdAt)}</span>{d.commitSha && <span className="mono">{d.commitSha.slice(0, 10)} {d.commitMsg}</span>}</span>}
+      sub={<span className="row wrap"><JobStatus s={d.status} /><span>{triggerName(d.trigger)} · {d.actor} · {dateTime(d.createdAt)}</span>{d.commitSha && <span className="mono" style={{ overflowWrap: 'anywhere' }}>{d.commitSha.slice(0, 10)} {d.commitMsg}</span>}</span>}
       actions={can.operator && data.compose && d.status === 'success' && <button className="btn" onClick={() => setRollback(true)}>回滚到此版本</button>}
     >
       {d.error && <div className="alert err">{d.error}</div>}

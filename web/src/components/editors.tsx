@@ -171,7 +171,7 @@ export function Diff({ a, b }: { a: string; b: string }) {
   const d = diffLines(a, b)
   if (a === b) return <div className="muted" style={{ padding: 16 }}>与上一次部署相比没有变化。</div>
   return (
-    <div className="diff" style={{ maxHeight: 520 }}>
+    <div className="diff">
       {d.map((l, i) => (
         <div key={i} className={l.t === '+' ? 'add' : l.t === '-' ? 'del' : ''}>{l.t} {l.s}</div>
       ))}

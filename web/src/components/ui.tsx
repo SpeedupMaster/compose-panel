@@ -599,8 +599,20 @@ export function FileButton({ accept, onFile, children }: { accept?: string; onFi
 }
 
 export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: [T, ReactNode][]; value: T; onChange: (v: T) => void }) {
+  const listRef = useRef<HTMLDivElement>(null)
+  const mountedRef = useRef(false)
+  useEffect(() => {
+    const active = listRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')
+    if (!active) {
+      mountedRef.current = true
+      return
+    }
+    const behavior: ScrollBehavior = mountedRef.current ? 'smooth' : 'auto'
+    mountedRef.current = true
+    active.scrollIntoView?.({ inline: 'nearest', block: 'nearest', behavior })
+  }, [value, tabs.length])
   return (
-    <div className="tabs" role="tablist">
+    <div ref={listRef} className="tabs" role="tablist">
       {tabs.map(([k, l]) => (
         <button key={k} role="tab" aria-selected={k === value} className={k === value ? 'on' : ''} onClick={() => onChange(k)}>
           {l}
