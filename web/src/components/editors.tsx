@@ -1,34 +1,51 @@
-import { KeyboardEvent, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { CodeLang, EditorHandle } from './codemirror'
 import { post } from '../api'
 import { Icon } from './ui'
 
 export type EnvVar = { key: string; value: string; secret: boolean }
 
-// Code textarea with Tab indentation.
-export function CodeArea({ value, onChange, rows = 22, readOnly, placeholder, label }: { value: string; onChange?: (v: string) => void; rows?: number; readOnly?: boolean; placeholder?: string; label?: string }) {
-  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Tab' && !e.shiftKey && onChange) {
-      e.preventDefault()
-      const t = e.currentTarget
-      const s = t.selectionStart
-      const v = t.value.slice(0, s) + '  ' + t.value.slice(t.selectionEnd)
-      onChange(v)
-      requestAnimationFrame(() => t.setSelectionRange(s + 2, s + 2))
+// Code editor (CodeMirror, loaded on demand) with syntax highlighting, line numbers,
+// folding, search (Ctrl+F) and Tab indentation. Until it loads, a plain textarea stands in.
+export function CodeArea({ value, onChange, onSubmit, rows = 22, readOnly, placeholder, label, lang = 'yaml' }: { value: string; onChange?: (v: string) => void; onSubmit?: () => void; rows?: number; readOnly?: boolean; placeholder?: string; label?: string; lang?: CodeLang }) {
+  const host = useRef<HTMLDivElement>(null)
+  const ed = useRef<EditorHandle | null>(null)
+  const [ready, setReady] = useState(false)
+  const latest = useRef({ value, onChange, onSubmit, readOnly: !!readOnly || !onChange })
+  latest.current = { value, onChange, onSubmit, readOnly: !!readOnly || !onChange }
+
+  useEffect(() => {
+    let dead = false
+    import('./codemirror').then(({ createEditor }) => {
+      if (dead || !host.current) return
+      ed.current = createEditor(host.current, {
+        value: latest.current.value,
+        lang,
+        readOnly: latest.current.readOnly,
+        placeholder,
+        label,
+        onChange: (v) => latest.current.onChange?.(v),
+        onSubmit: onSubmit ? () => latest.current.onSubmit?.() : undefined,
+      })
+      setReady(true)
+    })
+    return () => {
+      dead = true
+      ed.current?.destroy()
+      ed.current = null
+      setReady(false)
     }
-  }
+    // The editor is rebuilt only when its language changes; value/readOnly sync below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lang])
+  useEffect(() => { ed.current?.setValue(value) }, [value, ready])
+  useEffect(() => { ed.current?.setReadOnly(!!readOnly || !onChange) }, [readOnly, !onChange, ready])
+
   return (
-    <textarea
-      className="textarea code"
-      aria-label={label}
-      spellCheck={false}
-      rows={rows}
-      value={value}
-      readOnly={readOnly}
-      placeholder={placeholder}
-      onKeyDown={onKey}
-      onChange={(e) => onChange?.(e.target.value)}
-      style={{ background: readOnly ? '#FAFAF8' : '#fff' }}
-    />
+    <div className={'code-area' + (readOnly ? ' readonly' : '')} style={{ height: Math.round(rows * 20.8 + 18) }}>
+      <div ref={host} className="code-host" />
+      {!ready && <textarea className="code-fallback code" aria-label={label} spellCheck={false} value={value} readOnly={readOnly} placeholder={placeholder} onChange={(e) => onChange?.(e.target.value)} />}
+    </div>
   )
 }
 
@@ -38,7 +55,7 @@ export function EnvEditor({ env, onChange, readOnly }: { env: EnvVar[]; onChange
   if (bulk !== null) {
     return (
       <div className="col">
-        <CodeArea label="批量编辑环境变量" value={bulk} onChange={setBulk} rows={12} placeholder={'KEY=value\n# 以 # 开头的行会被忽略'} />
+        <CodeArea label="批量编辑环境变量" lang="env" value={bulk} onChange={setBulk} rows={12} placeholder={'KEY=value\n# 以 # 开头的行会被忽略'} />
         <div className="row">
           <button
             className="btn btn-primary btn-sm"
@@ -50,7 +67,7 @@ export function EnvEditor({ env, onChange, readOnly }: { env: EnvVar[]; onChange
                 if (!t || t.startsWith('#')) continue
                 const i = t.indexOf('=')
                 if (i <= 0) continue
-                const key = t.slice(0, i).trim()
+                const key = t.slice(0, i).trim().replace(/^export\s+/, '')
                 let value = t.slice(i + 1)
                 if (/^".*"$/.test(value) || /^'.*'$/.test(value)) value = value.slice(1, -1)
                 out.push({ key, value, secret: secrets.has(key) || /(PASS|SECRET|TOKEN|KEY)/i.test(key) })
@@ -160,4 +177,19 @@ export function Diff({ a, b }: { a: string; b: string }) {
       ))}
     </div>
   )
+}
+
+// Picks a language from a file name (for a project's extra files).
+export function langForPath(path: string): CodeLang {
+  const p = path.toLowerCase()
+  const base = p.slice(p.lastIndexOf('/') + 1)
+  if (/\.ya?ml$/.test(p)) return 'yaml'
+  if (/\.json$/.test(p)) return 'json'
+  if (/\.sql$/.test(p)) return 'sql'
+  if (/\.toml$/.test(p)) return 'toml'
+  if (/\.(sh|bash)$/.test(p)) return 'shell'
+  if (base === 'dockerfile' || base.endsWith('.dockerfile')) return 'dockerfile'
+  if (base.startsWith('.env') || /\.(env|ini|properties)$/.test(p)) return 'env'
+  if (/(^|\/)(nginx|conf\.d|sites-(enabled|available))\//.test(p) || /\.conf$/.test(p)) return 'nginx'
+  return 'text'
 }

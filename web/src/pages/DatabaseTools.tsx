@@ -79,9 +79,7 @@ export function SqlConsole({ id, instance }: { id: string; instance: string }) {
       <div className="col grow" style={{ minWidth: 320, gap: 12 }}>
         <section className="card">
           <div className="card-body col" style={{ gap: 10 }}>
-            <div onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') runQuery() }}>
-              <CodeArea label="SQL" value={sql} onChange={setSql} rows={8} />
-            </div>
+            <CodeArea label="SQL" lang="sql" value={sql} onChange={setSql} onSubmit={() => runQuery()} rows={8} />
             <div className="row wrap">
               <label className="check"><input type="checkbox" checked={readOnly} disabled={!can.operator} onChange={(e) => setRo(e.target.checked)} />只读事务</label>
               <span className="label">Ctrl+Enter 执行 · 超时 30 秒 · 最多返回 1000 行 · 所有语句记录审计</span>

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ago, bytes, del, get, post, put } from '../api'
 import { useCan } from '../auth'
-import { CodeArea, EnvEditor, EnvVar, validateCompose, Validation, ValidationResult } from '../components/editors'
+import { CodeArea, EnvEditor, EnvVar, langForPath, validateCompose, Validation, ValidationResult } from '../components/editors'
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, JobStatus, Loading, Page, SecretBox, Status, Tabs, useAction, useJobLog, useLoad, useToast } from '../components/ui'
 import { triggerName } from './Overview'
 import { sourceName } from './Projects'
@@ -313,7 +313,7 @@ function FilesTab({ id }: { id: string }) {
                 <input className="input mono" aria-label="文件路径" value={f.path} readOnly={!can.operator} onChange={(e) => setFiles(files.map((x, i) => (i === sel ? { ...x, path: e.target.value } : x)))} />
                 {can.operator && <button className="btn btn-danger btn-sm" onClick={() => { setFiles(files.filter((_, i) => i !== sel)); setSel(0) }}>删除</button>}
               </div>
-              <CodeArea label={f.path} value={f.content} readOnly={!can.operator} onChange={(c) => setFiles(files.map((x, i) => (i === sel ? { ...x, content: c } : x)))} rows={20} />
+              <CodeArea key={f.path} label={f.path} lang={langForPath(f.path)} value={f.content} readOnly={!can.operator} onChange={(c) => setFiles(files.map((x, i) => (i === sel ? { ...x, content: c } : x)))} rows={20} />
             </div>
           )}
         </div>
