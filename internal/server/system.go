@@ -105,13 +105,18 @@ func (s *Server) handleJobLog(w http.ResponseWriter, r *http.Request, u *User) e
 	defer cancel()
 	fl, _ := w.(http.Flusher)
 	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(200)
+	wrote := false
 	for _, l := range strings.Split(strings.TrimRight(string(backlog), "\n"), "\n") {
 		if l != "" {
 			writeSSE(w, l)
+			wrote = true
 		}
+	}
+	if !wrote {
+		_, _ = fmt.Fprint(w, ": ok\n\n")
 	}
 	if fl != nil {
 		fl.Flush()

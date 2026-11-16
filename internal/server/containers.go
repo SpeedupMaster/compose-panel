@@ -216,9 +216,14 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request, u *
 func streamLines(w http.ResponseWriter, r *http.Request, rc io.Reader) error {
 	fl, _ := w.(http.Flusher)
 	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(200)
+	// Write a tiny SSE comment so reverse proxies (such as Caddy's encode middleware) flush headers immediately.
+	_, _ = fmt.Fprint(w, ": ok\n\n")
+	if fl != nil {
+		fl.Flush()
+	}
 	lines := make(chan string, 256)
 	go func() {
 		defer close(lines)
@@ -236,6 +241,7 @@ func streamLines(w http.ResponseWriter, r *http.Request, rc io.Reader) error {
 	defer tick.Stop()
 	pending := 0
 	flush := time.NewTimer(time.Hour)
+	defer flush.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
