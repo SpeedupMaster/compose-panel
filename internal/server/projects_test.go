@@ -1,6 +1,7 @@
 package server
 
 import (
+	"compose-panel/internal/compose"
 	"compose-panel/internal/config"
 	"errors"
 	"fmt"
@@ -255,4 +256,33 @@ func TestHandleProjectActionValidation(t *testing.T) {
 			t.Fatalf("handleProjectAction() err = %v, want 400 *apiError", err)
 		}
 	})
+}
+
+func TestComposeExtraNetworks(t *testing.T) {
+	cfg := &compose.Config{
+		Services: map[string]compose.ServiceConfig{
+			"init":       {NetworkMode: "none"},
+			"hostmode":   {NetworkMode: "host"},
+			"shared":     {NetworkMode: "service:web"},
+			"hostnet":    {Networks: map[string]any{"host": map[string]any{}}},
+			"web":        {},
+			"background": {Networks: map[string]any{"internal": map[string]any{}}},
+		},
+	}
+
+	got := composeExtraNetworks(&Project{Kind: "app"}, cfg, "panel-proxy", "panel-db")
+	want := map[string][]string{
+		"web":        {"panel-proxy", "panel-db"},
+		"background": {"panel-proxy", "panel-db"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("composeExtraNetworks() = %#v, want %#v", got, want)
+	}
+
+	if got := composeExtraNetworks(&Project{Kind: "app", Options: ProjectOptions{SkipNetworks: true}}, cfg, "panel-proxy", "panel-db"); len(got) != 0 {
+		t.Fatalf("SkipNetworks=true should return empty map, got %#v", got)
+	}
+	if got := composeExtraNetworks(&Project{Kind: "database"}, cfg, "panel-proxy", "panel-db"); len(got) != 0 {
+		t.Fatalf("database project should return empty map, got %#v", got)
+	}
 }

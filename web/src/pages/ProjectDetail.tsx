@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ago, bytes, del, get, post, put } from '../api'
 import { useCan } from '../auth'
@@ -270,7 +270,7 @@ function DeploymentsTab({ id }: { id: string }) {
   )
 }
 
-function ConfigTab({ project, onSaved }: { project: any; onSaved: () => void }) {
+function ConfigTab({ project, onSaved }: { project: any; onSaved: () => void | Promise<void> }) {
   const can = useCan()
   const toast = useToast()
   const openJob = useJobLog()
@@ -279,31 +279,36 @@ function ConfigTab({ project, onSaved }: { project: any; onSaved: () => void }) 
   const [v, setV] = useState<Validation | null>(null)
   const [busy, setBusy] = useState(false)
   const [dirty, setDirty] = useState(false)
+  const dirtyRef = useRef(false)
+  const markDirty = (d: boolean) => {
+    dirtyRef.current = d
+    setDirty(d)
+  }
   const editable = can.operator && project.source !== 'git' && project.kind !== 'database'
 
   useEffect(() => {
-    if (!dirty) {
+    if (!dirtyRef.current) {
       setCompose(project.compose || '')
       setEnv(project.env || [])
     }
-  }, [project, dirty])
+  }, [project])
 
   const save = async (deploy: boolean) => {
-    if (project.source !== 'git') {
-      const r = await validateCompose(compose, env.map((e) => (e.secret && !e.value ? { ...e, value: 'x' } : e)), project.name).catch((e) => {
-        toast.err(e)
-        return null
-      })
-      setV(r)
-      if (!r?.valid) return
-    }
     setBusy(true)
     try {
+      if (project.source !== 'git') {
+        const r = await validateCompose(compose, env.map((e) => (e.secret && !e.value ? { ...e, value: 'x' } : e)), project.name)
+        setV(r)
+        if (!r?.valid) {
+          toast.err(r?.error || 'Compose 校验失败')
+          return
+        }
+      }
       const r = await put(`/projects/${project.id}`, { ...project, compose, env, deploy })
-      setDirty(false)
+      markDirty(false)
       toast.ok(deploy ? '已保存，开始部署' : '已保存')
       if (r.jobId) openJob(r.jobId, `部署 ${project.name}`)
-      onSaved()
+      await onSaved()
     } catch (e) {
       toast.err(e)
     } finally {
@@ -320,13 +325,13 @@ function ConfigTab({ project, onSaved }: { project: any; onSaved: () => void }) 
         <div className="col" style={{ gap: 12 }}>
           {project.source === 'git' && <div className="alert run">Git 项目的 Compose 文件来自仓库，修改请提交到 {project.gitBranch} 分支后重新部署。</div>}
           {project.kind === 'database' && <div className="alert run">数据库实例的 Compose 由面板生成，请在数据库页面修改版本、端口和资源限制。</div>}
-          <CodeArea label="compose" value={compose} readOnly={!editable} onChange={(x) => { setCompose(x); setDirty(true); setV(null) }} rows={24} />
+          <CodeArea label="compose" value={compose} readOnly={!editable} onChange={(x) => { setCompose(x); markDirty(true); setV(null) }} rows={24} />
           <ValidationResult v={v} />
         </div>
       </Card>
       {project.kind !== 'database' && (
         <Card title="环境变量" actions={<span className="label">写入 .panel/panel.env，作为 --env-file 传给 Compose</span>}>
-          <EnvEditor env={env} readOnly={!can.operator} onChange={(e) => { setEnv(e); setDirty(true) }} />
+          <EnvEditor env={env} readOnly={!can.operator} onChange={(e) => { setEnv(e); markDirty(true) }} />
         </Card>
       )}
       {can.operator && project.kind !== 'database' && (

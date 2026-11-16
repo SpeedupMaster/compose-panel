@@ -80,6 +80,7 @@ type ServiceConfig struct {
 	Restart     string           `json:"restart"`
 	MemLimit    any              `json:"mem_limit"`
 	Ports       []map[string]any `json:"ports"`
+	NetworkMode string           `json:"network_mode"`
 	Networks    map[string]any   `json:"networks"`
 	Healthcheck map[string]any   `json:"healthcheck"`
 	Deploy      *struct {
@@ -132,7 +133,7 @@ func Override(cfg *Config, extra map[string][]string) []byte {
 	// A bare "services:" parses as null, which compose rejects.
 	hasSvc := false
 	for _, name := range cfg.ServiceNames() {
-		if len(extra[name]) > 0 {
+		if len(extra[name]) > 0 && cfg.Services[name].NetworkMode == "" {
 			hasSvc = true
 		}
 	}
@@ -147,6 +148,9 @@ func Override(cfg *Config, extra map[string][]string) []byte {
 			continue
 		}
 		svc := cfg.Services[name]
+		if svc.NetworkMode != "" {
+			continue
+		}
 		fmt.Fprintf(&b, "  %s:\n    networks:\n", quote(name))
 		existing := make([]string, 0, len(svc.Networks))
 		for n := range svc.Networks {

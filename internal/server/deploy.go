@@ -246,20 +246,7 @@ func (s *Server) prepareWorkdir(run *jobRun, p *Project, pin *deployState) error
 	if err != nil {
 		return fmt.Errorf("Compose 校验失败：%s", cleanComposeErr(err.Error(), dir))
 	}
-	extra := map[string][]string{}
-	if !p.Options.SkipNetworks {
-		for _, n := range cfg.ServiceNames() {
-			if p.Kind == "database" {
-				continue // database compose already declares its shared network
-			}
-			if sv := cfg.Services[n]; sv.Networks != nil {
-				if _, host := sv.Networks["host"]; host {
-					continue
-				}
-			}
-			extra[n] = []string{s.cfg.ProxyNetwork, s.cfg.DBNetwork}
-		}
-	}
+	extra := composeExtraNetworks(p, cfg, s.cfg.ProxyNetwork, s.cfg.DBNetwork)
 	for _, n := range []string{s.cfg.ProxyNetwork, s.cfg.DBNetwork} {
 		if err := s.dk.EnsureNetwork(ctx, n); err != nil {
 			return fmt.Errorf("创建网络 %s 失败：%w", n, err)
@@ -270,6 +257,29 @@ func (s *Server) prepareWorkdir(run *jobRun, p *Project, pin *deployState) error
 	}
 	run.Logf("服务：%s", strings.Join(cfg.ServiceNames(), ", "))
 	return nil
+}
+
+// composeExtraNetworks returns the shared panel networks to attach to each service.
+// Services that declare network_mode (e.g. host, none, service:...) cannot be combined
+// with networks in Compose, so they are skipped automatically.
+func composeExtraNetworks(p *Project, cfg *compose.Config, proxyNet, dbNet string) map[string][]string {
+	extra := map[string][]string{}
+	if p.Options.SkipNetworks || p.Kind == "database" || cfg == nil {
+		return extra
+	}
+	for _, n := range cfg.ServiceNames() {
+		sv := cfg.Services[n]
+		if sv.NetworkMode != "" {
+			continue
+		}
+		if sv.Networks != nil {
+			if _, host := sv.Networks["host"]; host {
+				continue
+			}
+		}
+		extra[n] = []string{proxyNet, dbNet}
+	}
+	return extra
 }
 
 type projectFile struct {

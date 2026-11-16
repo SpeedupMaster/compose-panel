@@ -11,7 +11,7 @@ import { nginx } from '@codemirror/legacy-modes/mode/nginx'
 import { shell } from '@codemirror/legacy-modes/mode/shell'
 import { toml } from '@codemirror/legacy-modes/mode/toml'
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search'
-import { Compartment, EditorState, Extension, Prec } from '@codemirror/state'
+import { Annotation, Compartment, EditorState, Extension, Prec } from '@codemirror/state'
 import {
   Decoration, drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap,
   lineNumbers, MatchDecorator, placeholder as placeholderExt, ViewPlugin, ViewUpdate,
@@ -107,6 +107,8 @@ const theme = EditorView.theme({
 
 export type EditorHandle = { setValue: (v: string) => void; setReadOnly: (ro: boolean) => void; destroy: () => void }
 
+const externalSync = Annotation.define<boolean>()
+
 export function createEditor(parent: HTMLElement, opts: {
   value: string
   lang: CodeLang
@@ -132,14 +134,18 @@ export function createEditor(parent: HTMLElement, opts: {
         opts.onSubmit ? Prec.highest(keymap.of([{ key: 'Mod-Enter', run: () => { opts.onSubmit!(); return true } }])) : [],
         EditorView.contentAttributes.of({ 'aria-label': opts.label || '代码', spellcheck: 'false', autocorrect: 'off', autocapitalize: 'off' }),
         ro.of(roExt(opts.readOnly)),
-        EditorView.updateListener.of((u) => { if (u.docChanged) opts.onChange(u.state.doc.toString()) }),
+        EditorView.updateListener.of((u) => {
+          if (u.docChanged && !u.transactions.every((tr) => tr.annotation(externalSync))) {
+            opts.onChange(u.state.doc.toString())
+          }
+        }),
       ],
     }),
   })
   return {
     setValue(v) {
       const cur = view.state.doc.toString()
-      if (v !== cur) view.dispatch({ changes: { from: 0, to: cur.length, insert: v } })
+      if (v !== cur) view.dispatch({ changes: { from: 0, to: cur.length, insert: v }, annotations: externalSync.of(true) })
     },
     setReadOnly(r) { view.dispatch({ effects: ro.reconfigure(roExt(r)) }) },
     destroy() { view.destroy() },
