@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { ApiError, get, post, streamLines } from '../api'
 import { calcMenuPlacement, MenuPlacement } from './geometry'
+import { useAppUpdated } from '../pwa'
 
 // ---------- status badges ----------
 
@@ -318,6 +319,7 @@ const ToastCtx = createContext<(kind: ToastItem['kind'], text: string) => void>(
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([])
+  const appUpdated = useAppUpdated()
   const push = useCallback((kind: ToastItem['kind'], text: string) => {
     const id = Date.now() + Math.random()
     setItems((x) => [...x, { id, kind, text }])
@@ -327,6 +329,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastCtx.Provider value={push}>
       {children}
       <div className="toast-wrap" aria-live="polite">
+        {appUpdated && (
+          <div className="toast">
+            <div className="grow">面板已更新到新版本，刷新后生效。</div>
+            <button className="link-btn" style={{ color: '#fff', fontWeight: 600 }} onClick={() => window.location.reload()}>
+              刷新
+            </button>
+          </div>
+        )}
         {items.map((t) => (
           <div key={t.id} className={'toast ' + (t.kind === 'info' ? '' : t.kind)}>
             <div className="grow">{t.text}</div>

@@ -200,10 +200,14 @@ func (s *Server) staticHandler() http.Handler {
 		if p != "" {
 			if f, err := s.web.Open(p); err == nil {
 				f.Close()
-				if strings.HasPrefix(p, "assets/") {
-					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-				}
+				setStaticHeaders(w.Header(), p)
 				fsrv.ServeHTTP(w, r)
+				return
+			}
+			// A hashed asset from an older build must 404, not fall back to index.html: a stale
+			// page would otherwise try to run HTML as a module script.
+			if strings.HasPrefix(p, "assets/") {
+				http.NotFound(w, r)
 				return
 			}
 		}
@@ -216,6 +220,24 @@ func (s *Server) staticHandler() http.Handler {
 		w.Header().Set("Cache-Control", "no-cache")
 		_, _ = w.Write(data)
 	})
+}
+
+// setStaticHeaders sets caching and type headers for a file from the embedded frontend.
+// Hashed assets are immutable. The service worker, manifest and icons keep stable names, so
+// they are revalidated on every request: a new build must reach browsers right away.
+func setStaticHeaders(h http.Header, p string) {
+	switch {
+	case strings.HasPrefix(p, "assets/"):
+		h.Set("Cache-Control", "public, max-age=31536000, immutable")
+	case p == "sw.js":
+		h.Set("Cache-Control", "no-cache")
+		h.Set("Content-Type", "text/javascript; charset=utf-8")
+	case strings.HasSuffix(p, ".webmanifest"):
+		h.Set("Cache-Control", "no-cache")
+		h.Set("Content-Type", "application/manifest+json")
+	default:
+		h.Set("Cache-Control", "no-cache")
+	}
 }
 
 // Run serves HTTP and the background loops until ctx is canceled.
