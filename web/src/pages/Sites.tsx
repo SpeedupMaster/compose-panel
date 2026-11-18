@@ -30,6 +30,7 @@ type Site = {
   accessLog: boolean
   loadBalance: boolean
   healthPath: string
+  grpc: boolean
 }
 
 export default function Sites() {
@@ -41,7 +42,7 @@ export default function Sites() {
   const [cfg, setCfg] = useState<any>(null)
   const [logs, setLogs] = useState<any>(null)
   const [maint, setMaint] = useState<any>(null)
-  const blank: Site = { domains: [], kind: 'proxy', projectId: 0, service: '', port: 80, upstream: '', hsts: true, compress: true, basicUser: '', ipAllow: '', maxBody: '', headers: '', enabled: true, maintenance: false, maintenanceMsg: '', maintenanceDeploy: false, accessLog: true, loadBalance: false, healthPath: '' }
+  const blank: Site = { domains: [], kind: 'proxy', projectId: 0, service: '', port: 80, upstream: '', hsts: true, compress: true, basicUser: '', ipAllow: '', maxBody: '', headers: '', enabled: true, maintenance: false, maintenanceMsg: '', maintenanceDeploy: false, accessLog: true, loadBalance: false, healthPath: '', grpc: false }
   return (
     <Page
       title="站点"
@@ -85,7 +86,7 @@ export default function Sites() {
                           <div className="label mono">{target}</div>
                         </td>
                         <td>{cert ? cert.source === 'internal' ? <span className="badge ok">本地 CA · 自动续期</span> : <span className={'badge ' + (cert.daysLeft <= 7 ? 'err' : cert.daysLeft <= 14 ? 'warn' : 'ok')}>{cert.source === 'uploaded' ? '上传' : "Let's Encrypt"} · 剩 {cert.daysLeft} 天</span> : <span className="badge off">待签发</span>}</td>
-                        <td className="label">{[s.hsts && 'HSTS', s.compress && '压缩', s.hasBasicAuth && '密码保护', s.ipAllow && 'IP 白名单', s.maxBody && `上限 ${s.maxBody}`, s.loadBalance && '负载均衡', s.healthPath && `健康检查 ${s.healthPath}`, s.accessLog && '访问日志', s.maintenanceDeploy && '部署时维护'].filter(Boolean).join(' · ') || '—'}</td>
+                        <td className="label">{[s.hsts && 'HSTS', s.compress && '压缩', s.hasBasicAuth && '密码保护', s.ipAllow && 'IP 白名单', s.maxBody && `上限 ${s.maxBody}`, s.loadBalance && '负载均衡', s.healthPath && `健康检查 ${s.healthPath}`, s.grpc && 'gRPC (h2c)', s.accessLog && '访问日志', s.maintenanceDeploy && '部署时维护'].filter(Boolean).join(' · ') || '—'}</td>
                         <td onClick={(e) => e.stopPropagation()}>
                           <div className="row" style={{ justifyContent: 'flex-end' }}>
                             {s.kind !== 'redirect' && <button className="btn btn-sm" onClick={() => setLogs(s)}><Icon name="logs" size={16} />日志</button>}
@@ -101,7 +102,7 @@ export default function Sites() {
               </div>
             }
             cards={data.sites.map(({ site: s, target, cert }: any) => {
-              const opts = [s.hsts && 'HSTS', s.compress && '压缩', s.hasBasicAuth && '密码保护', s.ipAllow && 'IP 白名单', s.maxBody && `上限 ${s.maxBody}`, s.loadBalance && '负载均衡', s.healthPath && `健康检查 ${s.healthPath}`, s.accessLog && '访问日志', s.maintenanceDeploy && '部署时维护'].filter(Boolean).join(' · ')
+              const opts = [s.hsts && 'HSTS', s.compress && '压缩', s.hasBasicAuth && '密码保护', s.ipAllow && 'IP 白名单', s.maxBody && `上限 ${s.maxBody}`, s.loadBalance && '负载均衡', s.healthPath && `健康检查 ${s.healthPath}`, s.grpc && 'gRPC (h2c)', s.accessLog && '访问日志', s.maintenanceDeploy && '部署时维护'].filter(Boolean).join(' · ')
               return (
                 <MobileCard
                   key={s.id}
@@ -269,6 +270,7 @@ function SiteModal({ s, onClose, onSaved }: { s: Site; onClose: () => void; onSa
       {mode !== 'redirect' && (
         <Card title="可用性与日志">
           <div className="col" style={{ gap: 10 }}>
+            <label className="check"><input type="checkbox" checked={f.grpc} onChange={(e) => setF({ ...f, grpc: e.target.checked })} />gRPC 上游（h2c）：gRPC 请求以 HTTP/2 明文转发给后端，其余请求（REST、SSE、WebSocket）不变</label>
             <label className="check"><input type="checkbox" checked={f.accessLog} onChange={(e) => setF({ ...f, accessLog: e.target.checked })} />记录访问日志（JSON，按 20MB 轮转，保留 7 天）</label>
             {mode === 'project' && (
               <>

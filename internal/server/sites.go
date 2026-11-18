@@ -40,12 +40,13 @@ type siteRow struct {
 	AccessLog         bool     `json:"accessLog"`
 	LoadBalance       bool     `json:"loadBalance"`
 	HealthPath        string   `json:"healthPath"`
+	GRPC              bool     `json:"grpc"`
 	basicHash         string
 }
 
 func (s *Server) listSites(where string, args ...any) ([]siteRow, error) {
 	rows, err := s.db.Query(`SELECT s.id, s.domains, s.kind, COALESCE(s.project_id,0), COALESCE(p.name,''), s.service, s.port, s.upstream, s.hsts, s.compress, s.basic_user, s.basic_hash, s.ip_allow, s.max_body, s.headers, s.enabled, s.created_at,
-		s.maintenance, s.maintenance_msg, s.maintenance_deploy, s.access_log, s.load_balance, s.health_path
+		s.maintenance, s.maintenance_msg, s.maintenance_deploy, s.access_log, s.load_balance, s.health_path, s.grpc
 		FROM sites s LEFT JOIN projects p ON p.id=s.project_id `+where+` ORDER BY s.domains`, args...)
 	if err != nil {
 		return nil, err
@@ -56,7 +57,7 @@ func (s *Server) listSites(where string, args ...any) ([]siteRow, error) {
 		var x siteRow
 		var domains string
 		if err := rows.Scan(&x.ID, &domains, &x.Kind, &x.ProjectID, &x.ProjectName, &x.Service, &x.Port, &x.Upstream, &x.HSTS, &x.Compress, &x.BasicUser, &x.basicHash, &x.IPAllow, &x.MaxBody, &x.Headers, &x.Enabled, &x.CreatedAt,
-			&x.Maintenance, &x.MaintenanceMsg, &x.MaintenanceDeploy, &x.AccessLog, &x.LoadBalance, &x.HealthPath); err != nil {
+			&x.Maintenance, &x.MaintenanceMsg, &x.MaintenanceDeploy, &x.AccessLog, &x.LoadBalance, &x.HealthPath, &x.GRPC); err != nil {
 			return nil, err
 		}
 		x.Domains = splitList(domains)
@@ -129,7 +130,7 @@ func (s *Server) buildCaddyConfig() (map[string]any, error) {
 		site := proxy.Site{
 			ID: x.ID, Domains: x.Domains, Kind: x.Kind, Upstream: up, HSTS: x.HSTS, Compress: x.Compress,
 			BasicUser: x.BasicUser, BasicHash: x.basicHash, IPAllow: splitList(x.IPAllow), MaxBody: parseSize(x.MaxBody), Headers: parseHeaders(x.Headers),
-			HealthPath: x.HealthPath, AccessLog: x.AccessLog, MaintenanceMsg: x.MaintenanceMsg,
+			HealthPath: x.HealthPath, GRPC: x.GRPC, AccessLog: x.AccessLog, MaintenanceMsg: x.MaintenanceMsg,
 			Maintenance: x.Maintenance || (x.MaintenanceDeploy && s.inDeployMaintenance(x.ProjectID)),
 		}
 		if x.LoadBalance && x.ProjectName != "" && x.Service != "" {
@@ -193,6 +194,7 @@ type siteReq struct {
 	AccessLog         bool     `json:"accessLog"`
 	LoadBalance       bool     `json:"loadBalance"`
 	HealthPath        string   `json:"healthPath"`
+	GRPC              bool     `json:"grpc"`
 }
 
 func (s *Server) checkSiteReq(req *siteReq, selfID int64) error {
@@ -320,15 +322,15 @@ func (s *Server) handleSaveSite(w http.ResponseWriter, r *http.Request, u *User)
 	var err error
 	if id > 0 {
 		_, err = s.db.Exec(`UPDATE sites SET domains=?, kind=?, project_id=?, service=?, port=?, upstream=?, hsts=?, compress=?, basic_user=?, basic_hash=?, ip_allow=?, max_body=?, headers=?, enabled=?,
-			maintenance=?, maintenance_msg=?, maintenance_deploy=?, access_log=?, load_balance=?, health_path=? WHERE id=?`,
+			maintenance=?, maintenance_msg=?, maintenance_deploy=?, access_log=?, load_balance=?, health_path=?, grpc=? WHERE id=?`,
 			domains, req.Kind, projectID, req.Service, req.Port, req.Upstream, boolInt(req.HSTS), boolInt(req.Compress), req.BasicUser, hash, req.IPAllow, req.MaxBody, req.Headers, boolInt(req.Enabled),
-			boolInt(req.Maintenance), req.MaintenanceMsg, boolInt(req.MaintenanceDeploy), boolInt(req.AccessLog), boolInt(req.LoadBalance), req.HealthPath, id)
+			boolInt(req.Maintenance), req.MaintenanceMsg, boolInt(req.MaintenanceDeploy), boolInt(req.AccessLog), boolInt(req.LoadBalance), req.HealthPath, boolInt(req.GRPC), id)
 	} else {
 		var res interface{ LastInsertId() (int64, error) }
 		res, err = s.db.Exec(`INSERT INTO sites(domains,kind,project_id,service,port,upstream,hsts,compress,basic_user,basic_hash,ip_allow,max_body,headers,enabled,created_at,
-			maintenance,maintenance_msg,maintenance_deploy,access_log,load_balance,health_path) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			maintenance,maintenance_msg,maintenance_deploy,access_log,load_balance,health_path,grpc) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			domains, req.Kind, projectID, req.Service, req.Port, req.Upstream, boolInt(req.HSTS), boolInt(req.Compress), req.BasicUser, hash, req.IPAllow, req.MaxBody, req.Headers, boolInt(req.Enabled), time.Now().Unix(),
-			boolInt(req.Maintenance), req.MaintenanceMsg, boolInt(req.MaintenanceDeploy), boolInt(req.AccessLog), boolInt(req.LoadBalance), req.HealthPath)
+			boolInt(req.Maintenance), req.MaintenanceMsg, boolInt(req.MaintenanceDeploy), boolInt(req.AccessLog), boolInt(req.LoadBalance), req.HealthPath, boolInt(req.GRPC))
 		if err == nil {
 			id, _ = res.LastInsertId()
 		}

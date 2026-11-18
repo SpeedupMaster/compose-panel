@@ -89,6 +89,7 @@ type Site struct {
 	Maintenance    bool
 	MaintenanceMsg string
 	AccessLog      bool
+	GRPC           bool // send gRPC requests to the upstream over h2c
 }
 
 // AccessLogDir is where Caddy writes per-site JSON access logs (inside the Caddy container).
@@ -202,7 +203,26 @@ func Build(sites []Site, o Options) map[string]any {
 				}
 				rp["headers"] = map[string]any{"request": map[string]any{"set": set}}
 			}
-			handlers = append(handlers, rp)
+			if s.GRPC {
+				// gRPC needs HTTP/2 end to end; the backend speaks it in
+				// cleartext (h2c). Only gRPC calls take that path: REST, SSE and
+				// WebSocket upgrades keep the plain HTTP/1.1 transport.
+				g := map[string]any{"transport": map[string]any{"protocol": "http", "versions": []string{"h2c", "2"}}, "flush_interval": -1}
+				for k, v := range rp {
+					if k != "health_checks" {
+						g[k] = v
+					}
+				}
+				handlers = append(handlers, map[string]any{"handler": "subroute", "routes": []any{
+					map[string]any{
+						"match":  []any{map[string]any{"header": map[string][]string{"Content-Type": {"application/grpc*"}}}},
+						"handle": []any{g},
+					},
+					map[string]any{"handle": []any{rp}},
+				}})
+			} else {
+				handlers = append(handlers, rp)
+			}
 		}
 		sub = append(sub, map[string]any{"handle": handlers})
 		routes = append(routes, map[string]any{
