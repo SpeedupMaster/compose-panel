@@ -176,6 +176,64 @@ func (s *Server) checkProjectImages(ctx context.Context, p *Project, cache diges
 	return out, fresh, nil
 }
 
+// settleAppliedUpdates flips stored "update" rows to "current" once the service
+// runs the remote digest that was found, so an update applied by a deploy, a
+// manual `docker compose pull`, or the panel replacing itself stops being
+// reported. It only asks the local Docker daemon, never the registry.
+func (s *Server) settleAppliedUpdates(ctx context.Context, checks []ImageCheck) {
+	running := map[string]map[string]string{} // project -> service -> image ID
+	for i := range checks {
+		c := &checks[i]
+		if c.Status != "update" || c.RemoteDigest == "" {
+			continue
+		}
+		svcs, cached := running[c.Project]
+		if !cached {
+			svcs = map[string]string{}
+			if cs, err := s.dk.ProjectContainers(ctx, c.Project); err == nil {
+				sort.Slice(cs, func(i, j int) bool { return cs[i].Name() < cs[j].Name() })
+				for _, ct := range cs {
+					svc := ct.Labels["com.docker.compose.service"]
+					if _, dup := svcs[svc]; svc != "" && !dup && ct.Labels["com.docker.compose.oneoff"] != "True" {
+						svcs[svc] = ct.ImageID
+					}
+				}
+			}
+			running[c.Project] = svcs
+		}
+		id := svcs[c.Service]
+		if id == "" {
+			continue
+		}
+		img, err := s.dk.InspectImage(ctx, id)
+		if err != nil {
+			continue
+		}
+		for _, d := range img.RepoDigests {
+			if strings.HasSuffix(d, "@"+c.RemoteDigest) {
+				c.Status, c.LocalDigest = "current", c.RemoteDigest
+				_, _ = s.db.Exec(`UPDATE image_checks SET status='current', local_digest=? WHERE project_id=? AND service=? AND status='update'`,
+					c.RemoteDigest, c.ProjectID, c.Service)
+				break
+			}
+		}
+	}
+}
+
+// recheckAfterDeploy refreshes a project's image status against the registry
+// in the background, so a deploy that pulled new images clears its notice.
+func (s *Server) recheckAfterDeploy(projectID int64) {
+	go func() {
+		p, err := s.getProject(projectID)
+		if err != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		_, _, _ = s.checkProjectImages(ctx, p, digestCache{})
+	}()
+}
+
 func (s *Server) imageChecks(projectID int64) []ImageCheck {
 	q := `SELECT c.project_id, p.name, c.service, c.image, c.local_digest, c.remote_digest, c.status, c.error, c.checked_at
 		FROM image_checks c JOIN projects p ON p.id=c.project_id`
@@ -262,7 +320,9 @@ func (s *Server) handleProjectImages(w http.ResponseWriter, r *http.Request, u *
 	if err != nil {
 		return err
 	}
-	return ok(w, s.imageChecks(p.ID))
+	checks := s.imageChecks(p.ID)
+	s.settleAppliedUpdates(r.Context(), checks)
+	return ok(w, checks)
 }
 
 func (s *Server) handleCheckProjectImages(w http.ResponseWriter, r *http.Request, u *User) error {
@@ -279,9 +339,11 @@ func (s *Server) handleCheckProjectImages(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleImageUpdates(w http.ResponseWriter, r *http.Request, u *User) error {
+	checks := s.imageChecks(0)
+	s.settleAppliedUpdates(r.Context(), checks)
 	out := []ImageCheck{}
-	for _, c := range s.imageChecks(0) {
-		if u.canProject(c.ProjectID) {
+	for _, c := range checks {
+		if c.Status == "update" && u.canProject(c.ProjectID) {
 			out = append(out, c)
 		}
 	}
