@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { ago, bytes, dateTime, del, duration, get, post, put } from '../api'
 import { useAuth, useCan } from '../auth'
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, SecretBox, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
+import { PanelRestoreModal } from '../components/PanelRestoreModal'
 import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
 
 type Tab = 'panel' | 'account' | 'system' | 'import'
@@ -181,36 +182,94 @@ function Account() {
 function SystemInfo() {
   const { data, error } = useLoad(() => get<any>('/system/info'), [])
   const can = useCan()
+  const { data: snaps, reload: reloadSnaps } = useLoad(() => (can.admin ? get<any[]>('/system/panel-backups') : Promise.resolve(null)), [can.admin])
   const openJob = useJobLog()
   const toast = useToast()
   const [confirm, setConfirm] = useState(false)
+  const [restoreOpen, setRestoreOpen] = useState(false)
+  const [restoreSnap, setRestoreSnap] = useState<string | undefined>(undefined)
   if (!data) return error ? <ErrorBox error={error} /> : <Loading />
   return (
-    <div className="grid-2">
-      <Card title="面板">
-        <dl className="kv">
-          <dt>版本</dt><dd className="mono">{data.version}（{data.go}）</dd>
-          <dt>已运行</dt><dd>{duration(Date.now() / 1000 - data.startedAt)}</dd>
-          <dt>数据目录</dt><dd className="mono">{data.dataDir}</dd>
-          <dt>项目目录</dt><dd className="mono">{data.projectsDir}</dd>
-          <dt>备份目录</dt><dd className="mono">{data.backupsDir}</dd>
-          <dt>数据库大小</dt><dd>{bytes(data.dbSize)}</dd>
-          <dt>面板自身备份</dt><dd>{data.panelBackups} 份{data.lastPanelBackup ? `，最近 ${ago(data.lastPanelBackup)}` : ''}</dd>
-          <dt>Caddy</dt><dd>{data.caddy === 'ok' ? <span className="badge ok">已连接</span> : <span className="badge err" title={data.caddy}>无法连接</span>}</dd>
-        </dl>
-        {can.admin && <div style={{ marginTop: 16 }}><button className="btn" onClick={() => setConfirm(true)}>立即备份面板数据</button></div>}
-      </Card>
-      <Card title="主机与 Docker">
-        <dl className="kv">
-          <dt>主机名</dt><dd>{data.hostname || '—'}</dd>
-          <dt>系统</dt><dd>{data.osName || '—'}<div className="label">{data.os}</div></dd>
-          <dt>CPU / 内存</dt><dd>{data.cpus} 核 · {bytes(data.memTotal)}</dd>
-          <dt>Docker</dt><dd>{data.dockerVersion ? `${data.dockerVersion}（API ${data.dockerApi}）` : <span className="badge err">{data.dockerError}</span>}</dd>
-          <dt>代理网络</dt><dd className="mono">{data.proxyNetwork}</dd>
-          <dt>数据库网络</dt><dd className="mono">{data.dbNetwork}</dd>
-        </dl>
-      </Card>
-      {confirm && <Confirm title="备份面板数据" confirmText="开始" onClose={() => setConfirm(false)} onConfirm={async () => { try { const r = await post('/system/panel-backup'); openJob(r.jobId, '面板备份') } catch (e) { toast.err(e) } }}>把 panel.db 快照保存到备份目录下的 _panel 目录。</Confirm>}
+    <div className="col" style={{ gap: 16 }}>
+      <div className="grid-2">
+        <Card title="面板">
+          <dl className="kv">
+            <dt>版本</dt><dd className="mono">{data.version}（{data.go}）</dd>
+            <dt>已运行</dt><dd>{duration(Date.now() / 1000 - data.startedAt)}</dd>
+            <dt>数据目录</dt><dd className="mono">{data.dataDir}</dd>
+            <dt>项目目录</dt><dd className="mono">{data.projectsDir}</dd>
+            <dt>备份目录</dt><dd className="mono">{data.backupsDir}</dd>
+            <dt>数据库大小</dt><dd>{bytes(data.dbSize)}</dd>
+            <dt>面板自身备份</dt><dd>{data.panelBackups} 份{data.lastPanelBackup ? `，最近 ${ago(data.lastPanelBackup)}` : ''}</dd>
+            <dt>Caddy</dt><dd>{data.caddy === 'ok' ? <span className="badge ok">已连接</span> : <span className="badge err" title={data.caddy}>无法连接</span>}</dd>
+          </dl>
+          {can.admin && (
+            <div className="row wrap" style={{ marginTop: 16, gap: 8 }}>
+              <button className="btn" onClick={() => setConfirm(true)}>立即备份面板数据</button>
+              <button className="btn" onClick={() => { setRestoreSnap(undefined); setRestoreOpen(true) }}><Icon name="restart" size={16} />恢复面板数据</button>
+            </div>
+          )}
+        </Card>
+        <Card title="主机与 Docker">
+          <dl className="kv">
+            <dt>主机名</dt><dd>{data.hostname || '—'}</dd>
+            <dt>系统</dt><dd>{data.osName || '—'}<div className="label">{data.os}</div></dd>
+            <dt>CPU / 内存</dt><dd>{data.cpus} 核 · {bytes(data.memTotal)}</dd>
+            <dt>Docker</dt><dd>{data.dockerVersion ? `${data.dockerVersion}（API ${data.dockerApi}）` : <span className="badge err">{data.dockerError}</span>}</dd>
+            <dt>代理网络</dt><dd className="mono">{data.proxyNetwork}</dd>
+            <dt>数据库网络</dt><dd className="mono">{data.dbNetwork}</dd>
+          </dl>
+        </Card>
+      </div>
+      {can.admin && snaps && (
+        <Card
+          title="本地面板快照（_panel）"
+          actions={<button className="btn btn-sm" onClick={reloadSnaps}><Icon name="refresh" size={16} />刷新</button>}
+          pad={snaps.length === 0}
+        >
+          {snaps.length === 0 ? (
+            <Empty>暂无本地面板快照。可点击上方「立即备份面板数据」生成快照，或点击「恢复面板数据」上传外部面板备份文件。</Empty>
+          ) : (
+            <ResponsiveTable
+              table={
+                <div className="table-wrap">
+                  <table>
+                    <thead><tr><th>快照文件</th><th>大小</th><th>创建时间</th><th></th></tr></thead>
+                    <tbody>
+                      {snaps.map((s) => (
+                        <tr key={s.name}>
+                          <td className="mono" style={{ fontSize: 12 }}>{s.name}</td>
+                          <td className="nowrap">{bytes(s.size)}</td>
+                          <td className="nowrap muted">{dateTime(s.modTime)}（{ago(s.modTime)}）</td>
+                          <td>
+                            <div className="row" style={{ justifyContent: 'flex-end' }}>
+                              <button className="btn btn-sm" onClick={() => { setRestoreSnap(s.name); setRestoreOpen(true) }}>恢复</button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              }
+              cards={snaps.map((s) => (
+                <MobileCard
+                  key={s.name}
+                  tight
+                  title={<span className="mono" style={{ fontSize: 12 }}>{s.name}</span>}
+                  meta={[
+                    { label: '大小', value: bytes(s.size) },
+                    { label: '时间', value: ago(s.modTime) },
+                  ]}
+                  actions={<button className="btn btn-sm" onClick={() => { setRestoreSnap(s.name); setRestoreOpen(true) }}>恢复</button>}
+                />
+              ))}
+            />
+          )}
+        </Card>
+      )}
+      {confirm && <Confirm title="备份面板数据" confirmText="开始" onClose={() => setConfirm(false)} onConfirm={async () => { try { const r = await post('/system/panel-backup'); openJob(r.jobId, '面板备份'); window.setTimeout(reloadSnaps, 1500) } catch (e) { toast.err(e) } }}>把 panel.db 快照保存到备份目录下的 _panel 目录。</Confirm>}
+      {restoreOpen && <PanelRestoreModal initialSnapshot={restoreSnap} onClose={() => setRestoreOpen(false)} />}
     </div>
   )
 }
