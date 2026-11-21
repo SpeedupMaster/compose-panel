@@ -979,7 +979,7 @@ func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request, u *
 		plan.TargetLabel = p.Name + "/" + rel
 
 	case "panel":
-		return bad("面板数据恢复尚未启用")
+		return s.handlePanelRestoreFromBackup(w, r, u, b, identities, req.MasterKey, req.DryRun, req.Confirm)
 
 	default:
 		return bad("该类型备份暂不支持恢复")

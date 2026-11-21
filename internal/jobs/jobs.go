@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -21,9 +22,10 @@ type Manager struct {
 	dir string
 	sem chan struct{}
 
-	mu    sync.Mutex
-	locks map[string]*sync.Mutex
-	live  map[string]*Run
+	mu     sync.Mutex
+	locks  map[string]*sync.Mutex
+	live   map[string]*Run
+	frozen bool
 }
 
 func New(db *sql.DB, dir string, concurrency int) (*Manager, error) {
@@ -38,6 +40,7 @@ func New(db *sql.DB, dir string, concurrency int) (*Manager, error) {
 // Run is the handle a job function uses to report progress and log output.
 type Run struct {
 	ID     string
+	title  string
 	m      *Manager
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -106,24 +109,61 @@ type Spec struct {
 
 type Func func(r *Run) error
 
-// Submit queues fn and returns the job id immediately.
+// TryFreezeForRestore checks that no background jobs are active and freezes
+// new submissions so panel.db can be safely closed and swapped.
+func (m *Manager) TryFreezeForRestore() ([]string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.frozen {
+		return []string{"面板恢复正在进行中"}, false
+	}
+	if len(m.live) > 0 {
+		titles := make([]string, 0, len(m.live))
+		for _, r := range m.live {
+			if r.title != "" {
+				titles = append(titles, r.title)
+			} else {
+				titles = append(titles, r.ID)
+			}
+		}
+		sort.Strings(titles)
+		return titles, false
+	}
+	m.frozen = true
+	return nil, true
+}
+
+// Unfreeze re-enables job submissions (used if a restore fails before restart).
+func (m *Manager) Unfreeze() {
+	m.mu.Lock()
+	m.frozen = false
+	m.mu.Unlock()
+}
+
+// Submit queues fn and returns the job id immediately, or "" if the manager is frozen.
 func (m *Manager) Submit(spec Spec, fn Func) string {
 	id := "job_" + auth.RandomToken(6)
+	ctx, cancel := context.WithCancel(context.Background())
+	run := &Run{ID: id, title: spec.Title, m: m, ctx: ctx, cancel: cancel, subs: map[chan []byte]struct{}{}}
+	m.mu.Lock()
+	if m.frozen {
+		m.mu.Unlock()
+		cancel()
+		return ""
+	}
+	m.live[id] = run
+	m.mu.Unlock()
+
 	now := time.Now().Unix()
 	_, err := m.db.Exec(`INSERT INTO jobs(id,kind,title,target,status,actor,created_at) VALUES(?,?,?,?,?,?,?)`,
 		id, spec.Kind, spec.Title, spec.Target, "queued", spec.Actor, now)
 	if err != nil {
 		slog.Error("job insert", "err", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	run := &Run{ID: id, m: m, ctx: ctx, cancel: cancel, subs: map[chan []byte]struct{}{}}
 	f, err := os.OpenFile(m.logPath(id), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
 	if err == nil {
 		run.file = f
 	}
-	m.mu.Lock()
-	m.live[id] = run
-	m.mu.Unlock()
 	go m.execute(run, spec, fn)
 	return id
 }
@@ -131,6 +171,9 @@ func (m *Manager) Submit(spec Spec, fn Func) string {
 // Do runs fn synchronously as a job and waits for it.
 func (m *Manager) Do(spec Spec, fn Func) (string, error) {
 	id := m.Submit(spec, fn)
+	if id == "" {
+		return "", fmt.Errorf("面板正在恢复，暂不接受新任务")
+	}
 	_, ch, cancel, _ := m.Subscribe(id)
 	defer cancel()
 	for range ch {

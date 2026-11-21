@@ -56,6 +56,9 @@ type Server struct {
 	gdriveMu       sync.Mutex
 	gdriveAuth     map[string]*gdriveOAuthState
 	gdriveExchange func(ctx context.Context, clientID, clientSecret, code, redirectURI, verifier string) (string, error)
+	restartMu      sync.Mutex
+	restartWanted  bool
+	runCancel      context.CancelFunc
 	startedAt      time.Time
 	setupToken     string
 }
@@ -71,9 +74,17 @@ func New(cfg config.Config, web fs.FS) (*Server, error) {
 			return nil, err
 		}
 	}
+	clearSessions, err := ApplyPendingPanelRestore(cfg.DataDir)
+	if err != nil {
+		return nil, err
+	}
 	db, err := store.Open(filepath.Join(cfg.DataDir, "panel.db"))
 	if err != nil {
 		return nil, err
+	}
+	if clearSessions {
+		_, _ = db.Exec(`DELETE FROM sessions`)
+		_ = os.Remove(filepath.Join(cfg.DataDir, panelClearSessionsName))
 	}
 	box, err := secret.LoadOrCreate(filepath.Join(cfg.DataDir, "master.key"))
 	if err != nil {
@@ -244,21 +255,47 @@ func setStaticHeaders(h http.Header, p string) {
 	}
 }
 
-// Run serves HTTP and the background loops until ctx is canceled.
+func (s *Server) RestartRequested() bool {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+	return s.restartWanted
+}
+
+func (s *Server) requestRestart() {
+	s.restartMu.Lock()
+	s.restartWanted = true
+	cancel := s.runCancel
+	s.restartMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// Run serves HTTP and the background loops until ctx is canceled or a panel restore requests restart.
 func (s *Server) Run(ctx context.Context) error {
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
+	s.restartMu.Lock()
+	s.runCancel = runCancel
+	alreadyRestart := s.restartWanted
+	s.restartMu.Unlock()
+	if alreadyRestart {
+		runCancel()
+	}
+
 	srv := &http.Server{
 		Addr:              s.cfg.Listen,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 	s.startScheduler()
-	go s.monitorLoop(ctx)
-	go s.metricsLoop(ctx)
-	go s.eventsLoop(ctx)
+	go s.monitorLoop(runCtx)
+	go s.metricsLoop(runCtx)
+	go s.eventsLoop(runCtx)
 	go func() {
 		// Push proxy config once Caddy is reachable.
 		for i := 0; i < 30; i++ {
-			if ctx.Err() != nil {
+			if runCtx.Err() != nil {
 				return
 			}
 			if err := s.syncCaddy(context.Background()); err == nil {
@@ -267,7 +304,11 @@ func (s *Server) Run(ctx context.Context) error {
 			} else if i == 0 {
 				slog.Warn("caddy not ready", "err", err)
 			}
-			time.Sleep(5 * time.Second)
+			select {
+			case <-runCtx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
 		}
 	}()
 	errc := make(chan error, 1)
@@ -276,11 +317,19 @@ func (s *Server) Run(ctx context.Context) error {
 		errc <- srv.ListenAndServe()
 	}()
 	select {
-	case <-ctx.Done():
+	case <-runCtx.Done():
 		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		s.cron.Stop()
+		if s.cron != nil {
+			s.cron.Stop()
+		}
 		_ = srv.Shutdown(sctx)
+		_ = s.db.Close()
+		if s.RestartRequested() {
+			if _, err := ApplyPendingPanelRestore(s.cfg.DataDir); err != nil {
+				slog.Error("apply pending panel restore failed", "err", err)
+			}
+		}
 		return nil
 	case err := <-errc:
 		if errors.Is(err, http.ErrServerClosed) {

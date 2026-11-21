@@ -13,6 +13,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	// setup & auth
 	mux.HandleFunc("GET /api/setup/status", public(s.handleSetupStatus))
 	mux.HandleFunc("POST /api/setup", public(s.handleSetup))
+	mux.HandleFunc("POST /api/setup/restore", public(s.handleSetupRestore))
 	mux.HandleFunc("POST /api/auth/login", public(s.handleLogin))
 	mux.HandleFunc("POST /api/auth/totp", public(s.handleTOTPLogin))
 	mux.HandleFunc("POST /api/auth/logout", public(s.handleLogout))
@@ -192,7 +193,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	h("PUT /api/settings", A, s.handleSaveSettings)
 	h("GET /api/system/info", V, s.handleSystemInfo)
 	h("GET /api/system/master-key", A, s.handleMasterKey)
+	h("GET /api/system/panel-backups", A, s.handleListPanelBackups)
 	h("POST /api/system/panel-backup", A, s.handlePanelBackup)
+	h("POST /api/system/panel-restore", A, s.handleSystemPanelRestore)
 
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]any{"error": "接口不存在"})
