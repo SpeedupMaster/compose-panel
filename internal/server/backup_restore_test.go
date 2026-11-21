@@ -243,3 +243,49 @@ func TestRestoreValidationCrossInstanceAndLegacyPayload(t *testing.T) {
 		t.Fatalf("legacy restored file = %q (err=%v), want legacy-ok", string(got), err)
 	}
 }
+
+func TestRestoreAndImportRejectMismatchedTarFormat(t *testing.T) {
+	srv := newTestServer(t)
+	srv.dk = fakeDockerServer(t, nil, []map[string]any{{"Name": "app_vol"}})
+	admin := &User{ID: 1, Username: "admin", Role: "admin", Level: roleAdmin}
+
+	// Upload with kind=volume & format=sql must be rejected.
+	upReq := httptest.NewRequest(http.MethodPost, "/api/backups/import/upload?name=dump.sql&kind=volume&format=sql", strings.NewReader("SELECT 1;"))
+	if err := srv.handleImportUpload(httptest.NewRecorder(), upReq, admin); err == nil {
+		t.Fatalf("expected kind=volume with format=sql upload to fail")
+	}
+
+	// Restoring a format=sql record as kind=volume or kind=dir must be rejected synchronously.
+	bres, _ := srv.db.Exec(`INSERT INTO backups(policy_id,source,label,storage_id,object_key,size,sha256,encrypted,format,status,started_at,finished_at,origin) VALUES(NULL,'{"kind":"database"}','bad-fmt',1,'imported/a.sql',9,'',0,'sql','success',1,1,'upload')`)
+	bid, _ := bres.LastInsertId()
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/backups/%d/restore", bid), strings.NewReader(`{"kind":"volume","mode":"overwrite","volume":"app_vol","confirm":"app_vol"}`))
+	req.SetPathValue("id", fmt.Sprint(bid))
+	if err := srv.handleRestoreBackup(httptest.NewRecorder(), req, admin); err == nil {
+		t.Fatalf("expected restoring sql backup into volume to fail")
+	}
+}
+
+func TestRunningGuardsBlockPausedContainers(t *testing.T) {
+	srv := newTestServer(t)
+	dataDir := filepath.Join(srv.cfg.ProjectsDir, "app", "data")
+	srv.dk = fakeDockerServer(t, []map[string]any{
+		{
+			"Id":    "c-paused",
+			"Names": []string{"/app-paused-1"},
+			"State": "paused",
+			"Mounts": []map[string]any{
+				{"Type": "volume", "Name": "paused_vol", "Destination": "/data"},
+				{"Type": "bind", "Source": dataDir, "Destination": "/app/data"},
+			},
+		},
+	}, nil)
+
+	vh, err := srv.runningVolumeHolders(context.Background(), "paused_vol")
+	if err != nil || len(vh) != 1 || vh[0] != "app-paused-1" {
+		t.Fatalf("paused container should block volume overwrite, got %v (err=%v)", vh, err)
+	}
+	bh, err := srv.runningBindHolders(context.Background(), dataDir)
+	if err != nil || len(bh) != 1 || bh[0] != "app-paused-1" {
+		t.Fatalf("paused container should block dir overwrite, got %v (err=%v)", bh, err)
+	}
+}

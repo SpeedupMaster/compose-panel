@@ -780,6 +780,13 @@ func pathOverlaps(a, b string) bool {
 	return strings.HasPrefix(cb, aPfx) || strings.HasPrefix(ca, bPfx)
 }
 
+func containerBlocksOverwrite(state string) bool {
+	if state == "" {
+		return true
+	}
+	return state != "exited" && state != "created" && state != "dead"
+}
+
 func (s *Server) runningVolumeHolders(ctx context.Context, volume string) ([]string, error) {
 	cs, err := s.dk.ListContainers(ctx, false, nil)
 	if err != nil {
@@ -787,7 +794,7 @@ func (s *Server) runningVolumeHolders(ctx context.Context, volume string) ([]str
 	}
 	var names []string
 	for _, c := range cs {
-		if c.State != "" && c.State != "running" {
+		if !containerBlocksOverwrite(c.State) {
 			continue
 		}
 		for _, m := range c.Mounts {
@@ -812,7 +819,7 @@ func (s *Server) runningBindHolders(ctx context.Context, targetDir string) ([]st
 	}
 	var names []string
 	for _, c := range cs {
-		if c.State != "" && c.State != "running" {
+		if !containerBlocksOverwrite(c.State) {
 			continue
 		}
 		for _, m := range c.Mounts {
@@ -915,6 +922,9 @@ func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request, u *
 		plan.TargetLabel = d.Name + "/" + targetDB
 
 	case "volume":
+		if b.Format != "" && b.Format != "tar" {
+			return bad("备份格式 %s 不是 tar 归档，无法恢复到数据卷", b.Format)
+		}
 		vol := strings.TrimSpace(req.Volume)
 		if vol == "" {
 			vol = strings.TrimSpace(req.Target)
@@ -941,6 +951,9 @@ func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request, u *
 		plan.TargetLabel = "volume/" + vol
 
 	case "dir":
+		if b.Format != "" && b.Format != "tar" {
+			return bad("备份格式 %s 不是 tar 归档，无法恢复到项目目录", b.Format)
+		}
 		pid := req.ProjectID
 		if pid == 0 {
 			pid = b.Source.ProjectID
@@ -1055,13 +1068,28 @@ func (s *Server) runRestore(run *jobRun, b *backupRow, plan restorePlan, identit
 			}
 		}
 
+		if plan.Mode == "overwrite" && dbExists {
+			run.Logf("==> 覆盖前先备份当前库 %s", plan.Database)
+			curSrc := BackupSource{Kind: "database", InstanceID: d.ID, Database: plan.Database}
+			if _, err := s.runBackup(run, backupRequest{Source: curSrc, StorageID: safetySID, Encrypt: b.Encrypted, Actor: actor}); err != nil {
+				return fmt.Errorf("覆盖前备份失败，已中止：%w", err)
+			}
+		}
+		run.SetProgress(35)
+		// Open and verify decryption/decompression BEFORE dropping or creating target database!
+		rc, err := backup.OpenObject(ctx, st, b.ObjectKey, b.Encrypted, identities...)
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+		br := bufio.NewReaderSize(rc, 64<<10)
+		magic, peekErr := br.Peek(5)
+		if len(magic) == 0 && peekErr != nil && peekErr != io.EOF {
+			return fmt.Errorf("读取备份流失败：%w", peekErr)
+		}
+
 		if plan.Mode == "overwrite" {
 			if dbExists {
-				run.Logf("==> 覆盖前先备份当前库 %s", plan.Database)
-				curSrc := BackupSource{Kind: "database", InstanceID: d.ID, Database: plan.Database}
-				if _, err := s.runBackup(run, backupRequest{Source: curSrc, StorageID: safetySID, Encrypt: b.Encrypted, Actor: actor}); err != nil {
-					return fmt.Errorf("覆盖前备份失败，已中止：%w", err)
-				}
 				if d.Engine == "mysql" || d.Engine == "mariadb" {
 					if err := cl.DropDatabase(ctx, plan.Database); err != nil {
 						return err
@@ -1084,20 +1112,11 @@ func (s *Server) runRestore(run *jobRun, b *backupRow, plan restorePlan, identit
 				}
 			}
 		}
-		run.SetProgress(40)
+		run.SetProgress(45)
 		run.Logf("==> 导入数据到 %s", plan.TargetLabel)
-		rc, err := backup.OpenObject(ctx, st, b.ObjectKey, b.Encrypted, identities...)
-		if err != nil {
-			return err
-		}
-		defer rc.Close()
 
-		var input io.Reader = rc
 		var cmd *exec.Cmd
 		if d.Engine == "postgres" {
-			br := bufio.NewReaderSize(rc, 64<<10)
-			magic, _ := br.Peek(5)
-			input = br
 			if string(magic) == "PGDMP" {
 				cmd, err = cl.RestoreCmd(ctx, plan.SourceDatabase, plan.Database, plan.Mode == "overwrite")
 			} else {
@@ -1115,7 +1134,7 @@ func (s *Server) runRestore(run *jobRun, b *backupRow, plan restorePlan, identit
 		if err != nil {
 			return err
 		}
-		if err := dbmgr.RunWithInput(cmd, input, run); err != nil {
+		if err := dbmgr.RunWithInput(cmd, br, run); err != nil {
 			return fmt.Errorf("导入失败：%w", err)
 		}
 
@@ -1138,7 +1157,7 @@ func (s *Server) runRestore(run *jobRun, b *backupRow, plan restorePlan, identit
 				return fmt.Errorf("检查容器挂载状态失败：%w", herr)
 			}
 			if len(holders) > 0 {
-				return fmt.Errorf("数据卷 %s 正被运行中的容器挂载（%s），请先停止相关容器", plan.Volume, strings.Join(holders, ", "))
+				return fmt.Errorf("数据卷 %s 正被运行中或已暂停的容器挂载（%s），请先停止相关容器", plan.Volume, strings.Join(holders, ", "))
 			}
 			run.Logf("==> 覆盖前先备份当前数据卷 %s", plan.Volume)
 			curSrc := BackupSource{Kind: "volume", Volume: plan.Volume}
@@ -1146,31 +1165,41 @@ func (s *Server) runRestore(run *jobRun, b *backupRow, plan restorePlan, identit
 				return fmt.Errorf("覆盖前备份失败，已中止：%w", err)
 			}
 			run.SetProgress(40)
+			// Verify decryption/decompression stream BEFORE wiping live volume!
 			rc, err := backup.OpenObject(ctx, st, b.ObjectKey, b.Encrypted, identities...)
 			if err != nil {
 				return err
 			}
 			defer rc.Close()
+			br := bufio.NewReaderSize(rc, 64<<10)
+			if head, perr := br.Peek(1); len(head) == 0 && perr != nil && perr != io.EOF {
+				return fmt.Errorf("读取备份归档失败，已取消清空数据卷：%w", perr)
+			}
 			run.Logf("==> 清空并解包到数据卷 %s", plan.Volume)
 			cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-i", "--network", "none", "-v", plan.Volume+":/v", s.cfg.HelperImage,
-				"sh", "-c", "rm -rf /v/* /v/.[!.]* /v/..?* 2>/dev/null || true; tar -C /v -xf -")
-			if err := dbmgr.RunWithInput(cmd, rc, run); err != nil {
+				"sh", "-c", "set -e; find /v -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; tar -C /v -xf -")
+			if err := dbmgr.RunWithInput(cmd, br, run); err != nil {
 				return err
 			}
 		} else {
 			if volExists {
 				return fmt.Errorf("数据卷 %s 已存在，请换一个名字或选择覆盖模式", plan.Volume)
 			}
-			if err := s.dk.CreateVolume(ctx, plan.Volume, map[string]string{"panel.restored-from": b.ObjectKey}); err != nil {
-				return err
-			}
 			rc, err := backup.OpenObject(ctx, st, b.ObjectKey, b.Encrypted, identities...)
 			if err != nil {
 				return err
 			}
 			defer rc.Close()
+			br := bufio.NewReaderSize(rc, 64<<10)
+			if head, perr := br.Peek(1); len(head) == 0 && perr != nil && perr != io.EOF {
+				return fmt.Errorf("读取备份归档失败：%w", perr)
+			}
+			if err := s.dk.CreateVolume(ctx, plan.Volume, map[string]string{"panel.restored-from": b.ObjectKey}); err != nil {
+				return err
+			}
 			cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-i", "--network", "none", "-v", plan.Volume+":/v", s.cfg.HelperImage, "tar", "-C", "/v", "-xf", "-")
-			if err := dbmgr.RunWithInput(cmd, rc, run); err != nil {
+			if err := dbmgr.RunWithInput(cmd, br, run); err != nil {
+				_ = s.dk.RemoveVolume(context.Background(), plan.Volume)
 				return err
 			}
 		}

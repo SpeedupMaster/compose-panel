@@ -210,7 +210,7 @@ func (s *Server) hasUsers() bool {
 }
 
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) error {
-	return ok(w, map[string]any{"needed": !s.hasUsers(), "version": Version})
+	return ok(w, map[string]any{"needed": !s.hasUsers(), "version": Version, "bootId": s.bootID})
 }
 
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) error {
@@ -220,6 +220,8 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) error {
 	if err := readJSON(r, &req); err != nil {
 		return err
 	}
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
 	if s.hasUsers() {
 		return errStatus(409, "已经初始化")
 	}

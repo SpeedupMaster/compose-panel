@@ -645,6 +645,8 @@ func (c Client) RestoreCmd(ctx context.Context, sourceDB, database string, clean
 	return nil, fmt.Errorf("%s 暂不支持在面板中恢复，请下载备份手动恢复", c.Engine)
 }
 
+const pgUserSchemasQuery = `SELECT nspname FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema'`
+
 // ResetPostgresSchemas terminates other connections to database, drops all non-system
 // schemas, and recreates the public schema while preserving database ownership and CONNECT grants.
 func (c Client) ResetPostgresSchemas(ctx context.Context, database string) error {
@@ -665,7 +667,7 @@ func (c Client) ResetPostgresSchemas(ctx context.Context, database string) error
 	)); err == nil && len(rows) > 0 && len(rows[0]) > 0 {
 		owner = strings.TrimSpace(rows[0][0])
 	}
-	schemas, err := c.rows(ctx, database, `SELECT nspname FROM pg_namespace WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema'`)
+	schemas, err := c.rows(ctx, database, pgUserSchemasQuery)
 	if err != nil {
 		return fmt.Errorf("读取 Schema 列表失败：%w", err)
 	}

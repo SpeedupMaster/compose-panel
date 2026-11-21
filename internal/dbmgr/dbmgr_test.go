@@ -104,3 +104,12 @@ func TestMongoRestoreCmdNamespaceMapping(t *testing.T) {
 		t.Fatalf("unexpected wildcard mongo restore args: %s", joined2)
 	}
 }
+
+func TestPostgresUserSchemasQueryEscapesPGPrefix(t *testing.T) {
+	if strings.Contains(pgUserSchemasQuery, "LIKE 'pg_%'") {
+		t.Fatalf("pgUserSchemasQuery uses unescaped LIKE 'pg_%%' wildcard: %s", pgUserSchemasQuery)
+	}
+	if !strings.Contains(pgUserSchemasQuery, `!~ '^pg_'`) {
+		t.Fatalf("expected regex ^pg_ filter in pgUserSchemasQuery, got: %s", pgUserSchemasQuery)
+	}
+}

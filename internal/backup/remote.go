@@ -190,6 +190,26 @@ func (s *SFTP) Test(ctx context.Context) error {
 	return c.Remove(p)
 }
 
+func sftpRelKey(root, cur string) string {
+	rootClean := path.Clean(root)
+	curClean := path.Clean(cur)
+	if curClean == rootClean {
+		return ""
+	}
+	switch rootClean {
+	case ".", "":
+		return strings.TrimPrefix(curClean, "./")
+	case "/":
+		return strings.TrimPrefix(curClean, "/")
+	default:
+		rootPrefix := strings.TrimRight(rootClean, "/") + "/"
+		if !strings.HasPrefix(curClean, rootPrefix) {
+			return ""
+		}
+		return strings.TrimPrefix(curClean, rootPrefix)
+	}
+}
+
 func (s *SFTP) List(ctx context.Context) ([]ObjectInfo, error) {
 	c, err := s.dial(ctx)
 	if err != nil {
@@ -202,34 +222,23 @@ func (s *SFTP) List(ctx context.Context) ([]ObjectInfo, error) {
 		}
 		return nil, err
 	}
-	rootClean := strings.TrimRight(path.Clean(s.root), "/")
 	out := []ObjectInfo{}
 	w := c.Walk(s.root)
 	for w.Step() {
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
-		if w.Err() != nil {
-			continue
+		if err := w.Err(); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return out, err
 		}
 		fi := w.Stat()
 		if fi == nil {
 			continue
 		}
-		cur := path.Clean(w.Path())
-		if cur == rootClean {
-			continue
-		}
-		var rel string
-		switch {
-		case rootClean == "." || rootClean == "":
-			rel = strings.TrimLeft(cur, "./")
-		case rootClean == "/":
-			rel = strings.TrimLeft(cur, "/")
-		default:
-			rel = strings.TrimPrefix(cur, rootClean+"/")
-		}
-		rel = strings.TrimLeft(rel, "/")
+		rel := sftpRelKey(s.root, w.Path())
 		if rel == "" {
 			continue
 		}

@@ -1,10 +1,13 @@
 package backup
 
 import (
+	"archive/tar"
 	"bytes"
 	"compress/gzip"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -248,5 +251,110 @@ func TestParseBackupKeyAndIgnoreRules(t *testing.T) {
 		if IsIgnoredObjectKey(k) {
 			t.Errorf("IsIgnoredObjectKey(%q) = true, want false", k)
 		}
+	}
+}
+
+func TestParseBackupKeyInLocation(t *testing.T) {
+	shanghai := time.FixedZone("Asia/Shanghai", 8*3600)
+	got := ParseBackupKeyInLocation("pg-main_app/20261120-030000.pgdump.zst.age", shanghai)
+	want := time.Date(2026, 11, 20, 3, 0, 0, 0, shanghai)
+	if !got.Timestamp.Equal(want) {
+		t.Fatalf("Timestamp = %v (%d), want %v (%d)", got.Timestamp, got.Timestamp.Unix(), want, want.Unix())
+	}
+}
+
+func TestUntarDirBlocksSymlinkTraversal(t *testing.T) {
+	makeTar := func(entries []struct {
+		name     string
+		typeflag byte
+		linkname string
+		body     string
+	}) []byte {
+		var buf bytes.Buffer
+		tw := tar.NewWriter(&buf)
+		for _, e := range entries {
+			hdr := &tar.Header{
+				Name:     e.name,
+				Typeflag: e.typeflag,
+				Linkname: e.linkname,
+				Mode:     0o644,
+				Size:     int64(len(e.body)),
+			}
+			if e.typeflag == tar.TypeDir {
+				hdr.Mode = 0o755
+			}
+			if err := tw.WriteHeader(hdr); err != nil {
+				t.Fatal(err)
+			}
+			if e.typeflag == tar.TypeReg {
+				if _, err := tw.Write([]byte(e.body)); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		_ = tw.Close()
+		return buf.Bytes()
+	}
+
+	// 1. Absolute symlink + file through symlink MUST fail and not write outside dir.
+	outside := t.TempDir()
+	dst1 := filepath.Join(t.TempDir(), "extract1")
+	tar1 := makeTar([]struct {
+		name     string
+		typeflag byte
+		linkname string
+		body     string
+	}{
+		{name: "sub", typeflag: tar.TypeSymlink, linkname: outside},
+		{name: "sub/pwned.txt", typeflag: tar.TypeReg, body: "owned"},
+	})
+	if err := UntarDir(bytes.NewReader(tar1), dst1); err == nil {
+		t.Fatalf("expected absolute symlink tar-slip to fail")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "pwned.txt")); !os.IsNotExist(err) {
+		t.Fatalf("tar-slip wrote outside target dir!")
+	}
+
+	// 2. Relative symlink escaping target dir MUST fail.
+	dst2 := filepath.Join(t.TempDir(), "extract2")
+	tar2 := makeTar([]struct {
+		name     string
+		typeflag byte
+		linkname string
+		body     string
+	}{
+		{name: "nested/escape", typeflag: tar.TypeSymlink, linkname: "../../outside"},
+	})
+	if err := UntarDir(bytes.NewReader(tar2), dst2); err == nil {
+		t.Fatalf("expected escaping relative symlink to fail")
+	}
+
+	// 3. Hardlink entry MUST fail.
+	dst3 := filepath.Join(t.TempDir(), "extract3")
+	tar3 := makeTar([]struct {
+		name     string
+		typeflag byte
+		linkname string
+		body     string
+	}{
+		{name: "hard", typeflag: tar.TypeLink, linkname: "/etc/passwd"},
+	})
+	if err := UntarDir(bytes.NewReader(tar3), dst3); err == nil {
+		t.Fatalf("expected hardlink entry to be rejected")
+	}
+
+	// 4. Safe internal relative symlink stays allowed.
+	dst4 := filepath.Join(t.TempDir(), "extract4")
+	tar4 := makeTar([]struct {
+		name     string
+		typeflag byte
+		linkname string
+		body     string
+	}{
+		{name: "b/ok.txt", typeflag: tar.TypeReg, body: "safe"},
+		{name: "a/link.txt", typeflag: tar.TypeSymlink, linkname: "../b/ok.txt"},
+	})
+	if err := UntarDir(bytes.NewReader(tar4), dst4); err != nil {
+		t.Fatalf("safe internal symlink rejected: %v", err)
 	}
 }

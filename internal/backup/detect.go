@@ -51,8 +51,17 @@ func IsIgnoredObjectKey(key string) bool {
 	return false
 }
 
-// ParseBackupKey infers backup kind, format, compression, encryption, label and timestamp from key.
+// ParseBackupKey infers backup metadata from key, parsing timestamps in UTC.
 func ParseBackupKey(key string) ParsedBackup {
+	return ParseBackupKeyInLocation(key, time.UTC)
+}
+
+// ParseBackupKeyInLocation infers backup kind, format, compression, encryption, label and
+// timestamp (interpreted in loc, defaulting to UTC if nil) from key.
+func ParseBackupKeyInLocation(key string, loc *time.Location) ParsedBackup {
+	if loc == nil {
+		loc = time.UTC
+	}
 	clean := strings.Trim(strings.ReplaceAll(key, "\\", "/"), "/")
 	dir, base := path.Split(clean)
 	dir = strings.Trim(dir, "/")
@@ -127,7 +136,7 @@ func ParseBackupKey(key string) ParsedBackup {
 	}
 
 	if m := backupStampRe.FindStringSubmatch(stem); len(m) == 2 {
-		if ts, err := time.Parse("20060102-150405", m[1]); err == nil {
+		if ts, err := time.ParseInLocation("20060102-150405", m[1], loc); err == nil {
 			out.Timestamp = ts
 		}
 	}

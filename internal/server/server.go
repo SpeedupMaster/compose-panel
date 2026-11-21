@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -59,6 +60,11 @@ type Server struct {
 	restartMu      sync.Mutex
 	restartWanted  bool
 	runCancel      context.CancelFunc
+	bgCtx          context.Context
+	bgCancel       context.CancelFunc
+	bgWG           sync.WaitGroup
+	setupMu        sync.Mutex
+	bootID         string
 	startedAt      time.Time
 	setupToken     string
 }
@@ -94,17 +100,21 @@ func New(cfg config.Config, web fs.FS) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	bgCtx, bgCancel := context.WithCancel(context.Background())
 	s := &Server{
 		cfg: cfg, db: db, box: box,
-		dk:        docker.New(cfg.DockerHost),
-		caddy:     proxy.New(cfg.CaddyAdmin),
-		jobs:      jm,
-		notify:    notify.New(db, box),
-		web:       web,
+		dk:         docker.New(cfg.DockerHost),
+		caddy:      proxy.New(cfg.CaddyAdmin),
+		jobs:       jm,
+		notify:     notify.New(db, box),
+		web:        web,
 		cronIDs:    map[string]cron.EntryID{},
 		cronMeta:   map[cron.EntryID]scheduleMeta{},
 		loginFail:  map[string][]time.Time{},
 		gdriveAuth: map[string]*gdriveOAuthState{},
+		bgCtx:      bgCtx,
+		bgCancel:   bgCancel,
+		bootID:     auth.RandomToken(8),
 		startedAt:  time.Now(),
 	}
 	if err := s.initDefaults(); err != nil {
@@ -271,6 +281,14 @@ func (s *Server) requestRestart() {
 	}
 }
 
+func (s *Server) goBackground(fn func(ctx context.Context)) {
+	s.bgWG.Add(1)
+	go func() {
+		defer s.bgWG.Done()
+		fn(s.bgCtx)
+	}()
+}
+
 // Run serves HTTP and the background loops until ctx is canceled or a panel restore requests restart.
 func (s *Server) Run(ctx context.Context) error {
 	runCtx, runCancel := context.WithCancel(ctx)
@@ -287,30 +305,36 @@ func (s *Server) Run(ctx context.Context) error {
 		Addr:              s.cfg.Listen,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 15 * time.Second,
+		BaseContext:       func(_ net.Listener) context.Context { return runCtx },
 	}
 	s.startScheduler()
-	go s.monitorLoop(runCtx)
-	go s.metricsLoop(runCtx)
-	go s.eventsLoop(runCtx)
-	go func() {
+	s.goBackground(s.monitorLoop)
+	s.goBackground(s.metricsLoop)
+	s.goBackground(s.eventsLoop)
+	s.goBackground(func(bgCtx context.Context) {
 		// Push proxy config once Caddy is reachable.
 		for i := 0; i < 30; i++ {
-			if runCtx.Err() != nil {
+			if bgCtx.Err() != nil {
 				return
 			}
-			if err := s.syncCaddy(context.Background()); err == nil {
+			cctx, cancel := context.WithTimeout(bgCtx, 10*time.Second)
+			err := s.syncCaddy(cctx)
+			cancel()
+			if err == nil {
 				slog.Info("caddy config loaded")
 				return
 			} else if i == 0 {
 				slog.Warn("caddy not ready", "err", err)
 			}
+			timer := time.NewTimer(5 * time.Second)
 			select {
-			case <-runCtx.Done():
+			case <-bgCtx.Done():
+				timer.Stop()
 				return
-			case <-time.After(5 * time.Second):
+			case <-timer.C:
 			}
 		}
-	}()
+	})
 	errc := make(chan error, 1)
 	go func() {
 		slog.Info("compose-panel listening", "addr", s.cfg.Listen, "version", Version)
@@ -318,12 +342,15 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 	select {
 	case <-runCtx.Done():
+		s.bgCancel()
+		if s.cron != nil {
+			<-s.cron.Stop().Done()
+		}
+		s.notify.Close()
 		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if s.cron != nil {
-			s.cron.Stop()
-		}
 		_ = srv.Shutdown(sctx)
+		s.bgWG.Wait()
 		_ = s.db.Close()
 		if s.RestartRequested() {
 			if _, err := ApplyPendingPanelRestore(s.cfg.DataDir); err != nil {
@@ -332,6 +359,13 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		return nil
 	case err := <-errc:
+		s.bgCancel()
+		if s.cron != nil {
+			<-s.cron.Stop().Done()
+		}
+		s.notify.Close()
+		s.bgWG.Wait()
+		_ = s.db.Close()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}

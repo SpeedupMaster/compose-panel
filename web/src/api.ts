@@ -134,12 +134,15 @@ export function upload<T = any>(method: 'PUT' | 'POST', path: string, file: Blob
 }
 
 // Uploads a multipart FormData payload with progress; resolves with the JSON response.
-export function uploadForm<T = any>(path: string, form: FormData, onProgress?: (pct: number) => void): Promise<T> {
+export function uploadForm<T = any>(path: string, form: FormData, onProgress?: (pct: number) => void, extraHeaders?: Record<string, string>): Promise<T> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('POST', '/api' + path)
     xhr.withCredentials = true
     xhr.setRequestHeader('X-Panel', '1')
+    if (extraHeaders) {
+      for (const [k, v] of Object.entries(extraHeaders)) xhr.setRequestHeader(k, v)
+    }
     if (onProgress) xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 100))
     xhr.onload = () => {
       let data: any = null

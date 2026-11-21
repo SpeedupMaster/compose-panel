@@ -26,6 +26,7 @@ export default function Login() {
   const [summary, setSummary] = useState<PanelRestoreSummary | null>(null)
   const [progress, setProgress] = useState<number | null>(null)
   const [restarting, setRestarting] = useState(false)
+  const [prevBootId, setPrevBootId] = useState<string | undefined>()
   const [err, setErr] = useState<unknown>()
   const [busy, setBusy] = useState(false)
 
@@ -48,10 +49,11 @@ export default function Login() {
     if (dryRun) fd.append('dryRun', '1')
     setProgress(0)
     try {
-      const r = await uploadForm('/setup/restore', fd, setProgress)
+      const r = await uploadForm('/setup/restore', fd, setProgress, { 'X-Setup-Token': token.trim() })
       if (dryRun) {
         setSummary(r.summary)
       } else if (r?.restarting) {
+        setPrevBootId(r.bootId)
         setRestarting(true)
       }
     } finally {
@@ -218,7 +220,7 @@ export default function Login() {
         )}
         {mode === 'login' && <p className="label" style={{ margin: 0 }}>忘记密码？在服务器上运行 <code className="mono">panel reset-password &lt;用户名&gt;</code>。</p>}
       </form>
-      {restarting && <RestartWaitOverlay title="正在从备份恢复面板…" />}
+      {restarting && <RestartWaitOverlay title="正在从备份恢复面板…" prevBootId={prevBootId} />}
     </div>
   )
 }

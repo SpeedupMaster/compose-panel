@@ -49,6 +49,19 @@ func validImportFormat(f string) bool {
 	return false
 }
 
+func validKindFormat(kind, format string) bool {
+	switch kind {
+	case "database":
+		return format == "pgdump" || format == "sql" || format == "archive" || format == "rdb"
+	case "volume", "dir":
+		return format == "tar"
+	case "panel":
+		return format == "sqlite"
+	default:
+		return false
+	}
+}
+
 func sanitizeImportFilename(raw string) string {
 	base := filepath.Base(strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/"))
 	if base == "" || base == "." || base == "/" {
@@ -95,7 +108,7 @@ func (s *Server) handleImportUpload(w http.ResponseWriter, r *http.Request, u *U
 		return bad("存储目标不可用：%v", err)
 	}
 
-	parsed := backup.ParseBackupKey(rawName)
+	parsed := backup.ParseBackupKeyInLocation(rawName, s.location())
 	kind := strings.TrimSpace(q.Get("kind"))
 	if kind == "" {
 		kind = parsed.Kind
@@ -115,8 +128,8 @@ func (s *Server) handleImportUpload(w http.ResponseWriter, r *http.Request, u *U
 			format = "sqlite"
 		}
 	}
-	if !validImportFormat(format) {
-		return bad("无法识别备份格式，请手动选择")
+	if !validImportFormat(format) || !validKindFormat(kind, format) {
+		return bad("备份格式 %s 与所选类型 %s 不匹配", format, kind)
 	}
 	label := strings.TrimSpace(q.Get("label"))
 	if label == "" {
@@ -218,9 +231,10 @@ func (s *Server) handleScanStorage(w http.ResponseWriter, r *http.Request, u *Us
 		rows.Close()
 	}
 
+	loc := s.location()
 	items := make([]scannedBackupItem, 0, len(objs))
 	for _, obj := range objs {
-		p := backup.ParseBackupKey(obj.Key)
+		p := backup.ParseBackupKeyInLocation(obj.Key, loc)
 		modTS := int64(0)
 		if !obj.ModTime.IsZero() {
 			modTS = obj.ModTime.Unix()
@@ -299,6 +313,7 @@ func (s *Server) handleImportStorage(w http.ResponseWriter, r *http.Request, u *
 		rows.Close()
 	}
 
+	loc := s.location()
 	now := time.Now().Unix()
 	imported := []backupRow{}
 	skipped := 0
@@ -311,7 +326,7 @@ func (s *Server) handleImportStorage(w http.ResponseWriter, r *http.Request, u *
 			skipped++
 			continue
 		}
-		parsed := backup.ParseBackupKey(cleanKey)
+		parsed := backup.ParseBackupKeyInLocation(cleanKey, loc)
 		kind := strings.TrimSpace(it.Kind)
 		if kind == "" {
 			kind = parsed.Kind
@@ -331,8 +346,8 @@ func (s *Server) handleImportStorage(w http.ResponseWriter, r *http.Request, u *
 				format = "sqlite"
 			}
 		}
-		if !validImportFormat(format) {
-			return bad("备份 %s 的格式无效，请手动指定", cleanKey)
+		if !validImportFormat(format) || !validKindFormat(kind, format) {
+			return bad("备份 %s 的格式 %s 与类型 %s 不匹配", cleanKey, format, kind)
 		}
 		label := strings.TrimSpace(it.Label)
 		if label == "" {

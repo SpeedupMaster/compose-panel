@@ -34,7 +34,7 @@ export function PanelSummaryGrid({ summary }: { summary: PanelRestoreSummary }) 
   )
 }
 
-export function RestartWaitOverlay({ title = '正在恢复面板并重启…' }: { title?: string }) {
+export function RestartWaitOverlay({ title = '正在恢复面板并重启…', prevBootId }: { title?: string; prevBootId?: string }) {
   const [elapsed, setElapsed] = useState(0)
   const [timedOut, setTimedOut] = useState(false)
 
@@ -55,8 +55,9 @@ export function RestartWaitOverlay({ title = '正在恢复面板并重启…' }:
         const res = await fetch('/api/setup/status', { cache: 'no-store' })
         if (res.ok) {
           const data = await res.json().catch(() => null)
-          // Wait at least 1.2s (or after seeing a restart blip) so we don't redirect before reload finishes.
-          if ((sawDown || Date.now() - started > 1500) && data && data.needed === false) {
+          const bootChanged = !!prevBootId && !!data?.bootId && data.bootId !== prevBootId
+          const ready = prevBootId ? bootChanged : sawDown
+          if (ready && data && data.needed === false) {
             stopped = true
             window.location.href = '/login?restored=1'
             return
@@ -67,15 +68,15 @@ export function RestartWaitOverlay({ title = '正在恢复面板并重启…' }:
       } catch {
         sawDown = true
       }
-      if (!stopped) window.setTimeout(tick, 1000)
+      if (!stopped) window.setTimeout(tick, 800)
     }
 
-    const t = window.setTimeout(tick, 900)
+    const t = window.setTimeout(tick, 600)
     return () => {
       stopped = true
       window.clearTimeout(t)
     }
-  }, [])
+  }, [prevBootId])
 
   return (
     <Modal title={title} onClose={() => {}}>
@@ -112,6 +113,7 @@ export function PanelRestoreModal({ backup, initialSnapshot, onClose }: { backup
   const [progress, setProgress] = useState<number | null>(null)
   const [err, setErr] = useState<unknown>()
   const [restarting, setRestarting] = useState(false)
+  const [prevBootId, setPrevBootId] = useState<string | undefined>()
 
   useEffect(() => {
     if (!fromRecord && !snapshot && snaps && snaps.length > 0) {
@@ -160,6 +162,7 @@ export function PanelRestoreModal({ backup, initialSnapshot, onClose }: { backup
       if (dryRun) {
         setSummary(res.summary)
       } else if (res?.restarting) {
+        setPrevBootId(res.bootId)
         setRestarting(true)
       }
     } catch (e) {
@@ -171,7 +174,7 @@ export function PanelRestoreModal({ backup, initialSnapshot, onClose }: { backup
   }
 
   if (restarting) {
-    return <RestartWaitOverlay />
+    return <RestartWaitOverlay prevBootId={prevBootId} />
   }
 
   const canCheck = fromRecord || (sourceTab === 'snapshot' ? !!snapshot : !!file)

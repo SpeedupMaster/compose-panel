@@ -207,12 +207,22 @@ func ApplyPendingPanelRestore(dataDir string) (bool, error) {
 
 	if _, err := os.Stat(pendingDB); err != nil {
 		if os.IsNotExist(err) {
+			_ = os.Remove(pendingKey)
 			return hasClear, nil
 		}
 		return false, err
 	}
 
 	liveDB := filepath.Join(dataDir, "panel.db")
+	// Swap master.key FIRST while panel.db.pending still exists on disk as the commit marker:
+	// if a crash occurs mid-swap, panel.db.pending remains present so reboot finishes the swap.
+	if _, err := os.Stat(pendingKey); err == nil {
+		liveKey := filepath.Join(dataDir, "master.key")
+		if err := os.Rename(pendingKey, liveKey); err != nil {
+			return false, fmt.Errorf("替换 master.key 失败：%w", err)
+		}
+		_ = os.Chmod(liveKey, 0o600)
+	}
 	for _, suffix := range []string{"-wal", "-shm"} {
 		if err := os.Remove(liveDB + suffix); err != nil && !os.IsNotExist(err) {
 			return false, fmt.Errorf("清理旧 WAL 文件失败：%w", err)
@@ -222,14 +232,6 @@ func ApplyPendingPanelRestore(dataDir string) (bool, error) {
 		return false, fmt.Errorf("替换 panel.db 失败：%w", err)
 	}
 	_ = os.Chmod(liveDB, 0o600)
-
-	if _, err := os.Stat(pendingKey); err == nil {
-		liveKey := filepath.Join(dataDir, "master.key")
-		if err := os.Rename(pendingKey, liveKey); err != nil {
-			return false, fmt.Errorf("替换 master.key 失败：%w", err)
-		}
-		_ = os.Chmod(liveKey, 0o600)
-	}
 	return hasClear, nil
 }
 
@@ -335,18 +337,22 @@ func (s *Server) stageAndTriggerPanelRestore(r *http.Request, u *User, tmpDBPath
 		}
 	}
 
-	pendingDB := filepath.Join(s.cfg.DataDir, panelPendingDBName)
-	if err := copyFileSynced(tmpDBPath, pendingDB, 0o600); err != nil {
-		return sum, fmt.Errorf("暂存 panel.db 失败：%w", err)
-	}
+	// Stage master.key.pending and clear_sessions BEFORE panel.db.pending so panel.db.pending
+	// acts as the atomic commit marker for ApplyPendingPanelRestore.
+	pendingKey := filepath.Join(s.cfg.DataDir, panelPendingKeyName)
 	if masterKeyHex != "" {
-		pendingKey := filepath.Join(s.cfg.DataDir, panelPendingKeyName)
 		if err := os.WriteFile(pendingKey, []byte(masterKeyHex+"\n"), 0o600); err != nil {
-			_ = os.Remove(pendingDB)
 			return sum, fmt.Errorf("暂存 master.key 失败：%w", err)
 		}
+	} else {
+		_ = os.Remove(pendingKey)
 	}
 	_ = os.WriteFile(filepath.Join(s.cfg.DataDir, panelClearSessionsName), []byte("1\n"), 0o600)
+	pendingDB := filepath.Join(s.cfg.DataDir, panelPendingDBName)
+	if err := copyFileSynced(tmpDBPath, pendingDB, 0o600); err != nil {
+		_ = os.Remove(pendingKey)
+		return sum, fmt.Errorf("暂存 panel.db 失败：%w", err)
+	}
 
 	if !isSetup {
 		detail := fmt.Sprintf("来源 %s（用户 %d / 项目 %d / 站点 %d）", sourceDesc, sum.Users, sum.Projects, sum.Sites)
@@ -394,7 +400,7 @@ func (s *Server) handlePanelRestoreFromBackup(w http.ResponseWriter, r *http.Req
 	if err != nil {
 		return err
 	}
-	return ok(w, map[string]any{"restarting": true, "summary": sum})
+	return ok(w, map[string]any{"restarting": true, "bootId": s.bootID, "summary": sum})
 }
 
 // handleListPanelBackups lists local _panel/panel-*.db snapshots.
@@ -539,11 +545,14 @@ func (s *Server) handleSystemPanelRestore(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		return err
 	}
-	return ok(w, map[string]any{"restarting": true, "summary": sum})
+	return ok(w, map[string]any{"restarting": true, "bootId": s.bootID, "summary": sum})
 }
 
 // handleSetupRestore handles POST /api/setup/restore on an uninitialized panel using setupToken.
 func (s *Server) handleSetupRestore(w http.ResponseWriter, r *http.Request) error {
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
+
 	if s.hasUsers() {
 		return errStatus(http.StatusConflict, "已经初始化")
 	}
@@ -552,7 +561,18 @@ func (s *Server) handleSetupRestore(w http.ResponseWriter, r *http.Request) erro
 		return errStatus(http.StatusTooManyRequests, "初始化令牌尝试次数过多，请 15 分钟后再试")
 	}
 
-	tmpDB, sourceDesc, masterKey, _, dryRun, err := s.readPanelRestoreInput(r, false, true)
+	// Reject invalid X-Setup-Token header BEFORE reading or buffering any multipart body!
+	headerToken := strings.TrimSpace(r.Header.Get("X-Setup-Token"))
+	tokenVerified := false
+	if headerToken != "" {
+		if s.setupToken == "" || !auth.ConstantEqual(headerToken, s.setupToken) {
+			s.recordFailure(rateKey)
+			return errStatus(http.StatusForbidden, "初始化令牌不正确（见面板容器日志）")
+		}
+		tokenVerified = true
+	}
+
+	tmpDB, sourceDesc, masterKey, _, dryRun, err := s.readPanelRestoreInput(r, false, !tokenVerified)
 	if err != nil {
 		return err
 	}
@@ -570,7 +590,7 @@ func (s *Server) handleSetupRestore(w http.ResponseWriter, r *http.Request) erro
 		return err
 	}
 	s.setupToken = ""
-	return ok(w, map[string]any{"restarting": true, "summary": sum})
+	return ok(w, map[string]any{"restarting": true, "bootId": s.bootID, "summary": sum})
 }
 
 func loadKeyOrPath(arg string) (string, error) {
@@ -665,15 +685,15 @@ func RestorePanelCLI(cfg config.Config, backupFile, masterKeyArg, ageKeyArg stri
 		}
 	}
 
-	if err := copyFileSynced(tmpPath, filepath.Join(cfg.DataDir, panelPendingDBName), 0o600); err != nil {
-		return err
-	}
 	if masterKeyHex != "" {
 		if err := os.WriteFile(filepath.Join(cfg.DataDir, panelPendingKeyName), []byte(masterKeyHex+"\n"), 0o600); err != nil {
 			return err
 		}
 	}
 	_ = os.WriteFile(filepath.Join(cfg.DataDir, panelClearSessionsName), []byte("1\n"), 0o600)
+	if err := copyFileSynced(tmpPath, filepath.Join(cfg.DataDir, panelPendingDBName), 0o600); err != nil {
+		return err
+	}
 	_, err = ApplyPendingPanelRestore(cfg.DataDir)
 	return err
 }

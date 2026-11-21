@@ -182,19 +182,28 @@ func (s *Server) handleCreateDatabase(w http.ResponseWriter, r *http.Request, u 
 	jobID, _ := s.startDeploy(p, "create", u.Username, 0)
 	if req.InitDB != "" {
 		// After the instance is healthy, create the first database and user.
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		s.goBackground(func(bgCtx context.Context) {
+			ctx, cancel := context.WithTimeout(bgCtx, 10*time.Minute)
 			defer cancel()
 			for ctx.Err() == nil {
 				var status string
-				_ = s.db.QueryRow(`SELECT status FROM jobs WHERE id=?`, jobID).Scan(&status)
+				_ = s.db.QueryRowContext(ctx, `SELECT status FROM jobs WHERE id=?`, jobID).Scan(&status)
 				if status == "success" {
 					break
 				}
 				if status == "failed" || status == "canceled" {
 					return
 				}
-				time.Sleep(2 * time.Second)
+				timer := time.NewTimer(2 * time.Second)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+			}
+			if ctx.Err() != nil {
+				return
 			}
 			d, err := s.getDB(id)
 			if err != nil {
@@ -207,7 +216,7 @@ func (s *Server) handleCreateDatabase(w http.ResponseWriter, r *http.Request, u 
 			if err := d.client().CreateDatabase(ctx, req.InitDB, req.InitUser, userPw); err == nil && req.InitUser != "" {
 				s.setSetting(fmt.Sprintf("dbinit_%d", id), s.box.Seal(req.InitUser+":"+userPw))
 			}
-		}()
+		})
 	}
 	s.audit(r, u, "database.create", req.Name, eng.Name+" "+req.Version+" · "+req.Exposure, nil)
 	return ok(w, map[string]any{"id": id, "projectId": pid, "jobId": jobID})

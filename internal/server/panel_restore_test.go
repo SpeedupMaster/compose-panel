@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -377,4 +378,72 @@ func TestListLocalPanelBackupsAndCLI(t *testing.T) {
 		t.Fatalf("expected alice after CLI restore, got %d", n)
 	}
 	_ = fmt.Sprint(n)
+}
+
+type poisonReader struct{ t *testing.T }
+
+func (p poisonReader) Read([]byte) (int, error) {
+	p.t.Errorf("request body must NOT be read when X-Setup-Token is invalid")
+	return 0, io.EOF
+}
+
+func TestSetupRestoreRejectsBadHeaderBeforeReadingBody(t *testing.T) {
+	srv := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/setup/restore", poisonReader{t: t})
+	req.Header.Set("Content-Type", "multipart/form-data; boundary=abc")
+	req.Header.Set("X-Setup-Token", "definitely-wrong")
+	req.RemoteAddr = "10.0.0.9:1234"
+	err := srv.handleSetupRestore(httptest.NewRecorder(), req)
+	if ae, ok := err.(*apiError); !ok || ae.Status != 403 {
+		t.Fatalf("expected 403 for bad X-Setup-Token, got %v", err)
+	}
+}
+
+func TestSetupStatusExposesUniqueBootIDAndMetricsCancelsPromptly(t *testing.T) {
+	srv1 := newTestServer(t)
+	srv2 := newTestServer(t)
+
+	getBoot := func(s *Server) string {
+		w := httptest.NewRecorder()
+		if err := s.handleSetupStatus(w, httptest.NewRequest(http.MethodGet, "/api/setup/status", nil)); err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			BootID string `json:"bootId"`
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		return out.BootID
+	}
+	b1, b2 := getBoot(srv1), getBoot(srv2)
+	if b1 == "" || b2 == "" || b1 == b2 {
+		t.Fatalf("expected unique non-empty bootIds, got %q and %q", b1, b2)
+	}
+
+	// metricsLoop must exit immediately on context cancellation instead of blocking on alignment sleep.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		srv1.metricsLoop(ctx)
+		close(done)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		t.Fatalf("metricsLoop did not exit promptly on context cancel")
+	}
+}
+
+func TestApplyPendingPanelRestoreCleansOrphanPendingKey(t *testing.T) {
+	dir := t.TempDir()
+	orphanKey := filepath.Join(dir, panelPendingKeyName)
+	if err := os.WriteFile(orphanKey, []byte("deadbeef\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyPendingPanelRestore(dir); err != nil {
+		t.Fatalf("ApplyPendingPanelRestore: %v", err)
+	}
+	if _, err := os.Stat(orphanKey); !os.IsNotExist(err) {
+		t.Fatalf("expected orphaned master.key.pending to be removed when panel.db.pending is absent, err=%v", err)
+	}
 }

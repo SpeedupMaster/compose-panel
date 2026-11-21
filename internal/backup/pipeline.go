@@ -337,9 +337,51 @@ func TarDir(dir string) io.ReadCloser {
 	return pr
 }
 
-// UntarDir extracts a tar stream into dir, refusing paths that escape it.
+func withinDir(rootClean, candidate string) bool {
+	c := filepath.Clean(candidate)
+	if c == rootClean {
+		return true
+	}
+	sep := string(filepath.Separator)
+	pfx := rootClean
+	if !strings.HasSuffix(pfx, sep) {
+		pfx += sep
+	}
+	return strings.HasPrefix(c, pfx)
+}
+
+func ensureNoSymlinkParent(rootClean, target string) error {
+	rel, err := filepath.Rel(rootClean, filepath.Dir(target))
+	if err != nil || rel == "." || rel == "" {
+		return nil
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("非法路径：%s", target)
+	}
+	cur := rootClean
+	for _, seg := range strings.Split(rel, string(filepath.Separator)) {
+		if seg == "" || seg == "." {
+			continue
+		}
+		cur = filepath.Join(cur, seg)
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("非法符号链接路径：%s", seg)
+		}
+	}
+	return nil
+}
+
+// UntarDir extracts a tar stream into dir, refusing paths, hardlinks, or symlinks that escape dir.
 func UntarDir(r io.Reader, dir string) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	cleanDir := filepath.Clean(dir)
+	if err := os.MkdirAll(cleanDir, 0o755); err != nil {
 		return err
 	}
 	tr := tar.NewReader(r)
@@ -351,18 +393,27 @@ func UntarDir(r io.Reader, dir string) error {
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(dir, filepath.FromSlash(hdr.Name))
-		if !strings.HasPrefix(target, filepath.Clean(dir)+string(os.PathSeparator)) && target != filepath.Clean(dir) {
+		target := filepath.Join(cleanDir, filepath.FromSlash(hdr.Name))
+		if !withinDir(cleanDir, target) {
 			return fmt.Errorf("非法路径：%s", hdr.Name)
+		}
+		if err := ensureNoSymlinkParent(cleanDir, target); err != nil {
+			return err
 		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
+			if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("非法符号链接目录：%s", hdr.Name)
+			}
 			if err := os.MkdirAll(target, os.FileMode(hdr.Mode)|0o700); err != nil {
 				return err
 			}
 		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
+			}
+			if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("非法符号链接文件：%s", hdr.Name)
 			}
 			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode)&0o777)
 			if err != nil {
@@ -372,9 +423,27 @@ func UntarDir(r io.Reader, dir string) error {
 				f.Close()
 				return err
 			}
-			f.Close()
+			if err := f.Close(); err != nil {
+				return err
+			}
 		case tar.TypeSymlink:
-			_ = os.Symlink(hdr.Linkname, target)
+			link := strings.TrimSpace(hdr.Linkname)
+			if link == "" || filepath.IsAbs(link) || strings.HasPrefix(link, "/") || strings.HasPrefix(link, `\`) {
+				return fmt.Errorf("非法符号链接目标：%s -> %s", hdr.Name, hdr.Linkname)
+			}
+			resolved := filepath.Join(filepath.Dir(target), filepath.FromSlash(link))
+			if !withinDir(cleanDir, resolved) {
+				return fmt.Errorf("符号链接超出目标目录：%s -> %s", hdr.Name, hdr.Linkname)
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			_ = os.Remove(target)
+			if err := os.Symlink(link, target); err != nil {
+				return fmt.Errorf("创建符号链接失败：%w", err)
+			}
+		case tar.TypeLink:
+			return fmt.Errorf("不支持包含硬链接的归档：%s", hdr.Name)
 		}
 	}
 }

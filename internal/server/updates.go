@@ -223,15 +223,15 @@ func (s *Server) settleAppliedUpdates(ctx context.Context, checks []ImageCheck) 
 // recheckAfterDeploy refreshes a project's image status against the registry
 // in the background, so a deploy that pulled new images clears its notice.
 func (s *Server) recheckAfterDeploy(projectID int64) {
-	go func() {
+	s.goBackground(func(bgCtx context.Context) {
 		p, err := s.getProject(projectID)
-		if err != nil {
+		if err != nil || bgCtx.Err() != nil {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		ctx, cancel := context.WithTimeout(bgCtx, 2*time.Minute)
 		defer cancel()
 		_, _, _ = s.checkProjectImages(ctx, p, digestCache{})
-	}()
+	})
 }
 
 func (s *Server) imageChecks(projectID int64) []ImageCheck {

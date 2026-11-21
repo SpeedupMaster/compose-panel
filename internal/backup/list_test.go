@@ -144,3 +144,27 @@ func TestWebDAVListDepth1Recursive(t *testing.T) {
 		t.Errorf("unexpected root item: %+v", it)
 	}
 }
+
+func TestSFTPRelKeyPreservesRootDotfiles(t *testing.T) {
+	cases := []struct {
+		root, cur, want string
+	}{
+		{".", ".panel-write-test", ".panel-write-test"},
+		{".", "./.panel-write-test", ".panel-write-test"},
+		{".", "./pg/a.sql", "pg/a.sql"},
+		{"/", "/.panel-write-test", ".panel-write-test"},
+		{"/", "/pg/a.sql", "pg/a.sql"},
+		{"/backups", "/backups/.panel-write-test", ".panel-write-test"},
+		{"/backups/", "/backups/pg/a.sql", "pg/a.sql"},
+		{"backups/panel", "backups/panel/pg/a.sql", "pg/a.sql"},
+	}
+	for _, tc := range cases {
+		got := sftpRelKey(tc.root, tc.cur)
+		if got != tc.want {
+			t.Errorf("sftpRelKey(%q, %q) = %q, want %q", tc.root, tc.cur, got, tc.want)
+		}
+		if strings.Contains(tc.want, ".panel-write-test") && !IsIgnoredObjectKey(got) {
+			t.Errorf("dotfile %q was not ignored by IsIgnoredObjectKey", got)
+		}
+	}
+}

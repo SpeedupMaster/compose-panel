@@ -19,14 +19,29 @@ const metricsRetention = 7 * 24 * time.Hour
 // metricsLoop samples host and container resource usage once a minute.
 func (s *Server) metricsLoop(ctx context.Context) {
 	// Align to the next full minute so samples of all series share timestamps.
-	time.Sleep(time.Until(time.Now().Truncate(time.Minute).Add(time.Minute)))
+	wait := time.Until(time.Now().Truncate(time.Minute).Add(time.Minute))
+	if wait > 0 {
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+	if ctx.Err() != nil {
+		return
+	}
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	n := 0
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		s.sampleMetrics(ctx, time.Now().Truncate(time.Minute).Unix())
-		if n%60 == 0 {
-			_, _ = s.db.Exec(`DELETE FROM metrics WHERE ts < ?`, time.Now().Add(-metricsRetention).Unix())
+		if n%60 == 0 && ctx.Err() == nil {
+			_, _ = s.db.ExecContext(ctx, `DELETE FROM metrics WHERE ts < ?`, time.Now().Add(-metricsRetention).Unix())
 		}
 		n++
 		select {

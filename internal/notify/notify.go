@@ -65,16 +65,30 @@ type ChannelConfig struct {
 }
 
 type Notifier struct {
-	db   *sql.DB
-	box  *secret.Box
-	http *http.Client
+	db     *sql.DB
+	box    *secret.Box
+	http   *http.Client
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 
-	mu   sync.Mutex
-	last map[string]time.Time
+	mu     sync.Mutex
+	closed bool
+	last   map[string]time.Time
 }
 
 func New(db *sql.DB, box *secret.Box) *Notifier {
-	return &Notifier{db: db, box: box, http: &http.Client{Timeout: 15 * time.Second}, last: map[string]time.Time{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Notifier{db: db, box: box, http: &http.Client{Timeout: 15 * time.Second}, ctx: ctx, cancel: cancel, last: map[string]time.Time{}}
+}
+
+// Close cancels in-flight notification sends and waits for them to finish before DB close.
+func (n *Notifier) Close() {
+	n.mu.Lock()
+	n.closed = true
+	n.mu.Unlock()
+	n.cancel()
+	n.wg.Wait()
 }
 
 // Emit sends ev to every channel with a matching rule, deduplicating repeats within 30 minutes.
@@ -84,6 +98,10 @@ func (n *Notifier) Emit(ev Event) {
 	}
 	key := ev.Type + "|" + ev.Target
 	n.mu.Lock()
+	if n.closed {
+		n.mu.Unlock()
+		return
+	}
 	if t, ok := n.last[key]; ok && time.Since(t) < 30*time.Minute && ev.Type != "security_login" {
 		n.mu.Unlock()
 		return
@@ -91,7 +109,7 @@ func (n *Notifier) Emit(ev Event) {
 	n.last[key] = time.Now()
 	n.mu.Unlock()
 
-	rows, err := n.db.Query(`SELECT c.id, c.kind, c.config FROM notify_rules r JOIN notify_channels c ON c.id = r.channel_id WHERE r.event = ? AND c.enabled = 1`, ev.Type)
+	rows, err := n.db.QueryContext(n.ctx, `SELECT c.id, c.kind, c.config FROM notify_rules r JOIN notify_channels c ON c.id = r.channel_id WHERE r.event = ? AND c.enabled = 1`, ev.Type)
 	if err != nil {
 		slog.Error("notify rules", "err", err)
 		return
@@ -109,16 +127,27 @@ func (n *Notifier) Emit(ev Event) {
 	}
 	rows.Close()
 	for _, c := range chans {
+		n.mu.Lock()
+		if n.closed {
+			n.mu.Unlock()
+			return
+		}
+		n.wg.Add(1)
+		n.mu.Unlock()
 		go func(c ch) {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer n.wg.Done()
+			ctx, cancel := context.WithTimeout(n.ctx, 30*time.Second)
 			defer cancel()
 			err := n.SendTo(ctx, c.kind, c.conf, ev)
+			if n.ctx.Err() != nil {
+				return
+			}
 			status := "ok"
 			if err != nil {
 				status = err.Error()
 				slog.Warn("notify send", "channel", c.id, "err", err)
 			}
-			_, _ = n.db.Exec(`UPDATE notify_channels SET last_sent_at=?, last_status=? WHERE id=?`, time.Now().Unix(), status, c.id)
+			_, _ = n.db.ExecContext(n.ctx, `UPDATE notify_channels SET last_sent_at=?, last_status=? WHERE id=?`, time.Now().Unix(), status, c.id)
 		}(c)
 	}
 }
