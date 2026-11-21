@@ -163,6 +163,14 @@ type Port struct {
 	Type        string
 }
 
+type Mount struct {
+	Type        string
+	Name        string
+	Source      string
+	Destination string
+	RW          bool
+}
+
 type Container struct {
 	Id      string
 	Names   []string
@@ -174,6 +182,7 @@ type Container struct {
 	Status  string
 	Ports   []Port
 	Labels  map[string]string
+	Mounts  []Mount
 }
 
 func (c Container) Name() string {
@@ -231,13 +240,7 @@ type ContainerJSON struct {
 		NanoCpus      int64
 		RestartPolicy struct{ Name string }
 	}
-	Mounts []struct {
-		Type        string
-		Name        string
-		Source      string
-		Destination string
-		RW          bool
-	}
+	Mounts []Mount
 	NetworkSettings struct {
 		Networks map[string]struct {
 			IPAddress string

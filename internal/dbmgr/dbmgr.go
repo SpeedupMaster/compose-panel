@@ -631,14 +631,62 @@ func (c Client) RestoreCmd(ctx context.Context, sourceDB, database string, clean
 	case "mysql", "mariadb":
 		return e.Command(ctx, true, c.mysqlBin(), "-uroot", database), nil
 	case "mongo":
-		args := []string{"mongorestore", "--archive", "-u", "root", "-p", c.Password, "--authenticationDatabase", "admin",
-			"--nsFrom", sourceDB + ".*", "--nsTo", database + ".*"}
+		args := []string{"mongorestore", "--archive", "-u", "root", "-p", c.Password, "--authenticationDatabase", "admin"}
+		if strings.TrimSpace(sourceDB) != "" {
+			args = append(args, "--nsFrom", sourceDB+".*", "--nsTo", database+".*")
+		} else {
+			args = append(args, "--nsFrom", "$db$.$coll$", "--nsTo", database+".$coll$")
+		}
 		if clean {
 			args = append(args, "--drop")
 		}
 		return e.Command(ctx, true, args...), nil
 	}
 	return nil, fmt.Errorf("%s 暂不支持在面板中恢复，请下载备份手动恢复", c.Engine)
+}
+
+// ResetPostgresSchemas terminates other connections to database, drops all non-system
+// schemas, and recreates the public schema while preserving database ownership and CONNECT grants.
+func (c Client) ResetPostgresSchemas(ctx context.Context, database string) error {
+	if c.Engine != "postgres" {
+		return fmt.Errorf("仅 PostgreSQL 支持重置 Schema")
+	}
+	if !ValidIdent(database) {
+		return fmt.Errorf("库名无效")
+	}
+	_, _ = c.rows(ctx, "postgres", fmt.Sprintf(
+		`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s' AND pid <> pg_backend_pid()`,
+		database,
+	))
+	owner := ""
+	if rows, err := c.rows(ctx, "postgres", fmt.Sprintf(
+		`SELECT r.rolname FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba WHERE d.datname = '%s'`,
+		database,
+	)); err == nil && len(rows) > 0 && len(rows[0]) > 0 {
+		owner = strings.TrimSpace(rows[0][0])
+	}
+	schemas, err := c.rows(ctx, database, `SELECT nspname FROM pg_namespace WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema'`)
+	if err != nil {
+		return fmt.Errorf("读取 Schema 列表失败：%w", err)
+	}
+	var stmts strings.Builder
+	for _, row := range schemas {
+		if len(row) == 0 || row[0] == "" {
+			continue
+		}
+		esc := strings.ReplaceAll(row[0], `"`, `""`)
+		stmts.WriteString(fmt.Sprintf(`DROP SCHEMA IF EXISTS "%s" CASCADE;`+"\n", esc))
+	}
+	stmts.WriteString(`CREATE SCHEMA public;` + "\n")
+	if owner != "" && owner != "postgres" {
+		escOwner := strings.ReplaceAll(owner, `"`, `""`)
+		stmts.WriteString(fmt.Sprintf(`ALTER SCHEMA public OWNER TO "%s"; GRANT ALL ON SCHEMA public TO "%s";`+"\n", escOwner, escOwner))
+	}
+	stmts.WriteString(`GRANT USAGE ON SCHEMA public TO PUBLIC;` + "\n")
+	if _, err := c.rows(ctx, database, stmts.String()); err != nil {
+		return fmt.Errorf("重置 PostgreSQL Schema 失败：%w", err)
+	}
+	return nil
 }
 
 // Wait runs cmd with stdin from r, returning stderr text on failure.

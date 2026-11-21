@@ -1,6 +1,7 @@
 package dbmgr
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -77,5 +78,29 @@ func TestComposeDefaultImages(t *testing.T) {
 	}
 	if _, err := Compose("oracle", "1", "", "x", "internal", "dbnet", 1, ""); err == nil {
 		t.Error("unknown engine accepted")
+	}
+}
+
+func TestMongoRestoreCmdNamespaceMapping(t *testing.T) {
+	cl := Client{Engine: "mongo", Container: "mongo-1", Password: "pw"}
+
+	// Explicit sourceDB maps sourceDB.* -> target.*
+	cmd, err := cl.RestoreCmd(context.Background(), "olddb", "newdb", true)
+	if err != nil {
+		t.Fatalf("RestoreCmd explicit sourceDB: %v", err)
+	}
+	joined := strings.Join(cmd.Args, " ")
+	if !strings.Contains(joined, "--nsFrom olddb.*") || !strings.Contains(joined, "--nsTo newdb.*") || !strings.Contains(joined, "--drop") {
+		t.Fatalf("unexpected explicit mongo restore args: %s", joined)
+	}
+
+	// Unknown/empty sourceDB maps $db$.$coll$ -> target.$coll$
+	cmd2, err := cl.RestoreCmd(context.Background(), "", "imported_db", false)
+	if err != nil {
+		t.Fatalf("RestoreCmd empty sourceDB: %v", err)
+	}
+	joined2 := strings.Join(cmd2.Args, " ")
+	if !strings.Contains(joined2, "--nsFrom $db$.$coll$") || !strings.Contains(joined2, "--nsTo imported_db.$coll$") {
+		t.Fatalf("unexpected wildcard mongo restore args: %s", joined2)
 	}
 }
