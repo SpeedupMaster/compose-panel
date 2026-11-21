@@ -767,3 +767,18 @@ func (s *Server) handlePanelBackup(w http.ResponseWriter, r *http.Request, u *Us
 	s.audit(r, u, "panel.backup", "", "", nil)
 	return ok(w, map[string]any{"jobId": jobID})
 }
+
+func (s *Server) handleMasterKey(w http.ResponseWriter, r *http.Request, u *User) error {
+	p := filepath.Join(s.cfg.DataDir, "master.key")
+	st, err := os.Stat(p)
+	out := map[string]any{"exists": err == nil && !st.IsDir(), "path": p}
+	if r.URL.Query().Get("reveal") == "1" {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			return fmt.Errorf("读取主密钥失败：%w", err)
+		}
+		out["key"] = strings.TrimSpace(string(raw))
+		s.audit(r, u, "system.reveal_master_key", "", "查看面板主密钥", nil)
+	}
+	return ok(w, out)
+}

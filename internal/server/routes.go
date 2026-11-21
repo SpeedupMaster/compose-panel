@@ -124,6 +124,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	h("POST /api/backups/{id}/restore", A, s.handleRestoreBackup)
 	h("GET /api/backup-sources", V, s.handleBackupSources)
 	h("GET /api/backup-key", A, s.handleBackupKey)
+	h("POST /api/backup-key/import", A, s.handleImportBackupKey)
+	h("DELETE /api/backup-key/extra/{id}", A, s.handleDeleteExtraBackupKey)
 	h("GET /api/storage", V, s.handleListStorage)
 	h("POST /api/storage", A, s.handleSaveStorage)
 	h("PUT /api/storage/{id}", A, s.handleSaveStorage)
@@ -186,6 +188,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	h("GET /api/settings", A, s.handleGetSettings)
 	h("PUT /api/settings", A, s.handleSaveSettings)
 	h("GET /api/system/info", V, s.handleSystemInfo)
+	h("GET /api/system/master-key", A, s.handleMasterKey)
 	h("POST /api/system/panel-backup", A, s.handlePanelBackup)
 
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {

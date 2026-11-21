@@ -24,6 +24,7 @@ var migrations = []string{
 	`ALTER TABLE sites ADD COLUMN health_path TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE sites ADD COLUMN grpc INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE backups ADD COLUMN verified_at INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE backups ADD COLUMN origin TEXT NOT NULL DEFAULT 'backup'`,
 	`ALTER TABLE db_instances ADD COLUMN image TEXT NOT NULL DEFAULT ''`,
 }
 

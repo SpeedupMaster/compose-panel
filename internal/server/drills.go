@@ -252,9 +252,12 @@ func (s *Server) drill(run *jobRun, d *restoreDrill, b *backupRow, rep *drillRep
 	}
 	rep.add("校验和一致（%s）", time.Since(t).Round(time.Millisecond))
 	run.SetProgress(20)
-	identity := s.box.MustOpen(s.setting("backup_age_identity", ""))
+	identities, err := s.allAgeIdentities("")
+	if err != nil {
+		return err
+	}
 	open := func() (io.ReadCloser, error) {
-		return backup.OpenObject(ctx, st, b.ObjectKey, b.Encrypted, identity)
+		return backup.OpenObject(ctx, st, b.ObjectKey, b.Encrypted, identities...)
 	}
 	tag := fmt.Sprintf("panel-drill-%d-%d", d.ID, time.Now().Unix())
 	switch b.Source.Kind {
