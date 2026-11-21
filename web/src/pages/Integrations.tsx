@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ago, bytes, del, get, post, put } from '../api'
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, SecretBox, Select, Tabs, useLoad, useToast } from '../components/ui'
 import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
@@ -15,13 +15,18 @@ export default function Integrations() {
   )
 }
 
-type Target = { id?: number; name: string; kind: 'local' | 's3' | 'sftp' | 'webdav'; config: any }
-const storageKind: Record<string, string> = { s3: 'S3 兼容', local: '本地磁盘', sftp: 'SFTP', webdav: 'WebDAV' }
+type Target = { id?: number; name: string; kind: 'local' | 's3' | 'sftp' | 'webdav' | 'gdrive'; config: any }
+const storageKind: Record<string, string> = { s3: 'S3 兼容', local: '本地磁盘', sftp: 'SFTP', webdav: 'WebDAV', gdrive: 'Google Drive' }
 function storageLocation(t: any) {
   const c = t.config || {}
   if (t.kind === 's3') return `${c.endpoint}/${c.bucket}/${c.prefix || ''}`
   if (t.kind === 'sftp') return `${c.username}@${c.host}:${c.port || 22}${c.path ? ' ' + c.path : ''}`
   if (t.kind === 'webdav') return c.url
+  if (t.kind === 'gdrive') {
+    const base = c.folderId ? `folders/${c.folderId}` : '根目录'
+    const prefix = (c.prefix || '').replace(/^\/+|\/+$/g, '')
+    return prefix ? `${base}/${prefix}` : base
+  }
   return c.path
 }
 
@@ -87,18 +92,125 @@ function Storage() {
 }
 
 function StorageModal({ t, onClose, onSaved }: { t: Target; onClose: () => void; onSaved: () => void }) {
+  const toast = useToast()
   const [f, setF] = useState<Target>(t)
   const [err, setErr] = useState<unknown>()
   const [test, setTest] = useState<any>(null)
+  const [authBusy, setAuthBusy] = useState(false)
+  const [authNotice, setAuthNotice] = useState('')
+  const authCleanupRef = useRef<(() => void) | null>(null)
   const c = f.config
-  const setC = (patch: any) => setF({ ...f, config: { ...c, ...patch } })
+  const setC = (patch: any) => setF((prev) => ({ ...prev, config: { ...prev.config, ...patch } }))
+  const redirectUri = `${window.location.origin}/api/storage/gdrive/callback`
+
+  useEffect(() => () => { authCleanupRef.current?.() }, [])
+
+  const startGoogleAuth = async () => {
+    setErr(undefined)
+    setAuthNotice('')
+    if (!c.clientId?.trim()) {
+      setErr('请先填写 Client ID')
+      return
+    }
+    if (!t.id && !c.clientSecret?.trim()) {
+      setErr('请先填写 Client Secret')
+      return
+    }
+    authCleanupRef.current?.()
+    const popup = window.open('about:blank', 'compose-panel-gdrive-oauth', 'width=540,height=680,popup=yes')
+    setAuthBusy(true)
+    try {
+      const { url, state } = await post<{ url: string; state: string }>('/storage/gdrive/auth-url', {
+        id: t.id || 0,
+        clientId: c.clientId || '',
+        clientSecret: c.clientSecret || '',
+        redirectUri,
+      })
+      if (popup && !popup.closed) popup.location.href = url
+      else window.open(url, '_blank')
+
+      let finished = false
+      let checking = false
+      let closeCheckTimer: number | undefined
+
+      const cleanup = () => {
+        finished = true
+        window.removeEventListener('message', onMsg)
+        ch?.close()
+        window.clearInterval(pollTimer)
+        if (closeCheckTimer !== undefined) window.clearTimeout(closeCheckTimer)
+        authCleanupRef.current = null
+        setAuthBusy(false)
+      }
+
+      const checkResult = async (finalTry = false) => {
+        if (finished || checking) return
+        checking = true
+        try {
+          const r = await post<{ status: string; refreshToken?: string; error?: string }>('/storage/gdrive/auth-result', { state })
+          if (finished) return
+          if (r.status === 'ok' && r.refreshToken) {
+            setF((prev) => ({ ...prev, config: { ...prev.config, refreshToken: r.refreshToken } }))
+            setAuthNotice('Google 授权成功，已填入 Refresh Token，请点击测试连接或保存。')
+            toast.ok('Google Drive 授权成功')
+            cleanup()
+          } else if (r.status === 'error') {
+            setErr(r.error || 'Google 授权失败')
+            cleanup()
+          } else if (finalTry) {
+            cleanup()
+          }
+        } catch (e) {
+          if (!finished && finalTry) {
+            setErr(e)
+            cleanup()
+          }
+        } finally {
+          checking = false
+        }
+      }
+
+      const onMsg = (ev: MessageEvent) => {
+        if (ev.origin !== window.location.origin) return
+        if (ev.data?.type === 'gdrive-oauth-done' && ev.data?.state === state) {
+          void checkResult()
+        }
+      }
+      window.addEventListener('message', onMsg)
+
+      let ch: BroadcastChannel | null = null
+      if ('BroadcastChannel' in window) {
+        ch = new BroadcastChannel('compose-panel-gdrive-oauth')
+        ch.onmessage = (ev) => {
+          if (ev.data?.type === 'gdrive-oauth-done' && ev.data?.state === state) {
+            void checkResult()
+          }
+        }
+      }
+
+      const pollTimer = window.setInterval(() => {
+        if (popup && popup.closed && closeCheckTimer === undefined) {
+          closeCheckTimer = window.setTimeout(() => { void checkResult(true) }, 800)
+          return
+        }
+        void checkResult()
+      }, 1500)
+
+      authCleanupRef.current = cleanup
+    } catch (e) {
+      popup?.close()
+      setAuthBusy(false)
+      setErr(e)
+    }
+  }
+
   return (
     <Modal
       title={t.id ? '编辑存储' : '添加存储'}
       onClose={onClose}
       footer={
         <>
-          <button className="btn" onClick={async () => { try { setTest(await post(t.id ? `/storage/${t.id}/test` : '/storage/test', f)) } catch (e) { setTest({ ok: false, message: (e as Error).message }) } }}>测试连接</button>
+          <button className="btn" onClick={async () => { try { setTest(await post('/storage/test', t.id ? { ...f, id: t.id } : f)) } catch (e) { setTest({ ok: false, message: (e as Error).message }) } }}>测试连接</button>
           <span className="spacer" />
           <button className="btn" onClick={onClose}>取消</button>
           <button className="btn btn-primary" onClick={async () => { try { t.id ? await put(`/storage/${t.id}`, f) : await post('/storage', f); onSaved() } catch (e) { setErr(e) } }}>保存</button>
@@ -107,11 +219,26 @@ function StorageModal({ t, onClose, onSaved }: { t: Target; onClose: () => void;
     >
       <Field label="名称"><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
       <div className="seg" role="group" aria-label="类型" style={{ flexWrap: 'wrap' }}>
-        {(['s3', 'sftp', 'webdav', 'local'] as const).map((k) => (
-          <button key={k} className={f.kind === k ? 'on' : ''} disabled={!!t.id && t.kind !== k} onClick={() => setF({ ...f, kind: k })}>{storageKind[k]}</button>
+        {(['s3', 'sftp', 'webdav', 'gdrive', 'local'] as const).map((k) => (
+          <button
+            key={k}
+            type="button"
+            className={f.kind === k ? 'on' : ''}
+            disabled={!!t.id && t.kind !== k}
+            onClick={() => {
+              if (f.kind === k) return
+              setTest(null)
+              setErr(undefined)
+              setAuthNotice('')
+              setF((prev) => ({ ...prev, kind: k, config: t.id ? prev.config : k === 's3' ? { region: 'auto', prefix: '' } : {} }))
+            }}
+          >
+            {storageKind[k]}
+          </button>
         ))}
       </div>
       {f.kind === 's3' && <span className="label">Cloudflare R2、阿里云 OSS、腾讯云 COS、MinIO、Backblaze B2 等</span>}
+      {f.kind === 'gdrive' && <span className="label">个人 Google Drive（OAuth 2.0）。请在 Google Cloud 启用 Drive API，并将 OAuth 同意屏幕发布为「正式版」以避免测试模式 7 天后失效。</span>}
       {f.kind === 'sftp' ? (
         <div className="form-grid">
           <Field label="主机"><input className="input mono" value={c.host || ''} onChange={(e) => setC({ host: e.target.value })} placeholder="backup.example.com" /></Field>
@@ -135,6 +262,59 @@ function StorageModal({ t, onClose, onSaved }: { t: Target; onClose: () => void;
           <Field label="密码 / 应用密码" hint={t.id ? '留空保持不变' : undefined}><input className="input mono" type="password" value={c.password === '••••••' ? '' : c.password || ''} onChange={(e) => setC({ password: e.target.value })} autoComplete="new-password" /></Field>
           <label className="check"><input type="checkbox" checked={!!c.insecure} onChange={(e) => setC({ insecure: e.target.checked })} />跳过 TLS 证书校验（自签名证书）</label>
         </div>
+      ) : f.kind === 'gdrive' ? (
+        <div className="form-grid">
+          <Field label="Client ID"><input className="input mono" value={c.clientId || ''} onChange={(e) => setC({ clientId: e.target.value })} placeholder="xxxx.apps.googleusercontent.com" autoComplete="off" /></Field>
+          <Field label="Client Secret" hint={t.id ? '留空保持不变' : undefined}><input className="input mono" type="password" value={c.clientSecret === '••••••' ? '' : c.clientSecret || ''} onChange={(e) => setC({ clientSecret: e.target.value })} autoComplete="new-password" /></Field>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <Field label="授权回调地址（Redirect URI）" hint="在 Google Cloud → 凭据 → OAuth 2.0 Web 客户端的「已获授权的重定向 URI」中添加此地址">
+              <div className="row">
+                <input className="input mono grow" readOnly value={redirectUri} onFocus={(e) => e.currentTarget.select()} />
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(redirectUri)
+                      toast.ok('已复制回调地址')
+                    } catch {
+                      toast.err('复制失败，请手动选中复制')
+                    }
+                  }}
+                >
+                  <Icon name="copy" size={15} />复制
+                </button>
+              </div>
+            </Field>
+          </div>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <Field
+              label="Refresh Token"
+              hint={
+                t.id && c.refreshToken === '••••••'
+                  ? '已授权，留空保持不变；点击右侧按钮可重新授权，也可直接粘贴新的 Refresh Token'
+                  : '点击右侧按钮跳转 Google 授权自动获取；若面板使用内网 IP/HTTP 无法回调，也可手动粘贴 Refresh Token'
+              }
+            >
+              <div className="row">
+                <input
+                  className="input mono grow"
+                  type="password"
+                  value={c.refreshToken === '••••••' ? '' : c.refreshToken || ''}
+                  onChange={(e) => { setAuthNotice(''); setC({ refreshToken: e.target.value }) }}
+                  placeholder={t.id && c.refreshToken === '••••••' ? '已授权（留空保持不变）' : '1//…'}
+                  autoComplete="new-password"
+                />
+                <button type="button" className="btn" disabled={authBusy} onClick={startGoogleAuth}>
+                  <Icon name="external" size={15} />
+                  {authBusy ? '等待授权…' : c.refreshToken ? '重新授权' : '前往 Google 授权'}
+                </button>
+              </div>
+            </Field>
+          </div>
+          <Field label="目标文件夹 ID（可选）" hint="留空存到根目录；支持直接粘贴文件夹链接"><input className="input mono" value={c.folderId || ''} onChange={(e) => setC({ folderId: e.target.value })} placeholder="例如 1AbCdEf…" /></Field>
+          <Field label="子目录前缀（可选）" hint="自动在目标目录下按层级创建"><input className="input mono" value={c.prefix || ''} onChange={(e) => setC({ prefix: e.target.value })} placeholder="compose-panel/" /></Field>
+        </div>
       ) : f.kind === 'local' ? (
         <Field label="目录" hint="面板容器内的路径；默认备份目录已挂载在 /data/backups"><input className="input mono" value={c.path || ''} onChange={(e) => setC({ path: e.target.value })} /></Field>
       ) : (
@@ -149,6 +329,7 @@ function StorageModal({ t, onClose, onSaved }: { t: Target; onClose: () => void;
           <label className="check"><input type="checkbox" checked={!!c.insecure} onChange={(e) => setC({ insecure: e.target.checked })} />使用 HTTP（不加密）</label>
         </div>
       )}
+      {authNotice && <div className="alert ok">{authNotice}</div>}
       {test && <div className={'alert ' + (test.ok ? 'ok' : 'err')}>{test.ok ? `连接正常（${test.elapsedMs} ms）` : test.message}</div>}
       <ErrorBox error={err} />
     </Modal>

@@ -7,7 +7,7 @@ Compose Panel 旨在替代 Dokploy、Coolify 等偏重的 PaaS 平台。它被�
 1. **Compose 项目编排**：在线编辑或 Git 拉取部署、版本快照、Diff 对比、失败自动回滚、一键回滚、Webhook / API 触发、模板库、镜像更新检测与容器内定时任务。
 2. **数据库交付与运维**：一键创建 PostgreSQL / MySQL / MariaDB / MongoDB / Redis（支持自定义镜像），提供库/用户/会话管理、慢查询分析、在线导入导出与带高危拦截的 SQL 控制台。
 3. **反向代理与 SSL 证书**：基于内置 Caddy 2 动态网关，免宿主机端口映射直接按域名反代容器服务，自动签发/续期 Let's Encrypt 证书，支持多副本负载均衡、主动健康检查、gRPC (h2c) 与部署期自动维护页。
-4. **加密备份与恢复演练**：支持数据库、数据卷、项目目录与面板自身数据的定时备份；采用 `zstd` 压缩 + `age` 非对称加密 + `SHA-256` 校验，支持本地 / S3 / SFTP / WebDAV 存储、GFS 保留策略，以及在断网沙箱容器中自动验证备份可用性的**恢复演练**。
+4. **加密备份与恢复演练**：支持数据库、数据卷、项目目录与面板自身数据的定时备份；采用 `zstd` 压缩 + `age` 非对称加密 + `SHA-256` 校验，支持本地 / S3 / SFTP / WebDAV / Google Drive 存储、GFS 保留策略，以及在断网沙箱容器中自动验证备份可用性的**恢复演练**。
 5. **容器监控、告警与审计**：实时日志、Web 终端、容器与数据卷文件管理、7 天资源历史曲线、7 种通知渠道、RBAC 项目级权限、TOTP 两步验证、防篡改哈希链审计日志，并提供完整的移动端响应式界面与 PWA 支持。
 
 ---
@@ -107,7 +107,7 @@ Compose Panel 旨在替代 Dokploy、Coolify 等偏重的 PaaS 平台。它被�
   - **面板自身数据**：一键在线热备面板 SQLite 数据库（`VACUUM INTO`）与配置元数据。
 - **安全流式管道**：备份数据在内存中流式完成 `zstd` 压缩与 `age` 公钥加密，并计算 `SHA-256` 校验和；即使远端对象存储被攻破，没有离线保存的 `age` 私钥也无法解密任何数据。
 - **多存储后端与 GFS 保留**：
-  - 支持 **本地目录**、**S3 兼容存储**（AWS S3 / Cloudflare R2 / MinIO / OSS / COS）、**SFTP**、**WebDAV**，支持存储连通性一键测试。
+  - 支持 **本地目录**、**S3 兼容存储**（AWS S3 / Cloudflare R2 / MinIO / OSS / COS）、**SFTP**、**WebDAV**、**Google Drive**（个人账号 OAuth 2.0），支持存储连通性一键测试。
   - 支持 **GFS（日 / 周 / 月）分层保留策略**，每次定时备份完成后自动清理过期历史归档。
 - **一键恢复与自动化恢复演练（Restore Drill）**：
   - 支持将数据库备份恢复到**同实例新库**或**覆盖原库**（含 Redis 停机替换 RDB 并禁用 AOF 重写防冲刷），支持数据卷与项目目录一键覆盖恢复。
@@ -205,7 +205,7 @@ docker compose logs panel | grep -i token
    - **主加密密钥 `/opt/compose-panel/data/master.key`**：用于加密 SQLite 数据库中的所有密码与凭据。请将其复制一份到安全的离线密码库中。
    - **备份解密私钥（age Private Key）**：进入 **「备份 → 备份加密密钥」**，将 `AGE-SECRET-KEY-1...` 私钥复制并离线保存。一旦服务器彻底损毁，你需要凭此私钥解密远端对象存储中的备份归档。
 5. **配置异地存储与告警渠道**：
-   - 在 **「集成 → 外部存储」** 中添加 S3 / R2 / SFTP / WebDAV 存储，并设为定时备份策略的目标。
+   - 在 **「集成 → 外部存储」** 中添加 S3 / R2 / SFTP / WebDAV / Google Drive 存储，并设为定时备份策略的目标。
    - 在 **「集成 → 通知渠道」** 中添加 Telegram / 企业微信 / 钉钉 / 飞书等通知方式，勾选关注的风险事件。
 
 ---
@@ -372,7 +372,7 @@ sh scripts/smoke.sh http://127.0.0.1:7800 <初始化令牌>   # 只读接口冒�
 ├── cmd/panel/           # 命令行入口：serve / reset-password / version
 ├── internal/
 │   ├── auth/            # 密码哈希 (bcrypt)、TOTP 两步验证、随机令牌生成
-│   ├── backup/          # 存储后端 (本地/S3/SFTP/WebDAV)、zstd+age 流式加密管道、GFS 保留策略
+│   ├── backup/          # 存储后端 (本地/S3/SFTP/WebDAV/Google Drive)、zstd+age 流式加密管道、GFS 保留策略
 │   ├── compose/         # docker compose CLI 封装与 .panel/override.yml 生成器
 │   ├── config/          # 环境变量配置加载
 │   ├── dbmgr/           # 5 种数据库引擎的编排生成、账号/库管理、慢查询与安全控制台

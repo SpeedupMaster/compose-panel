@@ -49,12 +49,15 @@ type Server struct {
 	loginMu   sync.Mutex
 	loginFail map[string][]time.Time
 
-	auditMu     sync.Mutex
-	caddyMu     sync.Mutex
-	maintMu     sync.Mutex
-	deployMaint map[int64]bool // projects currently deploying behind a maintenance page
-	startedAt   time.Time
-	setupToken  string
+	auditMu        sync.Mutex
+	caddyMu        sync.Mutex
+	maintMu        sync.Mutex
+	deployMaint    map[int64]bool // projects currently deploying behind a maintenance page
+	gdriveMu       sync.Mutex
+	gdriveAuth     map[string]*gdriveOAuthState
+	gdriveExchange func(ctx context.Context, clientID, clientSecret, code, redirectURI, verifier string) (string, error)
+	startedAt      time.Time
+	setupToken     string
 }
 
 type scheduleMeta struct {
@@ -87,10 +90,11 @@ func New(cfg config.Config, web fs.FS) (*Server, error) {
 		jobs:      jm,
 		notify:    notify.New(db, box),
 		web:       web,
-		cronIDs:   map[string]cron.EntryID{},
-		cronMeta:  map[cron.EntryID]scheduleMeta{},
-		loginFail: map[string][]time.Time{},
-		startedAt: time.Now(),
+		cronIDs:    map[string]cron.EntryID{},
+		cronMeta:   map[cron.EntryID]scheduleMeta{},
+		loginFail:  map[string][]time.Time{},
+		gdriveAuth: map[string]*gdriveOAuthState{},
+		startedAt:  time.Now(),
 	}
 	if err := s.initDefaults(); err != nil {
 		return nil, err

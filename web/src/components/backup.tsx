@@ -49,7 +49,7 @@ export function BackupNowModal({ source, onClose, onDone }: { source?: BackupSou
       {source ? <div>备份对象：<b>{sourceText(source)}</b></div> : <SourcePicker value={src} onChange={setSrc} sources={sources} />}
       <Field label="存储位置">
         <Select value={sid || ''} onChange={(v) => setStorageId(Number(v))}>
-          {(storages || []).map((s) => <option key={s.id} value={s.id}>{s.name}（{({ s3: 'S3', local: '本地', sftp: 'SFTP', webdav: 'WebDAV' } as Record<string, string>)[s.kind] || s.kind}）</option>)}
+          {(storages || []).map((s) => <option key={s.id} value={s.id}>{s.name}（{({ s3: 'S3', local: '本地', sftp: 'SFTP', webdav: 'WebDAV', gdrive: 'Google Drive' } as Record<string, string>)[s.kind] || s.kind}）</option>)}
         </Select>
       </Field>
       <label className="check"><input type="checkbox" checked={encrypt} onChange={(e) => setEncrypt(e.target.checked)} />使用 age 加密</label>

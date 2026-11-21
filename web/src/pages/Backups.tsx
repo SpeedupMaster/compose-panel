@@ -192,7 +192,7 @@ function PolicyModal({ p, sources, onClose, onSaved }: { p: Policy; sources: any
         <Field label="名称" hint="留空自动生成"><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
         <Field label="存储位置">
           <Select value={sid} onChange={(v) => setF({ ...f, storageId: Number(v) })}>
-            {(storages || []).map((s) => <option key={s.id} value={s.id}>{s.name}（{({ s3: 'S3', local: '本地', sftp: 'SFTP', webdav: 'WebDAV' } as Record<string, string>)[s.kind] || s.kind}）</option>)}
+            {(storages || []).map((s) => <option key={s.id} value={s.id}>{s.name}（{({ s3: 'S3', local: '本地', sftp: 'SFTP', webdav: 'WebDAV', gdrive: 'Google Drive' } as Record<string, string>)[s.kind] || s.kind}）</option>)}
           </Select>
         </Field>
         <Field label="计划（cron，5 段）" hint="按面板时区执行">

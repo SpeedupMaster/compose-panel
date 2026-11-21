@@ -42,6 +42,11 @@ type TargetConfig struct {
 	PrivateKey string `json:"privateKey,omitempty"`
 	HostKey    string `json:"hostKey,omitempty"` // optional SHA256 fingerprint pin
 	URL        string `json:"url,omitempty"`     // webdav collection URL
+	// gdrive (personal Google Drive via OAuth 2.0; reuses Prefix for optional subfolder path)
+	ClientID     string `json:"clientId,omitempty"`
+	ClientSecret string `json:"clientSecret,omitempty"`
+	RefreshToken string `json:"refreshToken,omitempty"`
+	FolderID     string `json:"folderId,omitempty"`
 }
 
 func ParseTargetConfig(s string) (TargetConfig, error) {
@@ -66,6 +71,8 @@ func Open(kind string, c TargetConfig) (Storage, error) {
 		return NewSFTP(c)
 	case "webdav":
 		return NewWebDAV(c)
+	case "gdrive":
+		return NewGDrive(c)
 	}
 	return nil, fmt.Errorf("unknown storage kind %q", kind)
 }
