@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net"
@@ -189,6 +190,66 @@ func (s *SFTP) Test(ctx context.Context) error {
 	return c.Remove(p)
 }
 
+func (s *SFTP) List(ctx context.Context) ([]ObjectInfo, error) {
+	c, err := s.dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	if _, err := c.Stat(s.root); err != nil {
+		if os.IsNotExist(err) {
+			return []ObjectInfo{}, nil
+		}
+		return nil, err
+	}
+	rootClean := strings.TrimRight(path.Clean(s.root), "/")
+	out := []ObjectInfo{}
+	w := c.Walk(s.root)
+	for w.Step() {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
+		if w.Err() != nil {
+			continue
+		}
+		fi := w.Stat()
+		if fi == nil {
+			continue
+		}
+		cur := path.Clean(w.Path())
+		if cur == rootClean {
+			continue
+		}
+		var rel string
+		switch {
+		case rootClean == "." || rootClean == "":
+			rel = strings.TrimLeft(cur, "./")
+		case rootClean == "/":
+			rel = strings.TrimLeft(cur, "/")
+		default:
+			rel = strings.TrimPrefix(cur, rootClean+"/")
+		}
+		rel = strings.TrimLeft(rel, "/")
+		if rel == "" {
+			continue
+		}
+		if fi.IsDir() {
+			if strings.HasPrefix(fi.Name(), ".") || strings.Count(rel, "/")+1 > MaxListDepth {
+				w.SkipDir()
+			}
+			continue
+		}
+		if IsIgnoredObjectKey(rel) || strings.Count(rel, "/") > MaxListDepth {
+			continue
+		}
+		if len(out) >= MaxListItems {
+			return out, ErrListTruncated
+		}
+		out = append(out, ObjectInfo{Key: rel, Size: fi.Size(), ModTime: fi.ModTime().UTC()})
+	}
+	return out, nil
+}
+
 // ---------- WebDAV ----------
 
 type WebDAV struct {
@@ -341,4 +402,139 @@ func (d *WebDAV) Test(ctx context.Context) error {
 		return fmt.Errorf("写入失败：%w", err)
 	}
 	return d.Delete(ctx, ".panel-write-test")
+}
+
+type davMultistatus struct {
+	Responses []davResponse `xml:"response"`
+}
+
+type davResponse struct {
+	Href      string        `xml:"href"`
+	Propstats []davPropstat `xml:"propstat"`
+}
+
+type davPropstat struct {
+	Prop davProp `xml:"prop"`
+}
+
+type davProp struct {
+	ResourceType struct {
+		Collection *struct{} `xml:"collection"`
+	} `xml:"resourcetype"`
+	ContentLength string `xml:"getcontentlength"`
+	LastModified  string `xml:"getlastmodified"`
+}
+
+func (d *WebDAV) List(ctx context.Context) ([]ObjectInfo, error) {
+	type dirItem struct {
+		rel   string
+		depth int
+	}
+	basePath := strings.TrimRight(d.base.Path, "/") + "/"
+	queue := []dirItem{{rel: "", depth: 0}}
+	visited := map[string]bool{"": true}
+	out := []ObjectInfo{}
+	propBody := `<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>`
+
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
+		targetURL := d.base.String()
+		if cur.rel != "" {
+			targetURL = d.url(cur.rel) + "/"
+		}
+		resp, err := d.do(ctx, "PROPFIND", targetURL, strings.NewReader(propBody), map[string]string{
+			"Depth":        "1",
+			"Content-Type": "application/xml; charset=utf-8",
+		})
+		if err != nil {
+			return out, err
+		}
+		if resp.StatusCode == http.StatusNotFound && cur.rel == "" {
+			resp.Body.Close()
+			return []ObjectInfo{}, nil
+		}
+		if resp.StatusCode >= 300 {
+			return out, davErr(resp)
+		}
+		var ms davMultistatus
+		decErr := xml.NewDecoder(resp.Body).Decode(&ms)
+		resp.Body.Close()
+		if decErr != nil {
+			return out, fmt.Errorf("解析 WebDAV 目录响应失败：%w", decErr)
+		}
+
+		for _, r := range ms.Responses {
+			href := strings.TrimSpace(r.Href)
+			if href == "" {
+				continue
+			}
+			hrefPath := href
+			if u, err := url.Parse(href); err == nil && u.Path != "" {
+				hrefPath = u.Path
+			} else if dec, err := url.PathUnescape(href); err == nil {
+				hrefPath = dec
+			}
+			isTrailingSlash := strings.HasSuffix(hrefPath, "/")
+			cleanHref := path.Clean("/" + hrefPath)
+			cleanBase := strings.TrimRight(path.Clean("/"+basePath), "/")
+			var rel string
+			if cleanHref == cleanBase {
+				continue
+			}
+			if cleanBase == "" || cleanBase == "/" {
+				rel = strings.TrimLeft(cleanHref, "/")
+			} else if strings.HasPrefix(cleanHref, cleanBase+"/") {
+				rel = strings.TrimPrefix(cleanHref, cleanBase+"/")
+			} else {
+				continue
+			}
+			rel = strings.Trim(rel, "/")
+			if rel == "" || rel == cur.rel {
+				continue
+			}
+
+			isCol := false
+			var size int64 = -1
+			var modTime time.Time
+			for _, ps := range r.Propstats {
+				if ps.Prop.ResourceType.Collection != nil {
+					isCol = true
+				}
+				if s := strings.TrimSpace(ps.Prop.ContentLength); s != "" {
+					if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+						size = n
+					}
+				}
+				if lm := strings.TrimSpace(ps.Prop.LastModified); lm != "" {
+					if t, err := http.ParseTime(lm); err == nil {
+						modTime = t.UTC()
+					} else if t, err := time.Parse(time.RFC3339, lm); err == nil {
+						modTime = t.UTC()
+					}
+				}
+			}
+			if !isCol && isTrailingSlash && size <= 0 {
+				isCol = true
+			}
+			if isCol {
+				if !strings.HasPrefix(path.Base(rel), ".") && cur.depth+1 <= MaxListDepth && !visited[rel] {
+					visited[rel] = true
+					queue = append(queue, dirItem{rel: rel, depth: cur.depth + 1})
+				}
+				continue
+			}
+			if IsIgnoredObjectKey(rel) || strings.Count(rel, "/") > MaxListDepth {
+				continue
+			}
+			if len(out) >= MaxListItems {
+				return out, ErrListTruncated
+			}
+			out = append(out, ObjectInfo{Key: rel, Size: size, ModTime: modTime})
+		}
+	}
+	return out, nil
 }

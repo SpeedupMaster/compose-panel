@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -306,10 +307,12 @@ func (g *GDrive) splitKey(key string) ([]string, string, error) {
 }
 
 type driveFileEntry struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	MimeType string `json:"mimeType"`
-	Trashed  bool   `json:"trashed"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	MimeType     string `json:"mimeType"`
+	Size         string `json:"size"`
+	ModifiedTime string `json:"modifiedTime"`
+	Trashed      bool   `json:"trashed"`
 }
 
 func (g *GDrive) queryFiles(ctx context.Context, q string) ([]driveFileEntry, error) {
@@ -643,4 +646,115 @@ func (g *GDrive) Test(ctx context.Context) error {
 		return fmt.Errorf("写入失败：%w", err)
 	}
 	return g.Delete(ctx, ".panel-write-test")
+}
+
+func (g *GDrive) listChildren(ctx context.Context, parentID string) ([]driveFileEntry, error) {
+	q := fmt.Sprintf("'%s' in parents and trashed = false", escapeDriveQuery(parentID))
+	var all []driveFileEntry
+	pageToken := ""
+	for {
+		params := url.Values{
+			"q":        {q},
+			"spaces":   {"drive"},
+			"fields":   {"nextPageToken,files(id,name,mimeType,size,modifiedTime)"},
+			"orderBy":  {"modifiedTime desc"},
+			"pageSize": {"100"},
+		}
+		if pageToken != "" {
+			params.Set("pageToken", pageToken)
+		}
+		resp, err := g.do(ctx, http.MethodGet, g.apiBase+"/files?"+params.Encode(), nil, nil)
+		if err != nil {
+			return all, err
+		}
+		if resp.StatusCode >= 300 {
+			return all, parseDriveError(resp)
+		}
+		var page struct {
+			Files         []driveFileEntry `json:"files"`
+			NextPageToken string           `json:"nextPageToken"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&page)
+		resp.Body.Close()
+		if err != nil {
+			return all, err
+		}
+		all = append(all, page.Files...)
+		if page.NextPageToken == "" || len(all) > MaxListItems {
+			break
+		}
+		pageToken = page.NextPageToken
+	}
+	return all, nil
+}
+
+func (g *GDrive) List(ctx context.Context) ([]ObjectInfo, error) {
+	startID := g.rootID()
+	if g.prefix != "" {
+		id, ok, err := g.findDir(ctx, strings.Split(g.prefix, "/"))
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return []ObjectInfo{}, nil
+		}
+		startID = id
+	}
+	type folderItem struct {
+		id     string
+		relDir string
+		depth  int
+	}
+	queue := []folderItem{{id: startID, relDir: "", depth: 0}}
+	visited := map[string]bool{startID: true}
+	out := []ObjectInfo{}
+
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
+		entries, err := g.listChildren(ctx, cur.id)
+		if err != nil {
+			return out, err
+		}
+		for _, e := range entries {
+			name := strings.TrimSpace(e.Name)
+			if name == "" || strings.Contains(name, "/") {
+				continue
+			}
+			rel := name
+			if cur.relDir != "" {
+				rel = cur.relDir + "/" + name
+			}
+			if e.MimeType == driveFolderMime {
+				if !strings.HasPrefix(name, ".") && cur.depth+1 <= MaxListDepth && !visited[e.ID] {
+					visited[e.ID] = true
+					queue = append(queue, folderItem{id: e.ID, relDir: rel, depth: cur.depth + 1})
+				}
+				continue
+			}
+			if IsIgnoredObjectKey(rel) || strings.Count(rel, "/") > MaxListDepth {
+				continue
+			}
+			if len(out) >= MaxListItems {
+				return out, ErrListTruncated
+			}
+			var size int64 = -1
+			if e.Size != "" {
+				if n, err := strconv.ParseInt(e.Size, 10, 64); err == nil {
+					size = n
+				}
+			}
+			var modTime time.Time
+			if e.ModifiedTime != "" {
+				if t, err := time.Parse(time.RFC3339, e.ModifiedTime); err == nil {
+					modTime = t.UTC()
+				}
+			}
+			out = append(out, ObjectInfo{Key: rel, Size: size, ModTime: modTime})
+		}
+	}
+	return out, nil
 }

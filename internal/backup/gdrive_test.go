@@ -10,10 +10,12 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeGoogleDrive simulates Google OAuth2 token endpoint and Drive API v3 (files + resumable uploads).
@@ -29,6 +31,7 @@ type fakeGoogleDrive struct {
 	rangeHeaders  []string
 	failFirst401  bool
 	failed401Once bool
+	maxPageSize   int
 	exchangeReq   url.Values
 	exchangeResp  map[string]any
 }
@@ -202,17 +205,34 @@ func (f *fakeGoogleDrive) handleFiles(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			out = append(out, map[string]any{
-				"id":       item.ID,
-				"name":     item.Name,
-				"mimeType": item.MimeType,
-				"size":     strconv.Itoa(len(item.Data)),
+				"id":           item.ID,
+				"name":         item.Name,
+				"mimeType":     item.MimeType,
+				"size":         strconv.Itoa(len(item.Data)),
+				"modifiedTime": time.Date(2026, 11, 20, 3, 0, 0, 0, time.UTC).Format(time.RFC3339),
 			})
 		}
+		sort.Slice(out, func(i, j int) bool { return out[i]["id"].(string) < out[j]["id"].(string) })
+		maxPage := f.maxPageSize
 		f.mu.Unlock()
 		if out == nil {
 			out = []map[string]any{}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"files": out})
+		respObj := map[string]any{"files": out}
+		if maxPage > 0 && len(out) > 0 {
+			offset, _ := strconv.Atoi(r.URL.Query().Get("pageToken"))
+			if offset < 0 || offset > len(out) {
+				offset = len(out)
+			}
+			end := offset + maxPage
+			if end < len(out) {
+				respObj["nextPageToken"] = strconv.Itoa(end)
+			} else {
+				end = len(out)
+			}
+			respObj["files"] = out[offset:end]
+		}
+		_ = json.NewEncoder(w).Encode(respObj)
 
 	case http.MethodPost:
 		var meta struct {
@@ -766,5 +786,55 @@ func TestGDriveOAuthHelpers(t *testing.T) {
 	fake.exchangeResp = map[string]any{"access_token": "only-access", "expires_in": 3600}
 	if _, err := gdriveExchangeCode(context.Background(), srv.URL+"/token", "cid", "csec", "code-2", "https://panel.example.com/api/storage/gdrive/callback", "v2"); err == nil {
 		t.Fatalf("gdriveExchangeCode() without refresh_token = nil, want error")
+	}
+}
+
+func TestGDriveListNestedAndPaginated(t *testing.T) {
+	fake := newFakeGoogleDrive()
+	fake.maxPageSize = 1 // force multi-page pagination
+	fake.addFolder("base-dir", "Backups", "root")
+	srv := fake.server(t)
+
+	g := newTestGDrive(t, srv, TargetConfig{
+		FolderID: "base-dir",
+		Prefix:   "prod/panel",
+	})
+	ctx := context.Background()
+
+	// Missing prefix folder returns empty slice cleanly.
+	empty, err := g.List(ctx)
+	if err != nil {
+		t.Fatalf("List() with missing prefix error: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("List() missing prefix len = %d, want 0", len(empty))
+	}
+
+	// Put several nested files plus a probe file.
+	for key, body := range map[string]string{
+		"pg-main_app/20261120-030000.pgdump.zst.age": "pg-data",
+		"panel/20261120-030000.sqlite.zst.age":       "panel-data",
+		".panel-write-test":                          "ok",
+	} {
+		if _, err := g.Put(ctx, key, strings.NewReader(body)); err != nil {
+			t.Fatalf("Put(%s): %v", key, err)
+		}
+	}
+
+	items, err := g.List(ctx)
+	if err != nil {
+		t.Fatalf("GDrive.List() error: %v", err)
+	}
+	var keys []string
+	for _, it := range items {
+		keys = append(keys, it.Key)
+		if it.Size <= 0 || it.ModTime.IsZero() {
+			t.Errorf("unexpected metadata on %+v", it)
+		}
+	}
+	sort.Strings(keys)
+	want := []string{"panel/20261120-030000.sqlite.zst.age", "pg-main_app/20261120-030000.pgdump.zst.age"}
+	if strings.Join(keys, ",") != strings.Join(want, ",") {
+		t.Fatalf("GDrive.List keys = %v, want %v", keys, want)
 	}
 }

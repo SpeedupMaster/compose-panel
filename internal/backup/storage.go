@@ -4,8 +4,10 @@ package backup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,12 +17,28 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
+const (
+	MaxListItems = 5000
+	MaxListDepth = 6
+)
+
+// ErrListTruncated is returned alongside partial results when List reaches MaxListItems.
+var ErrListTruncated = errors.New("对象数量超过扫描上限")
+
+// ObjectInfo describes one object found in a storage target.
+type ObjectInfo struct {
+	Key     string    `json:"key"`
+	Size    int64     `json:"size"`
+	ModTime time.Time `json:"modTime"`
+}
+
 // Storage is a place where backup objects live.
 type Storage interface {
 	Put(ctx context.Context, key string, r io.Reader) (int64, error)
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
 	Delete(ctx context.Context, key string) error
 	Test(ctx context.Context) error
+	List(ctx context.Context) ([]ObjectInfo, error)
 }
 
 // TargetConfig is the decrypted JSON stored in storage_targets.config.
@@ -143,6 +161,60 @@ func (l *Local) Test(ctx context.Context) error {
 	return os.Remove(p)
 }
 
+func (l *Local) List(ctx context.Context) ([]ObjectInfo, error) {
+	if _, err := os.Stat(l.Root); err != nil {
+		if os.IsNotExist(err) {
+			return []ObjectInfo{}, nil
+		}
+		return nil, err
+	}
+	out := []ObjectInfo{}
+	truncated := false
+	errStop := errors.New("stop")
+	err := filepath.WalkDir(l.Root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(l.Root, p)
+		if err != nil || rel == "." {
+			return nil
+		}
+		slash := filepath.ToSlash(rel)
+		if d.IsDir() {
+			if strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
+			if strings.Count(slash, "/")+1 > MaxListDepth {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if IsIgnoredObjectKey(slash) || strings.Count(slash, "/") > MaxListDepth {
+			return nil
+		}
+		if len(out) >= MaxListItems {
+			truncated = true
+			return errStop
+		}
+		info, err := d.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			return nil
+		}
+		out = append(out, ObjectInfo{Key: slash, Size: info.Size(), ModTime: info.ModTime().UTC()})
+		return nil
+	})
+	if err != nil && !errors.Is(err, errStop) {
+		return out, err
+	}
+	if truncated {
+		return out, ErrListTruncated
+	}
+	return out, nil
+}
+
 // S3 stores objects in an S3-compatible bucket.
 type S3 struct {
 	c      *minio.Client
@@ -216,4 +288,30 @@ func (s *S3) Test(ctx context.Context) error {
 		return fmt.Errorf("写入失败：%w", err)
 	}
 	return s.c.RemoveObject(ctx, s.bucket, k, minio.RemoveObjectOptions{})
+}
+
+func (s *S3) List(ctx context.Context) ([]ObjectInfo, error) {
+	lctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	pfx := s.prefix
+	if pfx != "" && !strings.HasSuffix(pfx, "/") {
+		pfx += "/"
+	}
+	out := []ObjectInfo{}
+	for obj := range s.c.ListObjects(lctx, s.bucket, minio.ListObjectsOptions{Prefix: pfx, Recursive: true}) {
+		if obj.Err != nil {
+			return out, obj.Err
+		}
+		rel := strings.TrimPrefix(obj.Key, pfx)
+		rel = strings.TrimLeft(rel, "/")
+		if strings.HasSuffix(rel, "/") || IsIgnoredObjectKey(rel) || strings.Count(rel, "/") > MaxListDepth {
+			continue
+		}
+		if len(out) >= MaxListItems {
+			cancel()
+			return out, ErrListTruncated
+		}
+		out = append(out, ObjectInfo{Key: rel, Size: obj.Size, ModTime: obj.LastModified.UTC()})
+	}
+	return out, nil
 }
