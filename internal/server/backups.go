@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -274,7 +275,7 @@ func (s *Server) applyRetention(run *jobRun, policyID int64, keep backup.Keep) {
 			_, _ = s.db.Exec(`UPDATE backups SET tiers=? WHERE id=?`, t, it.ID)
 			continue
 		}
-		if err := s.deleteBackup(it.ID); err != nil {
+		if err := s.deleteBackup(it.ID, false); err != nil {
 			run.Logf("清理旧备份 %d 失败：%v", it.ID, err)
 		} else {
 			removed++
@@ -285,13 +286,13 @@ func (s *Server) applyRetention(run *jobRun, policyID int64, keep backup.Keep) {
 	run.Logf("保留策略：保留 %d 份，清理 %d 份", len(tiers), removed)
 }
 
-func (s *Server) deleteBackup(id int64) error {
+func (s *Server) deleteBackup(id int64, keepFile bool) error {
 	var sid int64
 	var key string
 	if err := s.db.QueryRow(`SELECT storage_id, object_key FROM backups WHERE id=?`, id).Scan(&sid, &key); err != nil {
 		return err
 	}
-	if key != "" {
+	if !keepFile && key != "" {
 		if _, st, err := s.getStorage(sid); err == nil {
 			if err := st.Delete(context.Background(), key); err != nil {
 				return err
@@ -487,7 +488,7 @@ func (s *Server) handleDeletePolicy(w http.ResponseWriter, r *http.Request, u *U
 			rows.Close()
 		}
 		for _, b := range ids {
-			_ = s.deleteBackup(b)
+			_ = s.deleteBackup(b, false)
 		}
 	}
 	_, err = s.db.Exec(`DELETE FROM backup_policies WHERE id=?`, id)
@@ -619,8 +620,13 @@ func (s *Server) handleDeleteBackup(w http.ResponseWriter, r *http.Request, u *U
 	if err != nil {
 		return err
 	}
-	err = s.deleteBackup(b.ID)
-	s.audit(r, u, "backup.delete", b.Label, b.ObjectKey, err)
+	keepFile := r.URL.Query().Get("keepFile") == "1"
+	err = s.deleteBackup(b.ID, keepFile)
+	detail := b.ObjectKey
+	if keepFile {
+		detail += "（保留存储文件）"
+	}
+	s.audit(r, u, "backup.delete", b.Label, detail, err)
 	return done(w, err)
 }
 
@@ -668,19 +674,43 @@ func (s *Server) handleVerifyBackup(w http.ResponseWriter, r *http.Request, u *U
 	if err != nil {
 		return err
 	}
+	var req struct {
+		AgeIdentity string `json:"ageIdentity"`
+	}
+	if r.Body != nil {
+		_ = readJSON(r, &req)
+	}
+	ids, err := s.allAgeIdentities(req.AgeIdentity)
+	if err != nil {
+		return err
+	}
 	jobID := s.jobs.Submit(jobSpec("backup.verify", "校验备份 "+b.Label, b.Label, u.Username, ""), func(run *jobRun) error {
 		_, st, err := s.getStorage(b.StorageID)
 		if err != nil {
 			return err
 		}
 		run.Logf("下载并计算 SHA-256：%s", b.ObjectKey)
-		if err := backup.Verify(run.Context(), st, b.ObjectKey, b.SHA256, b.Size); err != nil {
-			return err
-		}
-		run.Logf("校验和一致")
-		ids, err := s.allAgeIdentities("")
+		rcRaw, err := st.Get(run.Context(), b.ObjectKey)
 		if err != nil {
-			return err
+			return fmt.Errorf("下载失败：%w", err)
+		}
+		h := sha256.New()
+		gotSize, copyErr := io.Copy(h, rcRaw)
+		rcRaw.Close()
+		if copyErr != nil {
+			return fmt.Errorf("读取失败：%w", copyErr)
+		}
+		gotSHA := hex.EncodeToString(h.Sum(nil))
+		if b.Size > 0 && gotSize != b.Size {
+			return fmt.Errorf("大小不一致：期望 %d，实际 %d", b.Size, gotSize)
+		}
+		if b.SHA256 != "" && gotSHA != b.SHA256 {
+			return fmt.Errorf("SHA-256 校验失败")
+		}
+		if b.SHA256 != "" {
+			run.Logf("校验和一致（%s）", gotSHA[:16])
+		} else {
+			run.Logf("SHA-256：%s，大小 %s", gotSHA[:16], humanBytes(gotSize))
 		}
 		rc, err := backup.OpenObject(run.Context(), st, b.ObjectKey, b.Encrypted, ids...)
 		if err != nil {
@@ -690,6 +720,10 @@ func (s *Server) handleVerifyBackup(w http.ResponseWriter, r *http.Request, u *U
 		rc.Close()
 		if err != nil {
 			return fmt.Errorf("解压/解密失败：%w", err)
+		}
+		if b.SHA256 == "" || b.Size == 0 {
+			_, _ = s.db.Exec(`UPDATE backups SET sha256=?, size=? WHERE id=?`, gotSHA, gotSize, b.ID)
+			run.Logf("已回填 SHA-256 与文件大小")
 		}
 		run.Logf("解密并解压成功，原始大小 %s", humanBytes(n))
 		return nil
