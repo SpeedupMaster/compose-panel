@@ -2,6 +2,9 @@ package backup
 
 import (
 	"archive/tar"
+	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -136,32 +139,64 @@ func Verify(ctx context.Context, st Storage, key, wantSHA string, wantSize int64
 	return nil
 }
 
-// Open returns the plaintext stream of a stored object.
-func OpenObject(ctx context.Context, st Storage, key string, encrypted bool, identity string) (io.ReadCloser, error) {
+// OpenStream decrypts (when encrypted or matching age magic header) and auto-decompresses
+// (zstd, gzip, or plain) rc using the supplied age identities.
+func OpenStream(rc io.ReadCloser, encrypted bool, identities []string) (io.ReadCloser, error) {
+	br := bufio.NewReaderSize(rc, 64<<10)
+	head, _ := br.Peek(len(ageMagic))
+	if encrypted || HasAgeHeader(head) {
+		var ids []age.Identity
+		for _, raw := range identities {
+			s := strings.TrimSpace(raw)
+			if s == "" {
+				continue
+			}
+			id, err := age.ParseX25519Identity(s)
+			if err != nil {
+				continue
+			}
+			ids = append(ids, id)
+		}
+		if len(ids) == 0 {
+			rc.Close()
+			return nil, fmt.Errorf("备份已加密，但未找到可用的解密私钥")
+		}
+		dr, err := age.Decrypt(br, ids...)
+		if err != nil {
+			rc.Close()
+			return nil, fmt.Errorf("解密失败（面板密钥与已保存的历史私钥均不匹配，请在恢复时提供原备份私钥）：%w", err)
+		}
+		br = bufio.NewReaderSize(dr, 64<<10)
+	}
+
+	magic, _ := br.Peek(4)
+	switch {
+	case bytes.HasPrefix(magic, zstdMagic):
+		zr, err := zstd.NewReader(br)
+		if err != nil {
+			rc.Close()
+			return nil, err
+		}
+		return &stackCloser{Reader: zr.IOReadCloser(), closers: []io.Closer{rc}}, nil
+	case bytes.HasPrefix(magic, gzipMagic):
+		gr, err := gzip.NewReader(br)
+		if err != nil {
+			rc.Close()
+			return nil, fmt.Errorf("gzip 解压失败：%w", err)
+		}
+		return &stackCloser{Reader: gr, closers: []io.Closer{rc}}, nil
+	default:
+		return &stackCloser{Reader: br, closers: []io.Closer{rc}}, nil
+	}
+}
+
+// OpenObject returns the plaintext stream of a stored object, auto-detecting age encryption and compression.
+func OpenObject(ctx context.Context, st Storage, key string, encrypted bool, identities ...string) (io.ReadCloser, error) {
 	rc, err := st.Get(ctx, key)
 	if err != nil {
 		return nil, err
 	}
-	var r io.Reader = rc
-	if encrypted {
-		id, err := age.ParseX25519Identity(strings.TrimSpace(identity))
-		if err != nil {
-			rc.Close()
-			return nil, fmt.Errorf("面板私钥无效：%w", err)
-		}
-		dr, err := age.Decrypt(rc, id)
-		if err != nil {
-			rc.Close()
-			return nil, fmt.Errorf("解密失败（备份可能使用了其他密钥）：%w", err)
-		}
-		r = dr
-	}
-	zr, err := zstd.NewReader(r)
-	if err != nil {
-		rc.Close()
-		return nil, err
-	}
-	return &stackCloser{Reader: zr.IOReadCloser(), closers: []io.Closer{rc}}, nil
+	return OpenStream(rc, encrypted, identities)
 }
 
 type stackCloser struct {
