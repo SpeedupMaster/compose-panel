@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ago, bytes, dateTime, del, get, post } from '../api'
 import { useCan } from '../auth'
-import { Confirm, Empty, ErrorBox, Field, Icon, Modal, Select, Status, useJobLog, useLoad, useToast } from './ui'
+import { Combobox, ComboOption, Confirm, Empty, ErrorBox, Field, Icon, Modal, Select, Status, useJobLog, useLoad, useToast } from './ui'
 import { MobileCard, ResponsiveTable } from './ResponsiveList'
 
 export type BackupSource = { kind: 'database' | 'volume' | 'dir' | 'panel'; instanceId?: number; database?: string; volume?: string; projectId?: number; path?: string }
@@ -61,6 +61,12 @@ export function BackupNowModal({ source, onClose, onDone }: { source?: BackupSou
 export function SourcePicker({ value, onChange, sources }: { value: BackupSource; onChange: (s: BackupSource) => void; sources: any }) {
   if (!sources) return <div className="muted">加载备份来源…</div>
   const dbi = sources.databases?.find((d: any) => d.id === value.instanceId)
+  const proj = sources.projects?.find((p: any) => p.id === value.projectId)
+  const dirOpts: ComboOption[] = (proj?.dirs || []).map((d: any) => ({
+    value: d.path,
+    label: d.label,
+    hint: d.hint,
+  }))
   return (
     <div className="col" style={{ gap: 12 }}>
       <div className="seg" role="group" aria-label="备份类型">
@@ -95,13 +101,40 @@ export function SourcePicker({ value, onChange, sources }: { value: BackupSource
       {value.kind === 'dir' && (
         <div className="form-grid">
           <Field label="项目">
-            <Select value={value.projectId || ''} onChange={(v) => onChange({ ...value, kind: 'dir', projectId: Number(v) })}>
+            <Select
+              value={value.projectId || ''}
+              onChange={(v) => {
+                const pid = Number(v)
+                const next = sources.projects?.find((p: any) => p.id === pid)
+                onChange({ ...value, kind: 'dir', projectId: pid, path: next?.dirs?.[0]?.path || '' })
+              }}
+            >
               <option value="">选择项目</option>
               {sources.projects.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </Select>
           </Field>
-          <Field label="相对路径" hint="项目目录下的子目录，如 data、uploads">
-            <input className="input mono" value={value.path || ''} onChange={(e) => onChange({ ...value, kind: 'dir', path: e.target.value })} />
+          <Field
+            div={dirOpts.length > 0}
+            label="相对路径"
+            hint={dirOpts.length > 0 ? `已识别 ${dirOpts.length} 个目录，可从列表选择或直接输入` : '项目目录下的子目录，如 data、uploads'}
+          >
+            {dirOpts.length > 0 ? (
+              <Combobox
+                mono
+                aria-label="相对路径"
+                value={value.path || ''}
+                placeholder="data"
+                options={dirOpts}
+                onChange={(path) => onChange({ ...value, kind: 'dir', path })}
+              />
+            ) : (
+              <input
+                className="input mono"
+                value={value.path || ''}
+                placeholder="data"
+                onChange={(e) => onChange({ ...value, kind: 'dir', path: e.target.value })}
+              />
+            )}
           </Field>
         </div>
       )}

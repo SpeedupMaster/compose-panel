@@ -10,8 +10,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"compose-panel/internal/backup"
 	"compose-panel/internal/config"
@@ -357,5 +361,169 @@ func TestMergeStorageSecretsForEditTest(t *testing.T) {
 	srv.mergeSavedStorageSecrets(created.ID, &cfg)
 	if cfg.ClientSecret != "real-csec" || cfg.RefreshToken != "1//real-rtok" {
 		t.Fatalf("merged secrets = (%q, %q), want (real-csec, 1//real-rtok)", cfg.ClientSecret, cfg.RefreshToken)
+	}
+}
+
+func TestDetectProjectDirsFromComposeAndDisk(t *testing.T) {
+	srv := newTestServer(t)
+	projDir := filepath.Join(srv.cfg.ProjectsDir, "wechat-bridge")
+	for _, d := range []string{
+		"data/wechat-token",
+		"data/wechat-config",
+		"data/wechat-data",
+		"data/wechat-scratch",
+		"data/bridge-data",
+		"uploads",
+		".panel",
+		".git",
+		"node_modules",
+	} {
+		if err := os.MkdirAll(filepath.Join(projDir, filepath.FromSlash(d)), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(projDir, "nginx.conf"), []byte("events {}"), 0o644); err != nil {
+		t.Fatalf("write nginx.conf: %v", err)
+	}
+
+	p := &Project{
+		ID:     1,
+		Name:   "wechat-bridge",
+		Kind:   "app",
+		Source: "inline",
+		Compose: `services:
+  bridge:
+    image: example/bridge:latest
+    network_mode: none
+    volumes:
+      - ./data/wechat-token:/token
+      - ./data/wechat-config:/config:ro
+      - ./data/wechat-data:/wechat-data
+      - ./data/wechat-scratch:/wechat-scratch
+      - ./data/bridge-data:/bridge-data
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./missing.yaml:/app/missing.yaml
+      - redis_data:/redis
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../outside:/outside
+`,
+	}
+
+	got := srv.detectProjectDirs(p)
+	want := []backupDirOption{
+		{Path: "data", Label: "包含 5 个挂载目录", Hint: "推荐"},
+		{Path: "data/bridge-data", Label: "挂载 → /bridge-data", Hint: "挂载"},
+		{Path: "data/wechat-config", Label: "挂载 → /config", Hint: "挂载"},
+		{Path: "data/wechat-data", Label: "挂载 → /wechat-data", Hint: "挂载"},
+		{Path: "data/wechat-scratch", Label: "挂载 → /wechat-scratch", Hint: "挂载"},
+		{Path: "data/wechat-token", Label: "挂载 → /token", Hint: "挂载"},
+		{Path: "uploads", Label: "项目子目录", Hint: "目录"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("detectProjectDirs() =\n%#v\nwant:\n%#v", got, want)
+	}
+}
+
+func TestDetectProjectDirsLongSyntaxEnvAndGit(t *testing.T) {
+	srv := newTestServer(t)
+
+	t.Run("long bind syntax with env expansion and nested parent dedup", func(t *testing.T) {
+		projDir := filepath.Join(srv.cfg.ProjectsDir, "long-app")
+		for _, d := range []string{"custom/nested/one", "custom/nested/two"} {
+			if err := os.MkdirAll(filepath.Join(projDir, filepath.FromSlash(d)), 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+		}
+		p := &Project{
+			ID:     2,
+			Name:   "long-app",
+			Kind:   "app",
+			Source: "inline",
+			Env:    []EnvVar{{Key: "DATA_ROOT", Value: "./custom"}},
+			Compose: `services:
+  app:
+    image: app:latest
+    volumes:
+      - type: bind
+        source: ${DATA_ROOT}/nested/one
+        target: /app/one
+      - type: bind
+        source: ${FALLBACK_DIR:-./custom}/nested/two
+        target: /app/two
+      - type: volume
+        source: named_vol
+        target: /app/vol
+`,
+		}
+		got := srv.detectProjectDirs(p)
+		want := []backupDirOption{
+			{Path: "custom/nested", Label: "包含 2 个挂载目录", Hint: "推荐"},
+			{Path: "custom/nested/one", Label: "挂载 → /app/one", Hint: "挂载"},
+			{Path: "custom/nested/two", Label: "挂载 → /app/two", Hint: "挂载"},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("detectProjectDirs() =\n%#v\nwant:\n%#v", got, want)
+		}
+	})
+
+	t.Run("git project resolves relative to compose file directory", func(t *testing.T) {
+		projDir := filepath.Join(srv.cfg.ProjectsDir, "git-app")
+		composeFile := filepath.Join(projDir, "src", "deploy", "compose.yml")
+		if err := os.MkdirAll(filepath.Join(projDir, "src", "deploy", "app-data"), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(composeFile, []byte("services:\n  web:\n    volumes:\n      - ./app-data:/data\n"), 0o644); err != nil {
+			t.Fatalf("write compose: %v", err)
+		}
+		p := &Project{
+			ID:             3,
+			Name:           "git-app",
+			Kind:           "app",
+			Source:         "git",
+			GitComposePath: "deploy/compose.yml",
+		}
+		got := srv.detectProjectDirs(p)
+		want := []backupDirOption{
+			{Path: "src/deploy/app-data", Label: "挂载 → /data", Hint: "挂载"},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("detectProjectDirs(git) =\n%#v\nwant:\n%#v", got, want)
+		}
+	})
+}
+
+func TestHandleBackupSourcesIncludesProjectDirs(t *testing.T) {
+	srv := newTestServer(t)
+	now := time.Now().Unix()
+	projDir := filepath.Join(srv.cfg.ProjectsDir, "demo-app")
+	if err := os.MkdirAll(filepath.Join(projDir, "data"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	composeYAML := "services:\n  app:\n    volumes:\n      - ./data:/app/data\n"
+	if _, err := srv.DB().Exec(`INSERT INTO projects(name, kind, source, compose, created_at, updated_at) VALUES('demo-app', 'app', 'inline', ?, ?, ?)`, composeYAML, now, now); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+
+	admin := &User{ID: 1, Username: "admin", Role: "admin", Level: roleAdmin}
+	w := httptest.NewRecorder()
+	if err := srv.handleBackupSources(w, httptest.NewRequest(http.MethodGet, "/api/backup-sources", nil), admin); err != nil {
+		t.Fatalf("handleBackupSources() error: %v", err)
+	}
+	var resp struct {
+		Projects []struct {
+			ID   int64             `json:"id"`
+			Name string            `json:"name"`
+			Dirs []backupDirOption `json:"dirs"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp.Projects) != 1 || resp.Projects[0].Name != "demo-app" {
+		t.Fatalf("unexpected projects: %+v", resp.Projects)
+	}
+	want := []backupDirOption{{Path: "data", Label: "挂载 → /app/data", Hint: "挂载"}}
+	if !reflect.DeepEqual(resp.Projects[0].Dirs, want) {
+		t.Fatalf("projects[0].dirs = %#v, want %#v", resp.Projects[0].Dirs, want)
 	}
 }

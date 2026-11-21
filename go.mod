@@ -9,6 +9,7 @@ require (
 	github.com/minio/minio-go/v7 v7.4.1
 	github.com/pkg/sftp v1.13.12
 	github.com/robfig/cron/v3 v3.0.1
+	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/crypto v0.59.0
 	modernc.org/sqlite v1.62.0
 )
@@ -30,7 +31,6 @@ require (
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
-	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/text v0.44.0 // indirect

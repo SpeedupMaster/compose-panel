@@ -892,13 +892,14 @@ func (s *Server) handleBackupSources(w http.ResponseWriter, r *http.Request, u *
 	}
 	out["volumes"] = vn
 	ps := []map[string]any{}
-	prow, _ := s.db.Query(`SELECT id, name FROM projects WHERE kind='app' ORDER BY name`)
+	prow, _ := s.db.Query(`SELECT ` + projectCols + ` FROM projects WHERE kind='app' ORDER BY name`)
 	if prow != nil {
 		for prow.Next() {
-			var id int64
-			var n string
-			_ = prow.Scan(&id, &n)
-			ps = append(ps, map[string]any{"id": id, "name": n})
+			p, err := s.scanProject(prow)
+			if err != nil {
+				continue
+			}
+			ps = append(ps, map[string]any{"id": p.ID, "name": p.Name, "dirs": s.detectProjectDirs(p)})
 		}
 		prow.Close()
 	}
