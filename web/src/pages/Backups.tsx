@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ago, bytes, del, get, post, put } from '../api'
 import { useCan } from '../auth'
-import { BackupNowModal, BackupSource, BackupTable, SourcePicker, sourceText, useStorages } from '../components/backup'
+import { BackupNowModal, BackupSource, BackupTable, RestoreModal, SourcePicker, sourceText, useStorages } from '../components/backup'
+import { ImportUploadModal, ScanStorageModal } from '../components/BackupImportModals'
 import { Drills } from './Drills'
 import { MobileCard, ResponsiveTable, joinInline } from '../components/ResponsiveList'
 import { Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Select, Status, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
@@ -35,6 +36,9 @@ export default function Backups() {
   const { data: records, reload: reloadRecords } = useLoad(() => get<any[]>(`/backups?limit=300${status ? '&status=' + status : ''}${q ? '&q=' + encodeURIComponent(q) : ''}`), [status, q], 15000)
   const [edit, setEdit] = useState<Policy | null>(null)
   const [now, setNow] = useState(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [scanOpen, setScanOpen] = useState(false)
+  const [quickRestore, setQuickRestore] = useState<any>(null)
   const [rm, setRm] = useState<any>(null)
   const openJob = useJobLog()
   const toast = useToast()
@@ -63,6 +67,8 @@ export default function Backups() {
       title="备份"
       actions={can.operator && (
         <>
+          {can.admin && <button className="btn" onClick={() => setUploadOpen(true)}><Icon name="upload" size={16} />上传备份</button>}
+          {can.admin && <button className="btn" onClick={() => setScanOpen(true)}><Icon name="search" size={16} />从存储导入</button>}
           <button className="btn" onClick={() => setNow(true)}>立即备份</button>
           <button className="btn btn-primary" onClick={() => setEdit(blankPolicy({ kind: 'database' }))}><Icon name="plus" />新建策略</button>
         </>
@@ -160,6 +166,27 @@ export default function Backups() {
       {tab === 'drills' && <Drills policies={policies || []} />}
       {edit && <PolicyModal p={edit} sources={sources} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reload() }} />}
       {now && <BackupNowModal onClose={() => setNow(false)} onDone={reloadRecords} />}
+      {uploadOpen && (
+        <ImportUploadModal
+          onClose={() => setUploadOpen(false)}
+          onImported={(b, openRestore) => {
+            setTab('records')
+            reloadRecords()
+            if (openRestore && b) setQuickRestore(b)
+          }}
+        />
+      )}
+      {scanOpen && (
+        <ScanStorageModal
+          onClose={() => setScanOpen(false)}
+          onImported={(b, openRestore) => {
+            setTab('records')
+            reloadRecords()
+            if (openRestore && b) setQuickRestore(b)
+          }}
+        />
+      )}
+      {quickRestore && <RestoreModal backup={quickRestore} onClose={() => setQuickRestore(null)} />}
       {rm && <Confirm title={`删除策略 ${rm.name}`} danger confirmText="删除" onClose={() => setRm(null)} onConfirm={async () => { await del(`/backup-policies/${rm.id}`); reload() }}>已有的备份文件会保留，可在备份记录中单独删除。</Confirm>}
     </Page>
   )

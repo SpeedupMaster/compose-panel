@@ -133,6 +133,29 @@ export function upload<T = any>(method: 'PUT' | 'POST', path: string, file: Blob
   })
 }
 
+// Uploads a multipart FormData payload with progress; resolves with the JSON response.
+export function uploadForm<T = any>(path: string, form: FormData, onProgress?: (pct: number) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', '/api' + path)
+    xhr.withCredentials = true
+    xhr.setRequestHeader('X-Panel', '1')
+    if (onProgress) xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 100))
+    xhr.onload = () => {
+      let data: any = null
+      try {
+        data = xhr.responseText ? JSON.parse(xhr.responseText) : null
+      } catch {
+        data = { error: xhr.responseText }
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data as T)
+      else reject(new ApiError(xhr.status, (data && data.error) || xhr.statusText))
+    }
+    xhr.onerror = () => reject(new ApiError(0, '网络错误，请求失败'))
+    xhr.send(form)
+  })
+}
+
 export function qs(params: Record<string, string | number | boolean | undefined | null>) {
   const q = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') q.set(k, String(v))

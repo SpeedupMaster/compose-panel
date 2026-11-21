@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ago, bytes, dateTime, del, get, post } from '../api'
 import { useCan } from '../auth'
-import { Combobox, ComboOption, Confirm, Empty, ErrorBox, Field, Icon, Modal, Select, Status, useJobLog, useLoad, useToast } from './ui'
+import { isEngineCompatible } from './backupMeta'
+import { PanelRestoreModal } from './PanelRestoreModal'
+import { Combobox, ComboOption, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Select, Status, useJobLog, useLoad, useToast } from './ui'
 import { MobileCard, ResponsiveTable } from './ResponsiveList'
 
 export type BackupSource = { kind: 'database' | 'volume' | 'dir' | 'panel'; instanceId?: number; database?: string; volume?: string; projectId?: number; path?: string }
@@ -9,11 +11,13 @@ export type BackupSource = { kind: 'database' | 'volume' | 'dir' | 'panel'; inst
 export function sourceText(s: BackupSource, names?: { db?: Record<number, string>; project?: Record<number, string> }) {
   switch (s.kind) {
     case 'database':
-      return `数据库 ${names?.db?.[s.instanceId!] || '#' + s.instanceId} / ${s.database}`
+      if (!s.instanceId && !s.database) return '数据库（外部导入）'
+      return `数据库 ${s.instanceId ? names?.db?.[s.instanceId] || '#' + s.instanceId : '外部'}${s.database ? ' / ' + s.database : ''}`
     case 'volume':
-      return `数据卷 ${s.volume}`
+      return s.volume ? `数据卷 ${s.volume}` : '数据卷（外部导入）'
     case 'dir':
-      return `目录 ${names?.project?.[s.projectId!] || '#' + s.projectId}/${s.path}`
+      if (!s.projectId && !s.path) return '项目目录（外部导入）'
+      return `目录 ${s.projectId ? names?.project?.[s.projectId] || '#' + s.projectId : '外部'}${s.path ? '/' + s.path : ''}`
     case 'panel':
       return '面板数据'
   }
@@ -144,22 +148,130 @@ export function SourcePicker({ value, onChange, sources }: { value: BackupSource
 }
 
 export function RestoreModal({ backup, onClose }: { backup: any; onClose: () => void }) {
-  const s: BackupSource = backup.source
+  const s: BackupSource = backup.source || { kind: 'database' }
+  if (s.kind === 'panel' || backup.format === 'sqlite') {
+    return <PanelRestoreModal backup={backup} onClose={onClose} />
+  }
+  return <DataRestoreModal backup={backup} onClose={onClose} />
+}
+
+function DataRestoreModal({ backup, onClose }: { backup: any; onClose: () => void }) {
+  const s: BackupSource = backup.source || { kind: 'database' }
   const openJob = useJobLog()
+  const { data: sources } = useLoad(() => get<any>('/backup-sources'), [])
+
+  const isTarImported = backup.format === 'tar' && backup.origin && backup.origin !== 'backup'
+  const [kind, setKind] = useState<'database' | 'volume' | 'dir'>(s.kind === 'volume' || s.kind === 'dir' ? s.kind : 'database')
   const [mode, setMode] = useState<'new' | 'overwrite'>('new')
-  const [target, setTarget] = useState(s.kind === 'database' ? `${s.database}_restore` : s.kind === 'volume' ? `${s.volume}-restore` : `${s.path}-restore`)
+  const [instanceId, setInstanceId] = useState<number>(s.instanceId || 0)
+  const [database, setDatabase] = useState(s.database ? `${s.database}_restore` : 'restored_db')
+  const [sourceDatabase, setSourceDatabase] = useState(s.database || '')
+  const [volume, setVolume] = useState(s.volume ? `${s.volume}-restore` : '')
+  const [projectId, setProjectId] = useState<number>(s.projectId || 0)
+  const [dirPath, setDirPath] = useState(s.path ? `${s.path}-restore` : 'restored')
+  const [ageIdentity, setAgeIdentity] = useState('')
   const [confirm, setConfirm] = useState('')
   const [err, setErr] = useState<unknown>()
   const [busy, setBusy] = useState(false)
-  const isRedis = s.kind === 'database' && backup.format === 'rdb'
-  const unsupported = s.kind === 'panel'
-  const { data: inst } = useLoad(async () => (isRedis ? (await get<any>(`/databases/${s.instanceId}`)).instance : null), [s.instanceId, isRedis])
-  const confirmName = isRedis ? inst?.name || '…' : s.database
+
+  const compatibleDBs: any[] = (sources?.databases || []).filter((d: any) => isEngineCompatible(backup.format || '', d.engine))
+  const volumes: any[] = sources?.volumes || []
+  const projects: any[] = sources?.projects || []
+
+  useEffect(() => {
+    if (!sources) return
+    if (kind === 'database') {
+      const hasCurrent = compatibleDBs.some((d) => d.id === instanceId)
+      if (!hasCurrent && compatibleDBs.length > 0) {
+        setInstanceId(compatibleDBs[0].id)
+      }
+    } else if (kind === 'dir') {
+      const hasProj = projects.some((p) => p.id === projectId)
+      if (!hasProj && projects.length > 0) {
+        setProjectId(projects[0].id)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sources, kind])
+
+  const selectedDB = compatibleDBs.find((d) => d.id === instanceId)
+  const selectedProj = projects.find((p) => p.id === projectId)
+  const isRedis = kind === 'database' && (selectedDB?.engine === 'redis' || backup.format === 'rdb')
+  const effectiveMode: 'new' | 'overwrite' = isRedis ? 'overwrite' : mode
+
+  const switchMode = (next: 'new' | 'overwrite') => {
+    setMode(next)
+    setConfirm('')
+    if (kind === 'database') {
+      if (next === 'overwrite') {
+        const dbs: string[] = selectedDB?.databases || []
+        if (s.database && dbs.includes(s.database)) setDatabase(s.database)
+        else if (dbs.length > 0) setDatabase(dbs[0])
+        else if (s.database) setDatabase(s.database)
+      } else {
+        setDatabase(s.database ? `${s.database}_restore` : 'restored_db')
+      }
+    } else if (kind === 'volume') {
+      if (next === 'overwrite') {
+        if (s.volume && volumes.some((v) => v.name === s.volume)) setVolume(s.volume)
+        else if (volumes.length > 0) setVolume(volumes[0].name)
+      } else {
+        setVolume(s.volume ? `${s.volume}-restore` : '')
+      }
+    } else if (kind === 'dir') {
+      if (next === 'overwrite') {
+        setDirPath(s.path || selectedProj?.dirs?.[0]?.path || 'data')
+      } else {
+        setDirPath(s.path ? `${s.path}-restore` : 'restored')
+      }
+    }
+  }
+
+  const confirmExpected =
+    kind === 'database'
+      ? isRedis
+        ? selectedDB?.name || ''
+        : database.trim()
+      : kind === 'volume'
+        ? volume.trim()
+        : selectedProj
+          ? `${selectedProj.name}/${dirPath.trim().replace(/^\/+|\/+$/g, '')}`
+          : dirPath.trim()
+
+  const needsConfirm = effectiveMode === 'overwrite'
+  const targetReady =
+    kind === 'database'
+      ? !!selectedDB && (isRedis || database.trim() !== '')
+      : kind === 'volume'
+        ? volume.trim() !== ''
+        : !!selectedProj && dirPath.trim() !== ''
+
   const submit = async () => {
     setBusy(true)
     setErr(undefined)
     try {
-      const r = await post(`/backups/${backup.id}/restore`, { mode: isRedis ? 'overwrite' : mode, target, confirm })
+      const payload: Record<string, any> = {
+        kind,
+        mode: effectiveMode,
+        confirm: confirm.trim(),
+        ageIdentity: ageIdentity.trim() || undefined,
+      }
+      if (kind === 'database') {
+        payload.instanceId = instanceId
+        payload.database = isRedis ? 'all' : database.trim()
+        payload.target = payload.database
+        if (selectedDB?.engine === 'mongo' && sourceDatabase.trim()) {
+          payload.sourceDatabase = sourceDatabase.trim()
+        }
+      } else if (kind === 'volume') {
+        payload.volume = volume.trim()
+        payload.target = volume.trim()
+      } else {
+        payload.projectId = projectId
+        payload.path = dirPath.trim()
+        payload.target = dirPath.trim()
+      }
+      const r = await post(`/backups/${backup.id}/restore`, payload)
       openJob(r.jobId, '恢复 ' + backup.label)
       onClose()
     } catch (e) {
@@ -168,46 +280,178 @@ export function RestoreModal({ backup, onClose }: { backup: any; onClose: () => 
       setBusy(false)
     }
   }
+
+  const dirOpts: ComboOption[] = (selectedProj?.dirs || []).map((d: any) => ({ value: d.path, label: d.label, hint: d.hint }))
+
   return (
     <Modal
       title="恢复备份"
+      wide
       onClose={onClose}
-      footer={!unsupported && <><button className="btn" onClick={onClose}>取消</button><button className={'btn ' + (mode === 'overwrite' || isRedis ? 'btn-danger solid' : 'btn-primary')} disabled={busy || ((mode === 'overwrite' || isRedis) && confirm !== confirmName)} onClick={submit}>{busy ? '提交中…' : '开始恢复'}</button></>}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>取消</button>
+          <button
+            className={'btn ' + (needsConfirm ? 'btn-danger solid' : 'btn-primary')}
+            disabled={busy || !targetReady || (needsConfirm && confirm.trim() !== confirmExpected)}
+            onClick={submit}
+          >
+            {busy ? '提交中…' : '开始恢复'}
+          </button>
+        </>
+      }
     >
       <dl className="kv">
         <dt>来源</dt><dd>{sourceText(s)}</dd>
         <dt>时间</dt><dd>{ago(backup.startedAt)}</dd>
-        <dt>大小</dt><dd>{bytes(backup.size)}{backup.encrypted && ' · 已加密'}</dd>
-        <dt>对象</dt><dd className="mono" style={{ fontSize: 12 }}>{backup.objectKey}</dd>
+        <dt>大小 / 格式</dt><dd>{bytes(backup.size)} · <span className="mono">{backup.format || '—'}</span>{backup.encrypted && ' · 已加密'}</dd>
+        <dt>对象</dt><dd className="mono" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{backup.objectKey}</dd>
       </dl>
-      {unsupported ? (
-        <div className="alert warn">面板数据备份不支持在线恢复，请下载后替换 panel.db 并重启面板。</div>
-      ) : isRedis ? (
-        <>
-          <div className="alert err"><Icon name="alert" /><div>Redis 只能整个实例覆盖恢复：会短暂停止 <b>{confirmName}</b>，用备份的 RDB 替换全部数据并重建 AOF，然后重新启动。开始前面板会自动先备份一次当前数据。</div></div>
-          <Field label={<>输入实例名 <code className="mono">{confirmName}</code> 确认</>}>
-            <input className="input mono" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
-          </Field>
-        </>
+
+      {!sources ? (
+        <Loading />
       ) : (
         <>
-          {s.kind === 'database' && (
-            <div className="seg" role="group" aria-label="恢复方式">
-              <button className={mode === 'new' ? 'on' : ''} onClick={() => setMode('new')}>恢复到新库（推荐）</button>
-              <button className={mode === 'overwrite' ? 'on' : ''} onClick={() => setMode('overwrite')}>覆盖原库</button>
+          {isTarImported && (
+            <div className="seg" role="group" aria-label="恢复目标类型">
+              <button type="button" className={kind === 'volume' ? 'on' : ''} onClick={() => { setKind('volume'); setConfirm('') }}>恢复到数据卷</button>
+              <button type="button" className={kind === 'dir' ? 'on' : ''} onClick={() => { setKind('dir'); setConfirm('') }}>恢复到项目目录</button>
             </div>
           )}
-          {mode === 'new' ? (
-            <Field label={s.kind === 'database' ? '新库名' : s.kind === 'volume' ? '新数据卷名' : '目标目录（项目目录下）'} hint="恢复到新位置，验证后再切换应用配置">
-              <input className="input mono" value={target} onChange={(e) => setTarget(e.target.value)} />
-            </Field>
-          ) : (
+
+          {kind === 'database' && (
             <>
-              <div className="alert err"><Icon name="alert" /><div>覆盖会清空 <b>{s.database}</b> 的现有数据。开始前面板会自动先备份一次当前数据。</div></div>
-              <Field label={<>输入库名 <code className="mono">{s.database}</code> 确认</>}>
-                <input className="input mono" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
-              </Field>
+              {compatibleDBs.length === 0 ? (
+                <div className="alert warn"><Icon name="alert" />当前面板中没有与格式 <code>{backup.format}</code> 兼容的数据库实例，请先在「数据库」页创建对应实例。</div>
+              ) : (
+                <>
+                  <Field label="目标数据库实例" hint="支持跨同引擎实例恢复">
+                    <Select value={instanceId || ''} onChange={(v) => { setInstanceId(Number(v)); setConfirm('') }}>
+                      {compatibleDBs.map((d) => <option key={d.id} value={d.id}>{d.name}（{d.engine}）</option>)}
+                    </Select>
+                  </Field>
+                  {isRedis ? (
+                    <>
+                      <div className="alert err"><Icon name="alert" /><div>Redis 只能整个实例覆盖恢复：会短暂停止 <b>{confirmExpected}</b>，用备份 RDB 替换全部数据并重建 AOF，然后重新启动。开始前面板会自动先备份一次当前数据。</div></div>
+                      <Field label={<>输入实例名 <code className="mono">{confirmExpected}</code> 确认</>}>
+                        <input className="input mono" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+                      </Field>
+                    </>
+                  ) : (
+                    <>
+                      <div className="seg" role="group" aria-label="恢复方式">
+                        <button type="button" className={mode === 'new' ? 'on' : ''} onClick={() => switchMode('new')}>恢复到新库（推荐）</button>
+                        <button type="button" className={mode === 'overwrite' ? 'on' : ''} onClick={() => switchMode('overwrite')}>覆盖已有库</button>
+                      </div>
+                      {mode === 'new' ? (
+                        <Field label="新库名" hint="在目标实例中创建新库并导入，验证后再切换应用连接">
+                          <input className="input mono" value={database} onChange={(e) => setDatabase(e.target.value)} />
+                        </Field>
+                      ) : (
+                        <>
+                          <Field label="选择或输入要覆盖的库">
+                            {(selectedDB?.databases || []).length > 0 ? (
+                              <Combobox
+                                mono
+                                value={database}
+                                onChange={(v) => { setDatabase(v); setConfirm('') }}
+                                options={(selectedDB?.databases || []).map((n: string) => ({ value: n, label: n }))}
+                                placeholder="选择或输入库名"
+                              />
+                            ) : (
+                              <input className="input mono" value={database} onChange={(e) => { setDatabase(e.target.value); setConfirm('') }} />
+                            )}
+                          </Field>
+                          <div className="alert err">
+                            <Icon name="alert" />
+                            <div>
+                              覆盖会清空 <b>{database || '目标库'}</b> 的现有数据（开始前若库已存在会自动先备份一次当前数据）。
+                              {selectedDB?.engine === 'postgres' && backup.format === 'sql' && ' PostgreSQL 明文 SQL 覆盖会断开该库活跃连接并重置用户 Schema，非库所有者用户的表级授权需按需重授。'}
+                            </div>
+                          </div>
+                          <Field label={<>输入库名 <code className="mono">{confirmExpected}</code> 确认</>}>
+                            <input className="input mono" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+                          </Field>
+                        </>
+                      )}
+                      {selectedDB?.engine === 'mongo' && (
+                        <Field label="归档内原库名（可选）" hint="留空时自动将归档内单库集合映射到目标库；若归档包含多库请填写原库名">
+                          <input className="input mono" value={sourceDatabase} onChange={(e) => setSourceDatabase(e.target.value)} placeholder="留空自动映射" />
+                        </Field>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
             </>
+          )}
+
+          {kind === 'volume' && (
+            <>
+              <div className="seg" role="group" aria-label="恢复方式">
+                <button type="button" className={mode === 'new' ? 'on' : ''} onClick={() => switchMode('new')}>恢复到新数据卷（推荐）</button>
+                <button type="button" className={mode === 'overwrite' ? 'on' : ''} onClick={() => switchMode('overwrite')}>覆盖已有数据卷</button>
+              </div>
+              {mode === 'new' ? (
+                <Field label="新数据卷名" hint="创建新卷并解包，验证后再修改 compose.yml 挂载">
+                  <input className="input mono" value={volume} onChange={(e) => setVolume(e.target.value)} placeholder="如 app_data_restore" />
+                </Field>
+              ) : (
+                <>
+                  <Field label="要覆盖的数据卷">
+                    <Select value={volume} onChange={(v) => { setVolume(v); setConfirm('') }}>
+                      <option value="">选择数据卷</option>
+                      {volumes.map((v) => <option key={v.name} value={v.name}>{v.name}{v.project ? `（${v.project}）` : ''}</option>)}
+                    </Select>
+                  </Field>
+                  <div className="alert err"><Icon name="alert" /><div>覆盖会先自动备份当前卷，再清空并解包写入。若该卷正被运行中的容器挂载，面板会拒绝覆盖，请先停止对应项目/容器。</div></div>
+                  <Field label={<>输入数据卷名 <code className="mono">{confirmExpected}</code> 确认</>}>
+                    <input className="input mono" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+                  </Field>
+                </>
+              )}
+            </>
+          )}
+
+          {kind === 'dir' && (
+            <>
+              {projects.length === 0 ? (
+                <div className="alert warn"><Icon name="alert" />当前面板中还没有应用项目，请先创建或导入项目。</div>
+              ) : (
+                <>
+                  <Field label="目标项目">
+                    <Select value={projectId || ''} onChange={(v) => { setProjectId(Number(v)); setConfirm('') }}>
+                      {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </Select>
+                  </Field>
+                  <div className="seg" role="group" aria-label="恢复方式">
+                    <button type="button" className={mode === 'new' ? 'on' : ''} onClick={() => switchMode('new')}>恢复到新目录（推荐）</button>
+                    <button type="button" className={mode === 'overwrite' ? 'on' : ''} onClick={() => switchMode('overwrite')}>覆盖已有目录</button>
+                  </div>
+                  <Field div={dirOpts.length > 0 && mode === 'overwrite'} label="目标相对路径（项目目录下）" hint={mode === 'new' ? '目录必须尚不存在' : '覆盖前会自动先备份原目录，并采用临时目录原子替换'}>
+                    {dirOpts.length > 0 && mode === 'overwrite' ? (
+                      <Combobox mono value={dirPath} onChange={(v) => { setDirPath(v); setConfirm('') }} options={dirOpts} placeholder="data" />
+                    ) : (
+                      <input className="input mono" value={dirPath} onChange={(e) => { setDirPath(e.target.value); setConfirm('') }} placeholder="data-restore" />
+                    )}
+                  </Field>
+                  {mode === 'overwrite' && (
+                    <>
+                      <div className="alert err"><Icon name="alert" /><div>覆盖前若检测到运行中的容器正通过 bind 挂载使用该目录（含父/子目录），面板会拒绝覆盖以防容器滞留已删除文件句柄，请先停止相关项目。</div></div>
+                      <Field label={<>输入 <code className="mono">{confirmExpected}</code> 确认</>}>
+                        <input className="input mono" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+                      </Field>
+                    </>
+                  )}
+                </>
+              )}
+            </>
+          )}
+
+          {backup.encrypted && (
+            <Field label="临时 age 解密私钥（可选）" hint="默认依次尝试当前面板密钥与历史解密密钥环；仅本次恢复临时解密其他机器密钥时填写，不落库">
+              <input className="input mono" type="password" value={ageIdentity} onChange={(e) => setAgeIdentity(e.target.value)} placeholder="AGE-SECRET-KEY-1…" autoComplete="off" />
+            </Field>
           )}
         </>
       )}
@@ -216,24 +460,86 @@ export function RestoreModal({ backup, onClose }: { backup: any; onClose: () => 
   )
 }
 
+function VerifyBackupModal({ backup, onClose }: { backup: any; onClose: () => void }) {
+  const openJob = useJobLog()
+  const toast = useToast()
+  const [ageIdentity, setAgeIdentity] = useState('')
+  const [busy, setBusy] = useState(false)
+  const run = async () => {
+    setBusy(true)
+    try {
+      const r = await post(`/backups/${backup.id}/verify`, ageIdentity.trim() ? { ageIdentity: ageIdentity.trim() } : {})
+      openJob(r.jobId, '校验备份')
+      onClose()
+    } catch (e) {
+      toast.err(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal
+      title="校验备份完整性与解密"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>取消</button>
+          <button className="btn btn-primary" disabled={busy} onClick={run}>{busy ? '提交中…' : '开始校验'}</button>
+        </>
+      }
+    >
+      <p style={{ margin: 0 }}>将下载 <code className="mono">{backup.objectKey}</code>，核对 SHA-256（扫描导入记录校验通过后自动回填）并完整尝试解密与解压。</p>
+      <Field label="临时 age 解密私钥（可选）" hint="留空默认使用面板密钥及历史解密密钥环">
+        <input className="input mono" type="password" value={ageIdentity} onChange={(e) => setAgeIdentity(e.target.value)} placeholder="AGE-SECRET-KEY-1…" autoComplete="off" />
+      </Field>
+    </Modal>
+  )
+}
+
+const originBadge: Record<string, string> = { upload: '上传导入', scan: '存储导入' }
+
 export function BackupTable({ list, reload, names }: { list: any[]; reload: () => void; names?: { db?: Record<number, string>; project?: Record<number, string> } }) {
   const can = useCan()
   const toast = useToast()
   const openJob = useJobLog()
   const [restore, setRestore] = useState<any>(null)
+  const [verifyTarget, setVerifyTarget] = useState<any>(null)
   const [rm, setRm] = useState<any>(null)
+  const [deleteFile, setDeleteFile] = useState(true)
   if (list.length === 0) return <Empty>没有备份记录。</Empty>
+  const openDelete = (b: any) => {
+    setDeleteFile(b.origin !== 'scan')
+    setRm(b)
+  }
   const renderActions = (b: any) => (
     <>
       {b.jobId && <button className="btn btn-sm btn-ghost" onClick={() => openJob(b.jobId)}>日志</button>}
       {b.status === 'success' && (
         <>
-          {can.operator && <button className="btn btn-sm" onClick={async () => { try { const r = await post(`/backups/${b.id}/verify`); openJob(r.jobId, '校验备份') } catch (e) { toast.err(e) } }}>校验</button>}
+          {can.operator && (
+            <button
+              className="btn btn-sm"
+              onClick={async () => {
+                if (b.encrypted) {
+                  setVerifyTarget(b)
+                  return
+                }
+                try {
+                  const r = await post(`/backups/${b.id}/verify`)
+                  openJob(r.jobId, '校验备份')
+                } catch (e) {
+                  toast.err(e)
+                }
+              }}
+            >
+              校验
+            </button>
+          )}
           {can.admin && <a className="btn btn-sm" href={`/api/backups/${b.id}/download${b.encrypted ? '?plain=1' : ''}`} title={b.encrypted ? '下载解密后的文件' : '下载'}><Icon name="download" size={16} /></a>}
           {can.admin && <button className="btn btn-sm" onClick={() => setRestore(b)}>恢复</button>}
         </>
       )}
-      {can.admin && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除备份" onClick={() => setRm(b)}><Icon name="trash" size={16} /></button>}
+      {can.admin && <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除备份" onClick={() => openDelete(b)}><Icon name="trash" size={16} /></button>}
     </>
   )
   return (
@@ -252,6 +558,7 @@ export function BackupTable({ list, reload, names }: { list: any[]; reload: () =
                     </td>
                     <td>
                       <Status s={b.status} />
+                      {b.origin && originBadge[b.origin] && <span className="badge off" style={{ marginLeft: 6 }}>{originBadge[b.origin]}</span>}
                       {b.encrypted && <span className="badge off" style={{ marginLeft: 6 }}><Icon name="lock" size={12} />加密</span>}
                       {b.verifiedAt > 0 && <span className="badge ok" style={{ marginLeft: 6 }} title={'恢复演练通过：' + dateTime(b.verifiedAt)}><Icon name="check" size={12} />已演练</span>}
                       {b.error && <div className="label ellipsis" style={{ maxWidth: 240, color: '#A41E14' }} title={b.error}>{b.error}</div>}
@@ -280,6 +587,7 @@ export function BackupTable({ list, reload, names }: { list: any[]; reload: () =
               badges={
                 <>
                   <Status s={b.status} />
+                  {b.origin && originBadge[b.origin] && <span className="badge off">{originBadge[b.origin]}</span>}
                   {b.encrypted && <span className="badge off"><Icon name="lock" size={12} />加密</span>}
                   {b.verifiedAt > 0 && <span className="badge ok" title={'恢复演练通过：' + dateTime(b.verifiedAt)}><Icon name="check" size={12} />已演练</span>}
                 </>
@@ -297,9 +605,25 @@ export function BackupTable({ list, reload, names }: { list: any[]; reload: () =
         }
       />
       {restore && <RestoreModal backup={restore} onClose={() => setRestore(null)} />}
+      {verifyTarget && <VerifyBackupModal backup={verifyTarget} onClose={() => setVerifyTarget(null)} />}
       {rm && (
-        <Confirm title="删除备份" danger confirmText="删除" onClose={() => setRm(null)} onConfirm={async () => { await del(`/backups/${rm.id}`); reload() }}>
-          同时删除存储中的备份文件 <code className="mono">{rm.objectKey}</code>，不可恢复。
+        <Confirm
+          title="删除备份记录"
+          danger
+          confirmText="删除"
+          onClose={() => setRm(null)}
+          onConfirm={async () => {
+            await del(`/backups/${rm.id}${deleteFile ? '' : '?keepFile=1'}`)
+            reload()
+          }}
+        >
+          <div className="col" style={{ gap: 10 }}>
+            <div>将从面板记录中移除 <code className="mono">{rm.objectKey}</code>。</div>
+            <label className="check">
+              <input type="checkbox" checked={deleteFile} onChange={(e) => setDeleteFile(e.target.checked)} />
+              同时删除存储中的备份文件（不可恢复）
+            </label>
+          </div>
         </Confirm>
       )}
     </>

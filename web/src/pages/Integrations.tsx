@@ -514,19 +514,166 @@ function ChannelModal({ c, onClose, onSaved }: { c: Channel; onClose: () => void
 }
 
 function BackupKey() {
-  const { data, error } = useLoad(() => get<any>('/backup-key'), [])
+  const { data, error, reload } = useLoad(() => get<any>('/backup-key'), [])
+  const toast = useToast()
   const [identity, setIdentity] = useState<string | null>(null)
-  const [confirm, setConfirm] = useState(false)
+  const [confirmAge, setConfirmAge] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
+  const [rmKey, setRmKey] = useState<any>(null)
+  const [masterKey, setMasterKey] = useState<string | null>(null)
+  const [confirmMaster, setConfirmMaster] = useState(false)
+
   if (!data) return error ? <ErrorBox error={error} /> : <Loading />
+  const extraKeys: any[] = data.extraKeys || []
+
   return (
-    <Card title="备份加密密钥（age）">
-      <div className="col" style={{ gap: 14 }}>
-        <p style={{ margin: 0 }}>加密的备份使用面板的 age 密钥对加密。<b>请把私钥离线保存一份</b>：如果服务器损坏，没有私钥就无法解密异地备份。</p>
-        <SecretBox label="公钥（接收者）" value={data.recipient} />
-        {identity ? <SecretBox label="私钥（妥善保管，不要分享）" value={identity} /> : <div><button className="btn" onClick={() => setConfirm(true)}><Icon name="key" />显示私钥</button></div>}
-        <p className="label" style={{ margin: 0 }}>手动解密：<code className="mono">age -d -i key.txt backup.zst.age | zstd -d &gt; backup</code></p>
-      </div>
-      {confirm && <Confirm title="显示备份私钥" confirmText="显示" onClose={() => setConfirm(false)} onConfirm={async () => { const r = await get('/backup-key?reveal=1'); setIdentity(r.identity) }}>查看私钥会记录到审计日志。请确认周围环境安全。</Confirm>}
-    </Card>
+    <div className="col" style={{ gap: 16 }}>
+      <Card title="当前备份加密密钥（age）">
+        <div className="col" style={{ gap: 14 }}>
+          <p style={{ margin: 0 }}>新产生的加密备份使用当前主 <code>age</code> 密钥对加密。<b>请把私钥离线保存一份</b>：如果服务器损坏，没有私钥就无法解密异地备份。</p>
+          <SecretBox label="公钥（接收者）" value={data.recipient} />
+          {identity ? <SecretBox label="私钥（妥善保管，不要分享）" value={identity} /> : <div><button className="btn" onClick={() => setConfirmAge(true)}><Icon name="key" />显示私钥</button></div>}
+          <p className="label" style={{ margin: 0 }}>手动解密：<code className="mono">age -d -i key.txt backup.zst.age | zstd -d &gt; backup</code></p>
+        </div>
+      </Card>
+
+      <Card
+        title="历史解密私钥（只读密钥环）"
+        actions={<button className="btn btn-sm btn-primary" onClick={() => setImportOpen(true)}><Icon name="plus" size={16} />导入旧私钥</button>}
+        pad={extraKeys.length === 0}
+      >
+        {extraKeys.length === 0 ? (
+          <Empty>尚未导入历史私钥。换机迁移并接入旧存储时，可将旧服务器的 <code>AGE-SECRET-KEY-1…</code> 私钥导入此处，面板校验与恢复时会自动匹配解密。</Empty>
+        ) : (
+          <ResponsiveTable
+            table={
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>备注</th><th>对应公钥</th><th>添加时间</th><th></th></tr></thead>
+                  <tbody>
+                    {extraKeys.map((k) => (
+                      <tr key={k.id}>
+                        <td style={{ fontWeight: 600 }}>{k.label}</td>
+                        <td className="mono" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{k.recipient}</td>
+                        <td className="muted nowrap">{ago(k.addedAt)}</td>
+                        <td>
+                          <div className="row" style={{ justifyContent: 'flex-end' }}>
+                            <button className="btn btn-sm btn-ghost btn-icon" aria-label="删除密钥" onClick={() => setRmKey(k)}><Icon name="trash" size={16} /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            }
+            cards={extraKeys.map((k) => (
+              <MobileCard
+                key={k.id}
+                tight
+                title={k.label}
+                sub={<span className="mono" style={{ fontSize: 12 }}>{k.recipient}</span>}
+                meta={[{ label: '添加时间', value: ago(k.addedAt) }]}
+                actions={<button className="btn btn-sm btn-ghost btn-icon" aria-label="删除密钥" onClick={() => setRmKey(k)}><Icon name="trash" size={16} /></button>}
+              />
+            ))}
+          />
+        )}
+      </Card>
+
+      <Card title="面板主密钥（master.key）">
+        <div className="col" style={{ gap: 14 }}>
+          <p style={{ margin: 0 }}>面板数据库中所有敏感凭据（项目环境变量密钥、数据库密码、存储密钥、通知凭据、<code>age</code> 私钥）均由此主密钥加密。<b>跨机恢复 <code>panel.db</code> 时必须提供原服务器的 <code>master.key</code></b>，请与 <code>age</code> 私钥一并离线妥善保存。</p>
+          {masterKey ? (
+            <SecretBox label="master.key（64 位十六进制，切勿泄露）" value={masterKey} />
+          ) : (
+            <div><button className="btn" onClick={() => setConfirmMaster(true)}><Icon name="key" />显示 master.key</button></div>
+          )}
+        </div>
+      </Card>
+
+      {confirmAge && (
+        <Confirm title="显示备份私钥" confirmText="显示" onClose={() => setConfirmAge(false)} onConfirm={async () => { const r = await get('/backup-key?reveal=1'); setIdentity(r.identity) }}>
+          查看私钥会记录到审计日志。请确认周围环境安全。
+        </Confirm>
+      )}
+      {confirmMaster && (
+        <Confirm title="显示面板主密钥" confirmText="显示" onClose={() => setConfirmMaster(false)} onConfirm={async () => { const r = await get('/system/master-key?reveal=1'); setMasterKey(r.key) }}>
+          查看 <code>master.key</code> 会记录到审计日志。任何人同时持有 <code>panel.db</code> 与 <code>master.key</code> 即可解开全部凭据，请确保离线妥善保管。
+        </Confirm>
+      )}
+      {importOpen && (
+        <ImportAgeKeyModal
+          onClose={() => setImportOpen(false)}
+          onSaved={() => {
+            setImportOpen(false)
+            setIdentity(null)
+            reload()
+            toast.ok('私钥已导入')
+          }}
+        />
+      )}
+      {rmKey && (
+        <Confirm
+          title={`删除历史私钥 ${rmKey.label}`}
+          danger
+          confirmText="删除"
+          onClose={() => setRmKey(null)}
+          onConfirm={async () => {
+            await del(`/backup-key/extra/${rmKey.id}`)
+            reload()
+            toast.ok('已删除历史私钥')
+          }}
+        >
+          删除后，仅使用该私钥加密的历史备份在恢复时需要手动临时粘贴私钥。
+        </Confirm>
+      )}
+    </div>
+  )
+}
+
+function ImportAgeKeyModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [label, setLabel] = useState('')
+  const [identity, setIdentity] = useState('')
+  const [setPrimary, setSetPrimary] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<unknown>()
+
+  const submit = async () => {
+    setBusy(true)
+    setErr(undefined)
+    try {
+      await post('/backup-key/import', { label: label.trim(), identity: identity.trim(), setPrimary })
+      onSaved()
+    } catch (e) {
+      setErr(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      title="导入 age 私钥"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>取消</button>
+          <button className="btn btn-primary" disabled={busy || !identity.trim()} onClick={submit}>{busy ? '导入中…' : '导入'}</button>
+        </>
+      }
+    >
+      <Field label="备注名称" hint="如：旧服务器备份密钥">
+        <input className="input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="旧服务器备份密钥" />
+      </Field>
+      <Field label="age 私钥" hint="以 AGE-SECRET-KEY-1 开头；会使用面板 master.key 加密存储">
+        <input className="input mono" type="password" value={identity} onChange={(e) => setIdentity(e.target.value)} placeholder="AGE-SECRET-KEY-1…" autoComplete="off" />
+      </Field>
+      <label className="check">
+        <input type="checkbox" checked={setPrimary} onChange={(e) => setSetPrimary(e.target.checked)} />
+        同时设为新备份的主密钥（原主密钥会自动保留到历史解密列表）
+      </label>
+      <ErrorBox error={err} />
+    </Modal>
   )
 }
