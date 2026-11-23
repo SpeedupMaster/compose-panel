@@ -3,7 +3,6 @@ package backup
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/xml"
 	"fmt"
@@ -275,11 +274,7 @@ func NewWebDAV(c TargetConfig) (*WebDAV, error) {
 	if !strings.HasSuffix(u.Path, "/") {
 		u.Path += "/"
 	}
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	if c.Insecure {
-		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-	}
-	return &WebDAV{base: u, user: c.Username, pass: c.Password, hc: &http.Client{Transport: tr}}, nil
+	return &WebDAV{base: u, user: c.Username, pass: c.Password, hc: &http.Client{Transport: sharedHTTPTransport(c.Insecure)}}, nil
 }
 
 func (d *WebDAV) url(key string) string {

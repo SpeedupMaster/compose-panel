@@ -304,15 +304,36 @@ func truncate(s string, n int) string {
 	return s
 }
 
+func (s *Server) pruneLoginFailuresLocked(cut time.Time) {
+	for k, ts := range s.loginFail {
+		keep := ts[:0]
+		for _, t := range ts {
+			if t.After(cut) {
+				keep = append(keep, t)
+			}
+		}
+		if len(keep) == 0 {
+			delete(s.loginFail, k)
+		} else {
+			s.loginFail[k] = keep
+		}
+	}
+}
+
 func (s *Server) tooManyFailures(key string) bool {
 	s.loginMu.Lock()
 	defer s.loginMu.Unlock()
 	cut := time.Now().Add(-15 * time.Minute)
-	var keep []time.Time
-	for _, t := range s.loginFail[key] {
+	ts := s.loginFail[key]
+	keep := ts[:0]
+	for _, t := range ts {
 		if t.After(cut) {
 			keep = append(keep, t)
 		}
+	}
+	if len(keep) == 0 {
+		delete(s.loginFail, key)
+		return false
 	}
 	s.loginFail[key] = keep
 	return len(keep) >= 5
@@ -320,7 +341,17 @@ func (s *Server) tooManyFailures(key string) bool {
 
 func (s *Server) recordFailure(key string) {
 	s.loginMu.Lock()
-	s.loginFail[key] = append(s.loginFail[key], time.Now())
+	now := time.Now()
+	s.pruneLoginFailuresLocked(now.Add(-15 * time.Minute))
+	const maxTrackedLoginKeys = 4096
+	if _, exists := s.loginFail[key]; !exists && len(s.loginFail) >= maxTrackedLoginKeys {
+		// Evict one arbitrary entry under brute-force flood to keep memory bounded.
+		for k := range s.loginFail {
+			delete(s.loginFail, k)
+			break
+		}
+	}
+	s.loginFail[key] = append(s.loginFail[key], now)
 	s.loginMu.Unlock()
 }
 
@@ -816,20 +847,25 @@ func (s *Server) handleAuditExport(w http.ResponseWriter, r *http.Request, u *Us
 	if err != nil {
 		return err
 	}
-	list, err := scanAudit(rows)
-	if err != nil {
-		return err
-	}
+	defer rows.Close()
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="audit-`+time.Now().Format("20060102")+`.csv"`)
 	_, _ = w.Write([]byte("\xEF\xBB\xBF"))
 	cw := csv.NewWriter(w)
 	_ = cw.Write([]string{"id", "time", "actor", "action", "target", "ip", "result", "detail", "hash"})
-	for _, a := range list {
-		_ = cw.Write([]string{fmt.Sprint(a.ID), time.Unix(a.TS, 0).In(s.location()).Format(time.RFC3339), a.Actor, a.Action, a.Target, a.IP, a.Result, a.Detail, a.Hash})
+	loc := s.location()
+	count := 0
+	for rows.Next() {
+		var a auditRow
+		if err := rows.Scan(&a.ID, &a.TS, &a.Actor, &a.Action, &a.Target, &a.IP, &a.Result, &a.Detail, &a.PrevHash, &a.Hash); err != nil {
+			break
+		}
+		_ = cw.Write([]string{fmt.Sprint(a.ID), time.Unix(a.TS, 0).In(loc).Format(time.RFC3339), a.Actor, a.Action, a.Target, a.IP, a.Result, a.Detail, a.Hash})
+		count++
 	}
 	cw.Flush()
-	s.audit(r, u, "audit.export", "", fmt.Sprintf("%d 条", len(list)), nil)
+	rows.Close()
+	s.audit(r, u, "audit.export", "", fmt.Sprintf("%d 条", count), nil)
 	return nil
 }
 
@@ -838,16 +874,22 @@ func (s *Server) handleAuditVerify(w http.ResponseWriter, r *http.Request, u *Us
 	if err != nil {
 		return err
 	}
-	list, err := scanAudit(rows)
-	if err != nil {
-		return err
-	}
+	defer rows.Close()
 	prev := ""
-	for _, a := range list {
+	count := 0
+	for rows.Next() {
+		var a auditRow
+		if err := rows.Scan(&a.ID, &a.TS, &a.Actor, &a.Action, &a.Target, &a.IP, &a.Result, &a.Detail, &a.PrevHash, &a.Hash); err != nil {
+			return err
+		}
+		count++
 		if a.PrevHash != prev || auditHash(a.PrevHash, a.TS, a.Actor, a.Action, a.Target, a.IP, a.Result, a.Detail) != a.Hash {
-			return ok(w, map[string]any{"ok": false, "brokenAt": a.ID, "count": len(list)})
+			return ok(w, map[string]any{"ok": false, "brokenAt": a.ID, "count": count})
 		}
 		prev = a.Hash
 	}
-	return ok(w, map[string]any{"ok": true, "count": len(list)})
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return ok(w, map[string]any{"ok": true, "count": count})
 }

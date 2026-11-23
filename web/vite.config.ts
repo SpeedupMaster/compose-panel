@@ -1,12 +1,66 @@
-import { defineConfig } from 'vite'
+import fs from 'node:fs'
+import path from 'node:path'
+import zlib from 'node:zlib'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 // In development, API calls go to a running panel (PANEL_URL, default http://localhost:7800).
 const target = process.env.PANEL_URL || 'http://localhost:7800'
 
+// Modern browsers all support woff2; drop redundant .woff fallbacks emitted by @fontsource (~94 KiB).
+function dropLegacyWoff(): Plugin {
+  return {
+    name: 'drop-legacy-woff',
+    enforce: 'pre',
+    transform(code, id) {
+      if (!id.includes('@fontsource') || !id.endsWith('.css')) return null
+      const next = code.replace(/,\s*url\([^)]+\.woff\)\s*format\(['"]woff['"]\)/g, '')
+      return next === code ? null : { code: next, map: null }
+    },
+  }
+}
+
+// Precompress text assets in outDir to .gz (removing originals) after VitePWA finishes so go:embed
+// stores compressed bytes (~1 MiB smaller binary) and Go serves them directly or gunzips on fallback.
+function precompressEmbeddedDist(): Plugin {
+  let outDir = 'dist'
+  const exts = new Set(['.js', '.mjs', '.css', '.html', '.svg', '.webmanifest'])
+  const walk = (dir: string) => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, ent.name)
+      if (ent.isDirectory()) {
+        walk(full)
+        continue
+      }
+      if (!exts.has(path.extname(ent.name).toLowerCase())) continue
+      const raw = fs.readFileSync(full)
+      const gz = zlib.gzipSync(raw, { level: 9 })
+      if (gz.length < raw.length) {
+        fs.writeFileSync(full + '.gz', gz)
+        fs.unlinkSync(full)
+      }
+    }
+  }
+  return {
+    name: 'precompress-embedded-dist',
+    apply: 'build',
+    configResolved(cfg) {
+      outDir = path.resolve(cfg.root, cfg.build.outDir)
+    },
+    closeBundle: {
+      order: 'post',
+      sequential: true,
+      handler() {
+        if (fs.existsSync(outDir)) walk(outDir)
+      },
+    },
+  }
+}
+
 export default defineConfig({
   plugins: [
+    dropLegacyWoff(),
     react(),
     VitePWA({
       // Custom worker (src/sw.ts): network-first page loads, precached assets, no API caching.
@@ -39,6 +93,7 @@ export default defineConfig({
       },
       devOptions: { enabled: false },
     }),
+    precompressEmbeddedDist(),
   ],
   build: { outDir: 'dist', emptyOutDir: true, chunkSizeWarningLimit: 1200 },
   server: {

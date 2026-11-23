@@ -12,7 +12,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -83,7 +82,12 @@ func Store(ctx context.Context, st Storage, key string, src io.Reader, recipient
 			}
 			sink = aw
 		}
-		zw, err := zstd.NewWriter(sink, zstd.WithEncoderLevel(zstd.SpeedDefault))
+		zw, err := zstd.NewWriter(sink,
+			zstd.WithEncoderLevel(zstd.SpeedDefault),
+			zstd.WithEncoderConcurrency(1),
+			zstd.WithLowerEncoderMem(true),
+			zstd.WithWindowSize(1<<20),
+		)
 		if err != nil {
 			pw.CloseWithError(err)
 			return
@@ -172,7 +176,10 @@ func OpenStream(rc io.ReadCloser, encrypted bool, identities []string) (io.ReadC
 	magic, _ := br.Peek(4)
 	switch {
 	case bytes.HasPrefix(magic, zstdMagic):
-		zr, err := zstd.NewReader(br)
+		zr, err := zstd.NewReader(br,
+			zstd.WithDecoderConcurrency(1),
+			zstd.WithDecoderLowmem(true),
+		)
 		if err != nil {
 			rc.Close()
 			return nil, err
@@ -213,78 +220,6 @@ func (s *stackCloser) Close() error {
 	}
 	return nil
 }
-
-// CmdReader runs cmd and returns its stdout as a stream; Close waits for the process
-// and reports its stderr on failure.
-func CmdReader(cmd *exec.Cmd, log io.Writer) (io.ReadCloser, error) {
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	tail := &tailBuf{max: 4000}
-	if log != nil {
-		cmd.Stderr = io.MultiWriter(tail, log)
-	} else {
-		cmd.Stderr = tail
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	return &cmdStream{ReadCloser: out, cmd: cmd, tail: tail}, nil
-}
-
-type cmdStream struct {
-	io.ReadCloser
-	cmd    *exec.Cmd
-	tail   *tailBuf
-	err    error
-	waited bool
-}
-
-func (c *cmdStream) Read(p []byte) (int, error) {
-	n, err := c.ReadCloser.Read(p)
-	if err == io.EOF {
-		if werr := c.wait(); werr != nil {
-			return n, werr
-		}
-	}
-	return n, err
-}
-
-func (c *cmdStream) wait() error {
-	if c.waited {
-		return c.err
-	}
-	c.waited = true
-	if err := c.cmd.Wait(); err != nil {
-		msg := strings.TrimSpace(c.tail.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		c.err = fmt.Errorf("%s", msg)
-	}
-	return c.err
-}
-
-func (c *cmdStream) Close() error {
-	c.ReadCloser.Close()
-	return c.wait()
-}
-
-type tailBuf struct {
-	b   []byte
-	max int
-}
-
-func (t *tailBuf) Write(p []byte) (int, error) {
-	t.b = append(t.b, p...)
-	if len(t.b) > t.max {
-		t.b = t.b[len(t.b)-t.max:]
-	}
-	return len(p), nil
-}
-
-func (t *tailBuf) String() string { return string(t.b) }
 
 // TarDir streams a tar of dir.
 func TarDir(dir string) io.ReadCloser {

@@ -39,8 +39,23 @@ func New(host string) *Client {
 		var d net.Dialer
 		return d.DialContext(ctx, c.network, c.addr)
 	}
-	c.http = &http.Client{Transport: &http.Transport{DialContext: dial, MaxIdleConns: 16}, Timeout: 60 * time.Second}
-	c.stream = &http.Client{Transport: &http.Transport{DialContext: dial}}
+	c.http = &http.Client{
+		Transport: &http.Transport{
+			DialContext:         dial,
+			MaxIdleConns:        16,
+			MaxIdleConnsPerHost: 8,
+			IdleConnTimeout:     30 * time.Second,
+		},
+		Timeout: 60 * time.Second,
+	}
+	c.stream = &http.Client{
+		Transport: &http.Transport{
+			DialContext:         dial,
+			MaxIdleConns:        8,
+			MaxIdleConnsPerHost: 4,
+			IdleConnTimeout:     30 * time.Second,
+		},
+	}
 	return c
 }
 
@@ -268,9 +283,16 @@ func (c *Client) ContainerAction(ctx context.Context, id, action string) error {
 }
 
 func (c *Client) RemoveContainer(ctx context.Context, id string, force bool) error {
+	return c.RemoveContainerWithVolumes(ctx, id, force, false)
+}
+
+func (c *Client) RemoveContainerWithVolumes(ctx context.Context, id string, force, removeVolumes bool) error {
 	q := url.Values{}
 	if force {
 		q.Set("force", "1")
+	}
+	if removeVolumes {
+		q.Set("v", "1")
 	}
 	return c.do(ctx, "DELETE", "/containers/"+url.PathEscape(id), q, nil, nil)
 }
@@ -389,7 +411,16 @@ func (c *Client) Logs(ctx context.Context, id string, tail string, follow, times
 
 // Demux splits Docker's multiplexed stdout/stderr stream.
 func Demux(r io.Reader, stdout, stderr io.Writer) error {
-	br := bufio.NewReaderSize(r, 32<<10)
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	br, ok := r.(*bufio.Reader)
+	if !ok {
+		br = bufio.NewReaderSize(r, 32<<10)
+	}
 	hdr := make([]byte, 8)
 	for {
 		if _, err := io.ReadFull(br, hdr); err != nil {

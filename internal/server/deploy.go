@@ -147,7 +147,7 @@ func (s *Server) runDeploy(run *jobRun, projectID, depID, fromDeployment int64) 
 	finish("success", "")
 	run.Logf("==> 部署成功")
 	s.recheckAfterDeploy(p.ID)
-	s.notify.Emit(notify.Event{Type: "deploy_success", Title: "部署成功：" + p.Name, Body: state.commitMsg, Target: p.Name + time.Now().String()})
+	s.notify.Emit(notify.Event{Type: "deploy_success", Title: "部署成功：" + p.Name, Body: state.commitMsg, Target: p.Name})
 	return nil
 }
 

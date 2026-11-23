@@ -2,17 +2,22 @@
 package server
 
 import (
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"io/fs"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -221,13 +226,23 @@ func (s *Server) staticHandler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		p := strings.TrimPrefix(r.URL.Path, "/")
+		p := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
 		if p != "" {
 			if f, err := s.web.Open(p); err == nil {
+				st, serr := f.Stat()
 				f.Close()
-				setStaticHeaders(w.Header(), p)
-				fsrv.ServeHTTP(w, r)
-				return
+				if serr == nil && !st.IsDir() {
+					setStaticHeaders(w.Header(), p)
+					fsrv.ServeHTTP(w, r)
+					return
+				}
+			}
+			if !strings.HasSuffix(p, ".gz") {
+				if f, err := s.web.Open(p + ".gz"); err == nil {
+					defer f.Close()
+					servePrecompressed(w, r, f, p)
+					return
+				}
 			}
 			// A hashed asset from an older build must 404, not fall back to index.html: a stale
 			// page would otherwise try to run HTML as a module script.
@@ -236,15 +251,82 @@ func (s *Server) staticHandler() http.Handler {
 				return
 			}
 		}
-		data, err := fs.ReadFile(s.web, "index.html")
-		if err != nil {
-			http.Error(w, "前端尚未构建：请先在 web/ 下运行 npm run build", http.StatusServiceUnavailable)
+		if data, err := fs.ReadFile(s.web, "index.html"); err == nil {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-cache")
+			_, _ = w.Write(data)
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-cache")
-		_, _ = w.Write(data)
+		if f, err := s.web.Open("index.html.gz"); err == nil {
+			defer f.Close()
+			servePrecompressed(w, r, f, "index.html")
+			return
+		}
+		http.Error(w, "前端尚未构建：请先在 web/ 下运行 npm run build", http.StatusServiceUnavailable)
 	})
+}
+
+func acceptsGzip(r *http.Request) bool {
+	for _, part := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
+		enc, params, _ := strings.Cut(strings.TrimSpace(part), ";")
+		if !strings.EqualFold(strings.TrimSpace(enc), "gzip") {
+			continue
+		}
+		if strings.Contains(strings.ReplaceAll(strings.ToLower(params), " ", ""), "q=0") &&
+			!strings.Contains(strings.ReplaceAll(strings.ToLower(params), " ", ""), "q=0.") {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+func staticContentType(p string) string {
+	switch strings.ToLower(path.Ext(p)) {
+	case ".js", ".mjs":
+		return "text/javascript; charset=utf-8"
+	case ".css":
+		return "text/css; charset=utf-8"
+	case ".html":
+		return "text/html; charset=utf-8"
+	case ".svg":
+		return "image/svg+xml"
+	case ".webmanifest":
+		return "application/manifest+json"
+	case ".json":
+		return "application/json; charset=utf-8"
+	default:
+		return mime.TypeByExtension(path.Ext(p))
+	}
+}
+
+func servePrecompressed(w http.ResponseWriter, r *http.Request, f fs.File, p string) {
+	if ct := staticContentType(p); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	setStaticHeaders(w.Header(), p)
+	w.Header().Add("Vary", "Accept-Encoding")
+	if acceptsGzip(r) {
+		w.Header().Set("Content-Encoding", "gzip")
+		if st, err := f.Stat(); err == nil {
+			w.Header().Set("Content-Length", strconv.FormatInt(st.Size(), 10))
+		}
+		w.WriteHeader(http.StatusOK)
+		if r.Method != http.MethodHead {
+			_, _ = io.Copy(w, f)
+		}
+		return
+	}
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		http.Error(w, "invalid compressed asset", http.StatusInternalServerError)
+		return
+	}
+	defer gr.Close()
+	w.WriteHeader(http.StatusOK)
+	if r.Method != http.MethodHead {
+		_, _ = io.Copy(w, gr)
+	}
 }
 
 // setStaticHeaders sets caching and type headers for a file from the embedded frontend.

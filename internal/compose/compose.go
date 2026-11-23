@@ -22,8 +22,22 @@ type Project struct {
 	DockerCfg string   // optional DOCKER_CONFIG dir with registry credentials
 }
 
-func (p Project) args(extra ...string) []string {
-	a := []string{"compose", "-p", p.Name, "--project-directory", p.Dir}
+func resolveComposeBin(lookPath func(string) (string, error), envBin string) (string, []string) {
+	if envBin != "" {
+		return envBin, nil
+	}
+	if p, err := lookPath("docker-compose"); err == nil && p != "" {
+		return p, nil
+	}
+	const pluginPath = "/usr/libexec/docker/cli-plugins/docker-compose"
+	if p, err := lookPath(pluginPath); err == nil && p != "" {
+		return p, nil
+	}
+	return "docker", []string{"compose"}
+}
+
+func (p Project) baseArgs(extra ...string) []string {
+	a := []string{"-p", p.Name, "--project-directory", p.Dir}
 	for _, f := range p.Files {
 		a = append(a, "-f", f)
 	}
@@ -33,27 +47,29 @@ func (p Project) args(extra ...string) []string {
 	return append(a, extra...)
 }
 
-func (p Project) cmd(ctx context.Context, extra ...string) *exec.Cmd {
-	c := exec.CommandContext(ctx, "docker", p.args(extra...)...)
+func (p Project) cmd(ctx context.Context, extra ...string) (*exec.Cmd, string) {
+	bin, prefix := resolveComposeBin(exec.LookPath, strings.TrimSpace(os.Getenv("PANEL_COMPOSE_BIN")))
+	args := append(prefix, p.baseArgs(extra...)...)
+	c := exec.CommandContext(ctx, bin, args...)
 	c.Dir = p.Dir
 	c.Env = append(os.Environ(), "COMPOSE_ANSI=never", "COMPOSE_STATUS_STDOUT=1", "COMPOSE_PROGRESS=plain")
 	if p.DockerCfg != "" {
 		c.Env = append(c.Env, "DOCKER_CONFIG="+p.DockerCfg)
 	}
-	return c
+	return c, bin + " " + strings.Join(args, " ")
 }
 
 // Run executes a compose subcommand, streaming combined output to w.
 func (p Project) Run(ctx context.Context, w io.Writer, extra ...string) error {
-	c := p.cmd(ctx, extra...)
+	c, desc := p.cmd(ctx, extra...)
 	c.Stdout, c.Stderr = w, w
-	fmt.Fprintf(w, "$ docker %s\n", strings.Join(p.args(extra...), " "))
+	fmt.Fprintf(w, "$ %s\n", desc)
 	return c.Run()
 }
 
 // Output runs a compose subcommand and returns stdout (stderr included in the error).
 func (p Project) Output(ctx context.Context, stdin io.Reader, extra ...string) ([]byte, error) {
-	c := p.cmd(ctx, extra...)
+	c, _ := p.cmd(ctx, extra...)
 	var out, errb bytes.Buffer
 	c.Stdout, c.Stderr, c.Stdin = &out, &errb, stdin
 	if err := c.Run(); err != nil {

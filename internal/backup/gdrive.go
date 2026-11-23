@@ -25,7 +25,7 @@ const (
 	defaultGDriveTokenURL  = "https://oauth2.googleapis.com/token"
 	defaultGDriveAPIBase   = "https://www.googleapis.com/drive/v3"
 	defaultGDriveUpload    = "https://www.googleapis.com/upload/drive/v3"
-	defaultGDriveChunkSize = 8 << 20 // 8 MiB (must be a multiple of 256 KiB)
+	defaultGDriveChunkSize = 4 << 20 // 4 MiB (must be a multiple of 256 KiB)
 	driveFolderMime        = "application/vnd.google-apps.folder"
 )
 
@@ -88,7 +88,7 @@ func gdriveExchangeCode(ctx context.Context, tokenURL, clientID, clientSecret, c
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	resp, err := (&http.Client{Transport: sharedHTTPTransport(false), Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
 		return "", fmt.Errorf("连接 Google 授权服务器失败：%w", err)
 	}
@@ -150,7 +150,7 @@ func NewGDrive(c TargetConfig) (*GDrive, error) {
 		apiBase:      defaultGDriveAPIBase,
 		uploadBase:   defaultGDriveUpload,
 		chunkSize:    defaultGDriveChunkSize,
-		hc:           &http.Client{},
+		hc:           &http.Client{Transport: sharedHTTPTransport(false)},
 	}, nil
 }
 

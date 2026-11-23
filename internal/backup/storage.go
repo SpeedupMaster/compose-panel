@@ -3,14 +3,17 @@ package backup
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -20,7 +23,32 @@ import (
 const (
 	MaxListItems = 5000
 	MaxListDepth = 6
+	s3PartSize   = 8 << 20 // 8 MiB per multipart chunk (supports up to ~80 GiB objects)
 )
+
+var (
+	sharedTransportOnce     sync.Once
+	sharedSecureTransport   *http.Transport
+	sharedInsecureTransport *http.Transport
+)
+
+func sharedHTTPTransport(insecure bool) *http.Transport {
+	sharedTransportOnce.Do(func() {
+		sec := http.DefaultTransport.(*http.Transport).Clone()
+		sec.MaxIdleConns = 16
+		sec.MaxIdleConnsPerHost = 4
+		sec.IdleConnTimeout = 30 * time.Second
+		sharedSecureTransport = sec
+
+		ins := sec.Clone()
+		ins.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		sharedInsecureTransport = ins
+	})
+	if insecure {
+		return sharedInsecureTransport
+	}
+	return sharedSecureTransport
+}
 
 // ErrListTruncated is returned alongside partial results when List reaches MaxListItems.
 var ErrListTruncated = errors.New("对象数量超过扫描上限")
@@ -230,9 +258,10 @@ func NewS3(c TargetConfig) (*S3, error) {
 	}
 	secure := !c.Insecure && !strings.HasPrefix(c.Endpoint, "http://")
 	opts := &minio.Options{
-		Creds:  credentials.NewStaticV4(c.AccessKey, c.SecretKey, ""),
-		Secure: secure,
-		Region: c.Region,
+		Creds:     credentials.NewStaticV4(c.AccessKey, c.SecretKey, ""),
+		Secure:    secure,
+		Region:    c.Region,
+		Transport: sharedHTTPTransport(false),
 	}
 	if c.PathStyle {
 		opts.BucketLookup = minio.BucketLookupPath
@@ -252,7 +281,7 @@ func (s *S3) key(k string) string {
 }
 
 func (s *S3) Put(ctx context.Context, key string, r io.Reader) (int64, error) {
-	info, err := s.c.PutObject(ctx, s.bucket, s.key(key), r, -1, minio.PutObjectOptions{ContentType: "application/octet-stream", PartSize: 16 << 20})
+	info, err := s.c.PutObject(ctx, s.bucket, s.key(key), r, -1, minio.PutObjectOptions{ContentType: "application/octet-stream", PartSize: s3PartSize})
 	if err != nil {
 		return 0, err
 	}

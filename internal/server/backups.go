@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -26,6 +25,7 @@ import (
 	"compose-panel/internal/auth"
 	"compose-panel/internal/backup"
 	"compose-panel/internal/dbmgr"
+	"compose-panel/internal/docker"
 	"compose-panel/internal/notify"
 )
 
@@ -101,19 +101,27 @@ type storageTarget struct {
 	LastCheckMsg string              `json:"lastCheckMsg"`
 }
 
-func (s *Server) getStorage(id int64) (*storageTarget, backup.Storage, error) {
+func (s *Server) getStorageTarget(id int64) (*storageTarget, error) {
 	t := &storageTarget{}
 	var enc string
 	err := s.db.QueryRow(`SELECT id, name, kind, config, created_at, last_check_at, last_check_ok, last_check_msg FROM storage_targets WHERE id=?`, id).
 		Scan(&t.ID, &t.Name, &t.Kind, &enc, &t.CreatedAt, &t.LastCheckAt, &t.LastCheckOK, &t.LastCheckMsg)
 	if err != nil {
-		return nil, nil, errNotFound
+		return nil, errNotFound
 	}
 	raw, err := s.box.Open(enc)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	t.Config, _ = backup.ParseTargetConfig(raw)
+	return t, nil
+}
+
+func (s *Server) getStorage(id int64) (*storageTarget, backup.Storage, error) {
+	t, err := s.getStorageTarget(id)
+	if err != nil {
+		return nil, nil, err
+	}
 	st, err := backup.Open(t.Kind, t.Config)
 	return t, st, err
 }
@@ -213,17 +221,20 @@ func (s *Server) openSource(ctx context.Context, run *jobRun, src BackupSource) 
 		if err != nil {
 			return nil, "", err
 		}
-		cmd, format, err := d.client().DumpCmd(ctx, src.Database)
+		spec, format, err := d.client().DumpCmd(src.Database)
 		if err != nil {
 			return nil, "", err
 		}
-		run.Logf("$ docker exec %s %s ...", d.Container, cmd.Args[len(cmd.Args)-1])
-		rc, err := backup.CmdReader(cmd, nil)
+		run.Logf("$ docker exec %s %s ...", d.Container, spec.Args[0])
+		rc, err := s.dk.ExecStdout(ctx, spec.Container, docker.ExecOptions{Cmd: spec.Args, Env: spec.Env})
 		return rc, format, err
 	case "volume":
-		cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none", "-v", src.Volume+":/v:ro", s.cfg.HelperImage, "tar", "-C", "/v", "-cf", "-", ".")
 		run.Logf("$ docker run --rm -v %s:/v:ro %s tar -C /v -cf - .", src.Volume, s.cfg.HelperImage)
-		rc, err := backup.CmdReader(cmd, nil)
+		rc, err := s.dk.RunContainerStdout(ctx, docker.RunOptions{
+			Image: s.cfg.HelperImage,
+			Binds: []string{src.Volume + ":/v:ro"},
+			Cmd:   []string{"tar", "-C", "/v", "-cf", "-", "."},
+		})
 		return rc, "tar", err
 	case "dir":
 		p, err := s.getProject(src.ProjectID)
@@ -414,7 +425,7 @@ func (s *Server) checkPolicyReq(req *policyReq) error {
 	if _, err := cronParser.Parse(req.Schedule); err != nil {
 		return bad("Cron 表达式无效：%v", err)
 	}
-	if _, _, err := s.getStorage(req.StorageID); err != nil {
+	if _, err := s.getStorageTarget(req.StorageID); err != nil {
 		return bad("存储目标无效")
 	}
 	if _, err := backup.ParseRecipients(req.AgeRecipient); err != nil {
@@ -1007,7 +1018,7 @@ func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request, u *
 
 func (s *Server) preBackupStorageID(preferred int64) int64 {
 	if preferred > 0 {
-		if _, _, err := s.getStorage(preferred); err == nil {
+		if _, err := s.getStorageTarget(preferred); err == nil {
 			return preferred
 		}
 	}
@@ -1115,10 +1126,10 @@ func (s *Server) runRestore(run *jobRun, b *backupRow, plan restorePlan, identit
 		run.SetProgress(45)
 		run.Logf("==> 导入数据到 %s", plan.TargetLabel)
 
-		var cmd *exec.Cmd
+		var spec dbmgr.ExecSpec
 		if d.Engine == "postgres" {
 			if string(magic) == "PGDMP" {
-				cmd, err = cl.RestoreCmd(ctx, plan.SourceDatabase, plan.Database, plan.Mode == "overwrite")
+				spec, err = cl.RestoreCmd(plan.SourceDatabase, plan.Database, plan.Mode == "overwrite")
 			} else {
 				if plan.Mode == "overwrite" && dbExists {
 					run.Logf("==> 检测到 PostgreSQL 明文 SQL，正在断开其他连接并重置用户 Schema")
@@ -1126,15 +1137,15 @@ func (s *Server) runRestore(run *jobRun, b *backupRow, plan restorePlan, identit
 						return err
 					}
 				}
-				cmd, err = cl.ImportCmd(ctx, plan.Database, "sql")
+				spec, err = cl.ImportCmd(plan.Database, "sql")
 			}
 		} else {
-			cmd, err = cl.RestoreCmd(ctx, plan.SourceDatabase, plan.Database, plan.Mode == "overwrite")
+			spec, err = cl.RestoreCmd(plan.SourceDatabase, plan.Database, plan.Mode == "overwrite")
 		}
 		if err != nil {
 			return err
 		}
-		if err := dbmgr.RunWithInput(cmd, br, run); err != nil {
+		if err := dbmgr.RunWithInput(ctx, s.dk, spec, br, run); err != nil {
 			return fmt.Errorf("导入失败：%w", err)
 		}
 
@@ -1176,9 +1187,15 @@ func (s *Server) runRestore(run *jobRun, b *backupRow, plan restorePlan, identit
 				return fmt.Errorf("读取备份归档失败，已取消清空数据卷：%w", perr)
 			}
 			run.Logf("==> 清空并解包到数据卷 %s", plan.Volume)
-			cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-i", "--network", "none", "-v", plan.Volume+":/v", s.cfg.HelperImage,
-				"sh", "-c", "set -e; find /v -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; tar -C /v -xf -")
-			if err := dbmgr.RunWithInput(cmd, br, run); err != nil {
+			err = s.dk.RunContainer(ctx, docker.RunOptions{
+				Image:  s.cfg.HelperImage,
+				Binds:  []string{plan.Volume + ":/v"},
+				Cmd:    []string{"sh", "-c", "set -e; find /v -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; tar -C /v -xf -"},
+				Stdin:  br,
+				Stdout: run,
+				Stderr: run,
+			})
+			if err != nil {
 				return err
 			}
 		} else {
@@ -1197,8 +1214,15 @@ func (s *Server) runRestore(run *jobRun, b *backupRow, plan restorePlan, identit
 			if err := s.dk.CreateVolume(ctx, plan.Volume, map[string]string{"panel.restored-from": b.ObjectKey}); err != nil {
 				return err
 			}
-			cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-i", "--network", "none", "-v", plan.Volume+":/v", s.cfg.HelperImage, "tar", "-C", "/v", "-xf", "-")
-			if err := dbmgr.RunWithInput(cmd, br, run); err != nil {
+			err = s.dk.RunContainer(ctx, docker.RunOptions{
+				Image:  s.cfg.HelperImage,
+				Binds:  []string{plan.Volume + ":/v"},
+				Cmd:    []string{"tar", "-C", "/v", "-xf", "-"},
+				Stdin:  br,
+				Stdout: run,
+				Stderr: run,
+			})
+			if err != nil {
 				_ = s.dk.RemoveVolume(context.Background(), plan.Volume)
 				return err
 			}
@@ -1360,8 +1384,8 @@ func (s *Server) handleListStorage(w http.ResponseWriter, r *http.Request, u *Us
 	rows.Close()
 	out := []map[string]any{}
 	for _, id := range ids {
-		t, _, err := s.getStorage(id)
-		if err != nil && t == nil {
+		t, err := s.getStorageTarget(id)
+		if err != nil || t == nil {
 			continue
 		}
 		t.Config.SecretKey = maskSecret(t.Config.SecretKey)
@@ -1399,7 +1423,7 @@ func (s *Server) mergeSavedStorageSecrets(id int64, cfg *backup.TargetConfig) {
 	if id <= 0 {
 		return
 	}
-	old, _, _ := s.getStorage(id)
+	old, _ := s.getStorageTarget(id)
 	if old == nil {
 		return
 	}

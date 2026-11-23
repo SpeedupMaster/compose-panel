@@ -197,7 +197,29 @@ func (f accessFilter) match(e *accessEntry) bool {
 	return true
 }
 
-func scanAccessFile(path string, fn func(*accessEntry)) error {
+const maxAccessLogCardinality = 10000
+
+// incBoundedCounter increments m[key] while bounding map cardinality to maxKeys.
+// When full, single-hit tail entries are pruned first so frequent paths/IPs survive bot scans.
+func incBoundedCounter(m map[string]int, key string, maxKeys int) {
+	if _, ok := m[key]; ok {
+		m[key]++
+		return
+	}
+	if len(m) >= maxKeys {
+		for k, v := range m {
+			if v <= 1 {
+				delete(m, k)
+			}
+		}
+		if len(m) >= maxKeys {
+			return
+		}
+	}
+	m[key] = 1
+}
+
+func scanAccessFile(path string, buf []byte, fn func(*accessEntry)) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -213,7 +235,7 @@ func scanAccessFile(path string, fn func(*accessEntry)) error {
 		rd = zr
 	}
 	sc := bufio.NewScanner(rd)
-	sc.Buffer(make([]byte, 256<<10), 4<<20)
+	sc.Buffer(buf, 4<<20)
 	for sc.Scan() {
 		var r rawAccess
 		if json.Unmarshal(sc.Bytes(), &r) != nil {
@@ -282,12 +304,13 @@ func (s *Server) handleSiteAccessLogs(w http.ResponseWriter, r *http.Request, u 
 	classes := map[string]int{}
 	paths, ips := map[string]int{}, map[string]int{}
 	files := s.accessLogFiles(id)
+	scanBuf := make([]byte, 64<<10)
 	// Read oldest → newest so the ring ends with the latest entries.
 	for i := len(files) - 1; i >= 0; i-- {
 		if fi, err := os.Stat(files[i]); err == nil && fi.ModTime().Unix() < int64(f.since) {
 			continue
 		}
-		_ = scanAccessFile(files[i], func(e *accessEntry) {
+		_ = scanAccessFile(files[i], scanBuf, func(e *accessEntry) {
 			if !f.match(e) {
 				return
 			}
@@ -295,8 +318,8 @@ func (s *Server) handleSiteAccessLogs(w http.ResponseWriter, r *http.Request, u 
 			sumDur += e.Duration
 			classes[fmt.Sprintf("%dxx", e.Status/100)]++
 			p, _, _ := strings.Cut(e.URI, "?")
-			paths[p]++
-			ips[e.IP]++
+			incBoundedCounter(paths, p, maxAccessLogCardinality)
+			incBoundedCounter(ips, e.IP, maxAccessLogCardinality)
 			recent = append(recent, e)
 			if len(recent) > limit*2 {
 				recent = append(recent[:0], recent[len(recent)-limit:]...)

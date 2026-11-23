@@ -14,7 +14,19 @@ import (
 	"compose-panel/internal/notify"
 )
 
-const metricsRetention = 7 * 24 * time.Hour
+const (
+	metricsRetention = 7 * 24 * time.Hour
+	jobsRetention    = 30 * 24 * time.Hour
+)
+
+func (s *Server) housekeep(ctx context.Context) {
+	now := time.Now()
+	_, _ = s.db.ExecContext(ctx, `DELETE FROM metrics WHERE ts < ?`, now.Add(-metricsRetention).Unix())
+	_, _ = s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at < ?`, now.Unix())
+	if s.jobs != nil {
+		s.jobs.Prune(jobsRetention)
+	}
+}
 
 // metricsLoop samples host and container resource usage once a minute.
 func (s *Server) metricsLoop(ctx context.Context) {
@@ -41,7 +53,7 @@ func (s *Server) metricsLoop(ctx context.Context) {
 		}
 		s.sampleMetrics(ctx, time.Now().Truncate(time.Minute).Unix())
 		if n%60 == 0 && ctx.Err() == nil {
-			_, _ = s.db.ExecContext(ctx, `DELETE FROM metrics WHERE ts < ?`, time.Now().Add(-metricsRetention).Unix())
+			s.housekeep(ctx)
 		}
 		n++
 		select {

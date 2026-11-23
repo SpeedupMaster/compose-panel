@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -101,7 +103,7 @@ func (s *Server) handleJobLog(w http.ResponseWriter, r *http.Request, u *User) e
 	if len(s.queryJobs("WHERE id=?", id)) == 0 {
 		return errNotFound
 	}
-	backlog, ch, cancel, _ := s.jobs.Subscribe(id)
+	logPath, offset, ch, cancel, _ := s.jobs.SubscribeStream(id)
 	defer cancel()
 	fl, _ := w.(http.Flusher)
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -109,10 +111,17 @@ func (s *Server) handleJobLog(w http.ResponseWriter, r *http.Request, u *User) e
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(200)
 	wrote := false
-	for _, l := range strings.Split(strings.TrimRight(string(backlog), "\n"), "\n") {
-		if l != "" {
-			writeSSE(w, l)
-			wrote = true
+	if offset > 0 {
+		if f, err := os.Open(logPath); err == nil {
+			sc := bufio.NewScanner(io.LimitReader(f, offset))
+			sc.Buffer(make([]byte, 32<<10), 1<<20)
+			for sc.Scan() {
+				if l := sc.Text(); l != "" {
+					writeSSE(w, l)
+					wrote = true
+				}
+			}
+			f.Close()
 		}
 	}
 	if !wrote {

@@ -1,7 +1,11 @@
 package jobs
 
 import (
+	"bufio"
+	"io"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,5 +81,118 @@ func TestManagerTryFreezeForRestore(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatalf("job after unfreeze timed out")
+	}
+}
+
+func TestManagerPruneRemovesOldFinishedJobsAndLogs(t *testing.T) {
+	tmp := t.TempDir()
+	db, err := store.Open(filepath.Join(tmp, "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	logDir := filepath.Join(tmp, "jobs")
+	jm, err := New(db, logDir, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	oldTS := now.Add(-40 * 24 * time.Hour).Unix()
+	recentTS := now.Add(-24 * time.Hour).Unix()
+
+	for _, row := range []struct {
+		id, status string
+		ts         int64
+	}{
+		{"job_old_ok", "success", oldTS},
+		{"job_old_run", "running", oldTS},
+		{"job_recent", "success", recentTS},
+	} {
+		if _, err := db.Exec(`INSERT INTO jobs(id,kind,title,target,status,actor,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?)`,
+			row.id, "test", row.id, "t", row.status, "admin", row.ts, row.ts); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(logDir, row.id+".log"), []byte("log\n"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removed := jm.Prune(30 * 24 * time.Hour)
+	if removed != 1 {
+		t.Fatalf("Prune() removed = %d, want 1", removed)
+	}
+	if _, err := os.Stat(filepath.Join(logDir, "job_old_ok.log")); !os.IsNotExist(err) {
+		t.Errorf("expected job_old_ok.log to be removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(logDir, "job_old_run.log")); err != nil {
+		t.Errorf("running job log should remain: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(logDir, "job_recent.log")); err != nil {
+		t.Errorf("recent job log should remain: %v", err)
+	}
+
+	var count int
+	_ = db.QueryRow(`SELECT count(*) FROM jobs`).Scan(&count)
+	if count != 2 {
+		t.Fatalf("remaining jobs rows = %d, want 2", count)
+	}
+}
+
+func TestSubscribeStreamDeliversBacklogAndLiveLinesWithoutGaps(t *testing.T) {
+	tmp := t.TempDir()
+	db, err := store.Open(filepath.Join(tmp, "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	jm, err := New(db, filepath.Join(tmp, "jobs"), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ready := make(chan struct{})
+	proceed := make(chan struct{})
+	id := jm.Submit(Spec{Kind: "test", Title: "stream"}, func(r *Run) error {
+		r.Logf("line-1")
+		r.Logf("line-2")
+		close(ready)
+		<-proceed
+		r.Logf("line-3")
+		return nil
+	})
+	<-ready
+
+	logPath, offset, ch, cancel, running := jm.SubscribeStream(id)
+	defer cancel()
+	if !running {
+		t.Fatalf("expected job to be running")
+	}
+	if offset <= 0 {
+		t.Fatalf("expected positive backlog offset, got %d", offset)
+	}
+	close(proceed)
+
+	var lines []string
+	f, err := os.Open(logPath)
+	if err != nil {
+		t.Fatalf("open logPath: %v", err)
+	}
+	sc := bufio.NewScanner(io.LimitReader(f, offset))
+	for sc.Scan() {
+		lines = append(lines, sc.Text())
+	}
+	f.Close()
+
+	for b := range ch {
+		lines = append(lines, strings.TrimRight(string(b), "\n"))
+	}
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{"line-1", "line-2", "line-3"} {
+		if strings.Count(joined, want) != 1 {
+			t.Errorf("expected %q once in streamed lines, got:\n%s", want, joined)
+		}
 	}
 }

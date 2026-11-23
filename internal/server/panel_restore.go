@@ -434,7 +434,7 @@ func (s *Server) readPanelRestoreInput(r *http.Request, allowSnapshot, checkSetu
 	var ageIdentity string
 	if strings.HasPrefix(ct, "multipart/form-data") {
 		r.Body = http.MaxBytesReader(nil, r.Body, maxPanelRestoreBodySize)
-		if err = r.ParseMultipartForm(32 << 20); err != nil {
+		if err = r.ParseMultipartForm(1 << 20); err != nil {
 			err = bad("解析上传表单失败：%v", err)
 			return
 		}

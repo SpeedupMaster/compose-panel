@@ -96,17 +96,26 @@ func (n *Notifier) Emit(ev Event) {
 	if ev.Time == 0 {
 		ev.Time = time.Now().Unix()
 	}
+	now := time.Now()
+	skipDedup := ev.Type == "security_login" || ev.Type == "deploy_success"
 	key := ev.Type + "|" + ev.Target
 	n.mu.Lock()
 	if n.closed {
 		n.mu.Unlock()
 		return
 	}
-	if t, ok := n.last[key]; ok && time.Since(t) < 30*time.Minute && ev.Type != "security_login" {
-		n.mu.Unlock()
-		return
+	for k, t := range n.last {
+		if now.Sub(t) >= 30*time.Minute {
+			delete(n.last, k)
+		}
 	}
-	n.last[key] = time.Now()
+	if !skipDedup {
+		if t, ok := n.last[key]; ok && now.Sub(t) < 30*time.Minute {
+			n.mu.Unlock()
+			return
+		}
+		n.last[key] = now
+	}
 	n.mu.Unlock()
 
 	rows, err := n.db.QueryContext(n.ctx, `SELECT c.id, c.kind, c.config FROM notify_rules r JOIN notify_channels c ON c.id = r.channel_id WHERE r.event = ? AND c.enabled = 1`, ev.Type)

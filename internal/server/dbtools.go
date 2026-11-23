@@ -8,12 +8,12 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"compose-panel/internal/dbmgr"
+	"compose-panel/internal/docker"
 )
 
 func (s *Server) dbAndName(r *http.Request, u *User) (*dbInstance, string, error) {
@@ -93,24 +93,32 @@ func (s *Server) handleDBExport(w http.ResponseWriter, r *http.Request, u *User)
 		return err
 	}
 	q := r.URL.Query()
-	cmd, format, err := d.client().ExportCmd(r.Context(), db, q.Get("format") == "sql")
-	if err != nil {
-		return err
-	}
-	stdout, err := cmd.StdoutPipe()
+	spec, format, err := d.client().ExportCmd(db, q.Get("format") == "sql")
 	if err != nil {
 		return err
 	}
 	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
+	stdout, err := s.dk.ExecStdout(r.Context(), spec.Container, docker.ExecOptions{
+		Cmd:    spec.Args,
+		Env:    spec.Env,
+		Stderr: &stderr,
+	})
+	if err != nil {
 		return err
 	}
+	defer stdout.Close()
 	br := bufio.NewReaderSize(stdout, 64<<10)
 	// Wait for the first byte so a failing dump returns an error instead of an empty file.
 	if _, err := br.Peek(1); err != nil {
-		_ = cmd.Wait()
-		return fmt.Errorf("导出失败：%s", strings.TrimSpace(stderr.String()))
+		cerr := stdout.Close()
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" && cerr != nil {
+			msg = cerr.Error()
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("导出失败：%s", msg)
 	}
 	name := fmt.Sprintf("%s-%s-%s.%s", d.Name, db, time.Now().In(s.location()).Format("20060102-150405"), format)
 	gz := q.Get("gzip") == "1"
@@ -129,7 +137,6 @@ func (s *Server) handleDBExport(w http.ResponseWriter, r *http.Request, u *User)
 	if zw != nil {
 		_ = zw.Close()
 	}
-	_ = cmd.Wait()
 	return nil
 }
 
@@ -185,23 +192,19 @@ func (s *Server) runDBImport(run *jobRun, d *dbInstance, db, file string, gz boo
 		defer zr.Close()
 		rd = zr
 	}
-	br := bufio.NewReaderSize(rd, 1<<20)
+	br := bufio.NewReaderSize(rd, 64<<10)
 	format := "sql"
 	if magic, _ := br.Peek(5); string(magic) == "PGDMP" {
 		format = "dump"
 	}
 	run.Logf("==> 文件大小 %s，格式：%s", humanBytes(size), map[string]string{"sql": "SQL 文本", "dump": "pg_dump 自定义格式"}[format])
-	cmd, err := d.client().ImportCmd(run.Context(), db, format)
+	spec, err := d.client().ImportCmd(db, format)
 	if err != nil {
 		return err
 	}
-	for i, a := range cmd.Args {
-		if a == d.Container {
-			run.Logf("$ docker exec -i %s %s", d.Container, strings.Join(cmd.Args[i+1:], " "))
-		}
-	}
+	run.Logf("$ docker exec -i %s %s", d.Container, strings.Join(spec.Args, " "))
 	start := time.Now()
-	if err := dbmgr.RunWithInput(cmd, &progressReader{r: br, total: size, run: run, f: f}, run); err != nil {
+	if err := dbmgr.RunWithInput(run.Context(), s.dk, spec, &progressReader{r: br, total: size, run: run, f: f}, run); err != nil {
 		return fmt.Errorf("导入失败：%w", err)
 	}
 	run.Logf("==> 导入完成，用时 %s", time.Since(start).Round(time.Second))
@@ -278,8 +281,16 @@ sleep 1
 chown -R redis:redis /data 2>/dev/null || true
 echo "AOF 已重建"`
 	run.Logf("==> 写入 RDB 并重建 AOF（数据卷 %s，镜像 %s）", vol, ci.Config.Image)
-	cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-i", "--network", "none", "--entrypoint", "sh", "-v", vol+":/data", ci.Config.Image, "-c", script)
-	if err := dbmgr.RunWithInput(cmd, rdb, run); err != nil {
+	err = s.dk.RunContainer(ctx, docker.RunOptions{
+		Image:      ci.Config.Image,
+		Entrypoint: []string{"sh"},
+		Binds:      []string{vol + ":/data"},
+		Cmd:        []string{"-c", script},
+		Stdin:      rdb,
+		Stdout:     run,
+		Stderr:     run,
+	})
+	if err != nil {
 		return err
 	}
 	run.Logf("==> 启动 %s", d.Container)

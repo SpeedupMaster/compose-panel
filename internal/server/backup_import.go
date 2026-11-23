@@ -296,7 +296,7 @@ func (s *Server) handleImportStorage(w http.ResponseWriter, r *http.Request, u *
 	if req.StorageID <= 0 || len(req.Items) == 0 {
 		return bad("请选择存储位置和要导入的备份对象")
 	}
-	target, _, err := s.getStorage(req.StorageID)
+	target, err := s.getStorageTarget(req.StorageID)
 	if err != nil {
 		return bad("存储目标不可用：%v", err)
 	}

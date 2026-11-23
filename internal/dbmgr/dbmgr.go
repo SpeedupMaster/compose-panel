@@ -1,4 +1,4 @@
-// Package dbmgr knows how to provision and operate database engines through docker exec.
+// Package dbmgr knows how to provision and operate database engines through Docker Engine API exec.
 package dbmgr
 
 import (
@@ -8,10 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"compose-panel/internal/docker"
 )
 
 type Engine struct {
@@ -150,33 +151,40 @@ func Compose(engine, version, image, alias, exposure, dbNetwork string, port int
 	return b.String(), nil
 }
 
-// Exec runs a command inside a container through the docker CLI.
-type Exec struct {
+// ExecSpec describes a command to run inside a database container via Docker Engine API.
+type ExecSpec struct {
 	Container string
-	Env       []string // passed with -e
+	Env       []string
+	Args      []string
+	Stdin     bool
 }
 
-func (e Exec) Command(ctx context.Context, stdin bool, args ...string) *exec.Cmd {
-	a := []string{"exec"}
-	if stdin {
-		a = append(a, "-i")
-	}
-	for _, kv := range e.Env {
-		a = append(a, "-e", kv)
-	}
-	a = append(a, e.Container)
-	a = append(a, args...)
-	return exec.CommandContext(ctx, "docker", a...)
+// Exec runs a command inside a container through the Docker Engine API.
+type Exec struct {
+	Docker    *docker.Client
+	Container string
+	Env       []string
+}
+
+func (e Exec) Spec(stdin bool, args ...string) ExecSpec {
+	return ExecSpec{Container: e.Container, Env: e.Env, Args: args, Stdin: stdin}
 }
 
 func (e Exec) Output(ctx context.Context, stdin string, args ...string) (string, error) {
-	c := e.Command(ctx, stdin != "", args...)
-	var out, errb bytes.Buffer
-	c.Stdout, c.Stderr = &out, &errb
-	if stdin != "" {
-		c.Stdin = strings.NewReader(stdin)
+	if e.Docker == nil {
+		return "", fmt.Errorf("docker client is nil")
 	}
-	if err := c.Run(); err != nil {
+	var out, errb bytes.Buffer
+	opts := docker.ExecOptions{
+		Cmd:    args,
+		Env:    e.Env,
+		Stdout: &out,
+		Stderr: &errb,
+	}
+	if stdin != "" {
+		opts.Stdin = strings.NewReader(stdin)
+	}
+	if err := e.Docker.Exec(ctx, e.Container, opts); err != nil {
 		msg := strings.TrimSpace(errb.String())
 		if msg == "" {
 			msg = err.Error()
@@ -188,6 +196,7 @@ func (e Exec) Output(ctx context.Context, stdin string, args ...string) (string,
 
 // Client operates one database instance.
 type Client struct {
+	Docker    *docker.Client
 	Engine    string
 	Container string
 	Password  string
@@ -196,11 +205,11 @@ type Client struct {
 func (c Client) exec() Exec {
 	switch c.Engine {
 	case "mysql", "mariadb":
-		return Exec{Container: c.Container, Env: []string{"MYSQL_PWD=" + c.Password}}
+		return Exec{Docker: c.Docker, Container: c.Container, Env: []string{"MYSQL_PWD=" + c.Password}}
 	case "postgres":
-		return Exec{Container: c.Container, Env: []string{"PGPASSWORD=" + c.Password}}
+		return Exec{Docker: c.Docker, Container: c.Container, Env: []string{"PGPASSWORD=" + c.Password}}
 	}
-	return Exec{Container: c.Container}
+	return Exec{Docker: c.Docker, Container: c.Container}
 }
 
 func (c Client) mysqlBin() string {
@@ -600,26 +609,26 @@ func (c Client) Metrics(ctx context.Context) map[string]string {
 	return m
 }
 
-// DumpCmd returns the command that writes a logical backup of database to stdout.
-func (c Client) DumpCmd(ctx context.Context, database string) (*exec.Cmd, string, error) {
+// DumpCmd returns the exec spec that writes a logical backup of database to stdout.
+func (c Client) DumpCmd(database string) (ExecSpec, string, error) {
 	e := c.exec()
 	switch c.Engine {
 	case "postgres":
-		return e.Command(ctx, false, "pg_dump", "-U", "postgres", "-Fc", "-Z", "0", database), "pgdump", nil
+		return e.Spec(false, "pg_dump", "-U", "postgres", "-Fc", "-Z", "0", database), "pgdump", nil
 	case "mysql":
-		return e.Command(ctx, false, "mysqldump", "-uroot", "--single-transaction", "--routines", "--triggers", "--events", "--set-gtid-purged=OFF", database), "sql", nil
+		return e.Spec(false, "mysqldump", "-uroot", "--single-transaction", "--routines", "--triggers", "--events", "--set-gtid-purged=OFF", database), "sql", nil
 	case "mariadb":
-		return e.Command(ctx, false, "mariadb-dump", "-uroot", "--single-transaction", "--routines", "--triggers", "--events", database), "sql", nil
+		return e.Spec(false, "mariadb-dump", "-uroot", "--single-transaction", "--routines", "--triggers", "--events", database), "sql", nil
 	case "mongo":
-		return e.Command(ctx, false, "mongodump", "--archive", "-u", "root", "-p", c.Password, "--authenticationDatabase", "admin", "--db", database), "archive", nil
+		return e.Spec(false, "mongodump", "--archive", "-u", "root", "-p", c.Password, "--authenticationDatabase", "admin", "--db", database), "archive", nil
 	case "redis":
-		return e.Command(ctx, false, "sh", "-c", `redis-cli -a "$REDIS_PASSWORD" --no-auth-warning --rdb /tmp/panel-dump.rdb >/dev/null && cat /tmp/panel-dump.rdb && rm -f /tmp/panel-dump.rdb`), "rdb", nil
+		return e.Spec(false, "sh", "-c", `redis-cli -a "$REDIS_PASSWORD" --no-auth-warning --rdb /tmp/panel-dump.rdb >/dev/null && cat /tmp/panel-dump.rdb && rm -f /tmp/panel-dump.rdb`), "rdb", nil
 	}
-	return nil, "", fmt.Errorf("unknown engine")
+	return ExecSpec{}, "", fmt.Errorf("unknown engine")
 }
 
-// RestoreCmd returns the command that reads a dump from stdin into database.
-func (c Client) RestoreCmd(ctx context.Context, sourceDB, database string, clean bool) (*exec.Cmd, error) {
+// RestoreCmd returns the exec spec that reads a dump from stdin into database.
+func (c Client) RestoreCmd(sourceDB, database string, clean bool) (ExecSpec, error) {
 	e := c.exec()
 	switch c.Engine {
 	case "postgres":
@@ -627,9 +636,9 @@ func (c Client) RestoreCmd(ctx context.Context, sourceDB, database string, clean
 		if clean {
 			args = append(args, "--clean", "--if-exists")
 		}
-		return e.Command(ctx, true, args...), nil
+		return e.Spec(true, args...), nil
 	case "mysql", "mariadb":
-		return e.Command(ctx, true, c.mysqlBin(), "-uroot", database), nil
+		return e.Spec(true, c.mysqlBin(), "-uroot", database), nil
 	case "mongo":
 		args := []string{"mongorestore", "--archive", "-u", "root", "-p", c.Password, "--authenticationDatabase", "admin"}
 		if strings.TrimSpace(sourceDB) != "" {
@@ -640,9 +649,9 @@ func (c Client) RestoreCmd(ctx context.Context, sourceDB, database string, clean
 		if clean {
 			args = append(args, "--drop")
 		}
-		return e.Command(ctx, true, args...), nil
+		return e.Spec(true, args...), nil
 	}
-	return nil, fmt.Errorf("%s 暂不支持在面板中恢复，请下载备份手动恢复", c.Engine)
+	return ExecSpec{}, fmt.Errorf("%s 暂不支持在面板中恢复，请下载备份手动恢复", c.Engine)
 }
 
 const pgUserSchemasQuery = `SELECT nspname FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema'`
@@ -691,13 +700,24 @@ func (c Client) ResetPostgresSchemas(ctx context.Context, database string) error
 	return nil
 }
 
-// Wait runs cmd with stdin from r, returning stderr text on failure.
-func RunWithInput(cmd *exec.Cmd, r io.Reader, log io.Writer) error {
-	cmd.Stdin = r
+// RunWithInput runs spec via Docker Engine API with stdin from r, returning stderr text on failure.
+func RunWithInput(ctx context.Context, dk *docker.Client, spec ExecSpec, r io.Reader, log io.Writer) error {
+	if dk == nil {
+		return fmt.Errorf("docker client is nil")
+	}
 	var errb bytes.Buffer
-	cmd.Stdout = log
-	cmd.Stderr = io.MultiWriter(&errb, log)
-	if err := cmd.Run(); err != nil {
+	stderrW := io.Writer(&errb)
+	if log != nil {
+		stderrW = io.MultiWriter(&errb, log)
+	}
+	err := dk.Exec(ctx, spec.Container, docker.ExecOptions{
+		Cmd:    spec.Args,
+		Env:    spec.Env,
+		Stdin:  r,
+		Stdout: log,
+		Stderr: stderrW,
+	})
+	if err != nil {
 		msg := strings.TrimSpace(errb.String())
 		if msg == "" {
 			msg = err.Error()

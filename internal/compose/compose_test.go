@@ -2,6 +2,8 @@ package compose
 
 import (
 	"encoding/json"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -52,5 +54,32 @@ func TestOverrideMixedNetworkModeAndBridgeServices(t *testing.T) {
 	}
 	if !strings.Contains(got, `"web":`) || !strings.Contains(got, `"internal": {}`) || !strings.Contains(got, `"panel-proxy": {}`) {
 		t.Fatalf("Override() missing expected web networks:\n%s", got)
+	}
+}
+
+func TestResolveComposeBinPrefersStandaloneAndFallsBack(t *testing.T) {
+	notFound := func(string) (string, error) { return "", errors.New("not found") }
+
+	// 1. Explicit env override.
+	bin, prefix := resolveComposeBin(notFound, "/custom/docker-compose")
+	if bin != "/custom/docker-compose" || len(prefix) != 0 {
+		t.Errorf("env override = (%q, %v), want (/custom/docker-compose, [])", bin, prefix)
+	}
+
+	// 2. Standalone docker-compose in PATH.
+	bin, prefix = resolveComposeBin(func(name string) (string, error) {
+		if name == "docker-compose" {
+			return "/usr/local/bin/docker-compose", nil
+		}
+		return "", errors.New("not found")
+	}, "")
+	if bin != "/usr/local/bin/docker-compose" || len(prefix) != 0 {
+		t.Errorf("standalone = (%q, %v), want (/usr/local/bin/docker-compose, [])", bin, prefix)
+	}
+
+	// 3. Fallback to docker compose plugin when standalone is missing.
+	bin, prefix = resolveComposeBin(notFound, "")
+	if bin != "docker" || !reflect.DeepEqual(prefix, []string{"compose"}) {
+		t.Errorf("fallback = (%q, %v), want (docker, [compose])", bin, prefix)
 	}
 }

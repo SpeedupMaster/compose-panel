@@ -26,6 +26,8 @@ services:
       PANEL_CADDY_DATA: /caddy-data/caddy
       PANEL_UPSTREAM: panel:7800
       TZ: ${TZ:-Asia/Shanghai}
+      GOMEMLIMIT: ${PANEL_GOMEMLIMIT:-192MiB}
+      GOGC: ${PANEL_GOGC:-50}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${PANEL_ROOT:-/opt/compose-panel}/data:/data/panel
@@ -44,6 +46,9 @@ services:
     image: caddy:2.8-alpine
     container_name: panel-caddy
     restart: unless-stopped
+    environment:
+      GOMEMLIMIT: ${CADDY_GOMEMLIMIT:-128MiB}
+      GOGC: ${CADDY_GOGC:-50}
     command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
     ports:
       - "80:80"

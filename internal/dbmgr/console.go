@@ -6,10 +6,11 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"compose-panel/internal/docker"
 )
 
 // ---------- dangerous statement detection ----------
@@ -91,9 +92,12 @@ func (l *limitWriter) Write(p []byte) (int, error) {
 // Console runs user SQL with a statement timeout, keeping at most maxRows rows
 // (and a few MB of output). It reports whether the result was cut.
 func (c Client) Console(ctx context.Context, database, sql string, readOnly bool, maxRows, timeoutSec int) (*Result, bool, error) {
+	if c.Docker == nil {
+		return nil, false, fmt.Errorf("docker client is nil")
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	var cmd *exec.Cmd
+	var spec ExecSpec
 	var input string
 	switch c.Engine {
 	case "postgres":
@@ -102,7 +106,7 @@ func (c Client) Console(ctx context.Context, database, sql string, readOnly bool
 			input += "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;\n"
 		}
 		input += sql
-		cmd = c.exec().Command(ctx, true, "psql", "-U", "postgres", "-d", database, "-X", "-q", "--csv", "-v", "ON_ERROR_STOP=1", "-P", "pager=off")
+		spec = c.exec().Spec(true, "psql", "-U", "postgres", "-d", database, "-X", "-q", "--csv", "-v", "ON_ERROR_STOP=1", "-P", "pager=off")
 	case "mysql", "mariadb":
 		if c.Engine == "mysql" {
 			input = fmt.Sprintf("SET SESSION max_execution_time=%d;\n", timeoutSec*1000)
@@ -115,15 +119,19 @@ func (c Client) Console(ctx context.Context, database, sql string, readOnly bool
 		} else {
 			input += body + ";\n"
 		}
-		cmd = c.exec().Command(ctx, true, c.mysqlBin(), "-uroot", "--batch", "--raw", "-D", database)
+		spec = c.exec().Spec(true, c.mysqlBin(), "-uroot", "--batch", "--raw", "-D", database)
 	default:
 		return nil, false, fmt.Errorf("%s 不支持 SQL 控制台", c.Engine)
 	}
 	out := &limitWriter{max: 8 << 20, cancel: cancel}
 	var errb bytes.Buffer
-	cmd.Stdin = strings.NewReader(input)
-	cmd.Stdout, cmd.Stderr = out, &errb
-	err := cmd.Run()
+	err := c.Docker.Exec(ctx, spec.Container, docker.ExecOptions{
+		Cmd:    spec.Args,
+		Env:    spec.Env,
+		Stdin:  strings.NewReader(input),
+		Stdout: out,
+		Stderr: &errb,
+	})
 	if err != nil && !out.overflow {
 		msg := strings.TrimSpace(errb.String())
 		if msg == "" {
@@ -326,31 +334,31 @@ func (c Client) SlowQueries(ctx context.Context) ([]SlowQuery, string, error) {
 
 // ExportCmd writes database to stdout. For PostgreSQL plain selects SQL text
 // instead of the custom (pg_restore) format.
-func (c Client) ExportCmd(ctx context.Context, database string, plain bool) (*exec.Cmd, string, error) {
+func (c Client) ExportCmd(database string, plain bool) (ExecSpec, string, error) {
 	if c.Engine == "postgres" && plain {
-		return c.exec().Command(ctx, false, "pg_dump", "-U", "postgres", "--no-owner", "--no-privileges", database), "sql", nil
+		return c.exec().Spec(false, "pg_dump", "-U", "postgres", "--no-owner", "--no-privileges", database), "sql", nil
 	}
-	cmd, format, err := c.DumpCmd(ctx, database)
+	spec, format, err := c.DumpCmd(database)
 	if format == "pgdump" {
 		format = "dump"
 	}
-	return cmd, format, err
+	return spec, format, err
 }
 
 // ImportCmd reads a dump from stdin. format is "sql" (plain SQL) or "dump" (pg_dump custom format).
-func (c Client) ImportCmd(ctx context.Context, database, format string) (*exec.Cmd, error) {
+func (c Client) ImportCmd(database, format string) (ExecSpec, error) {
 	e := c.exec()
 	switch c.Engine {
 	case "postgres":
 		if format == "dump" {
-			return e.Command(ctx, true, "pg_restore", "-U", "postgres", "-d", database, "--no-owner", "--no-privileges"), nil
+			return e.Spec(true, "pg_restore", "-U", "postgres", "-d", database, "--no-owner", "--no-privileges"), nil
 		}
-		return e.Command(ctx, true, "psql", "-U", "postgres", "-d", database, "-X", "-q", "-v", "ON_ERROR_STOP=1"), nil
+		return e.Spec(true, "psql", "-U", "postgres", "-d", database, "-X", "-q", "-v", "ON_ERROR_STOP=1"), nil
 	case "mysql", "mariadb":
 		if format == "dump" {
-			return nil, fmt.Errorf("MySQL 只能导入 .sql 文件")
+			return ExecSpec{}, fmt.Errorf("MySQL 只能导入 .sql 文件")
 		}
-		return e.Command(ctx, true, c.mysqlBin(), "-uroot", database), nil
+		return e.Spec(true, c.mysqlBin(), "-uroot", database), nil
 	}
-	return nil, fmt.Errorf("%s 不支持在线导入", c.Engine)
+	return ExecSpec{}, fmt.Errorf("%s 不支持在线导入", c.Engine)
 }

@@ -527,3 +527,29 @@ func TestHandleBackupSourcesIncludesProjectDirs(t *testing.T) {
 		t.Fatalf("projects[0].dirs = %#v, want %#v", resp.Projects[0].Dirs, want)
 	}
 }
+
+func TestGetStorageTargetSkipsClientOpen(t *testing.T) {
+	srv := newTestServer(t)
+	now := time.Now().Unix()
+	// Insert a storage target whose config would fail backup.Open (empty bucket/endpoint)
+	// so getStorageTarget / handleListStorage prove they do not construct network clients.
+	res, err := srv.DB().Exec(
+		`INSERT INTO storage_targets(name,kind,config,created_at) VALUES('broken-s3','s3',?,?)`,
+		srv.box.Seal(`{"secretKey":"super-secret"}`), now,
+	)
+	if err != nil {
+		t.Fatalf("insert storage_targets: %v", err)
+	}
+	id, _ := res.LastInsertId()
+
+	if _, _, err := srv.getStorage(id); err == nil {
+		t.Fatalf("expected getStorage() to fail backup.Open on empty S3 endpoint")
+	}
+	got, err := srv.getStorageTarget(id)
+	if err != nil {
+		t.Fatalf("getStorageTarget() error: %v", err)
+	}
+	if got.Name != "broken-s3" || got.Config.SecretKey != "super-secret" {
+		t.Fatalf("unexpected target: %+v", got)
+	}
+}

@@ -3,5 +3,11 @@ web/dist
 bin
 .devdata
 .git
+.github
+.claude
+.ryugi
 deploy
+designs
+docs
+scripts
 *.md

@@ -11,6 +11,7 @@ import (
 
 	"compose-panel/internal/auth"
 	"compose-panel/internal/dbmgr"
+	"compose-panel/internal/docker"
 )
 
 type dbInstance struct {
@@ -28,10 +29,11 @@ type dbInstance struct {
 	Container string `json:"container"`
 	Host      string `json:"host"`
 	password  string
+	dk        *docker.Client
 }
 
 func (s *Server) getDB(id int64) (*dbInstance, error) {
-	d := &dbInstance{}
+	d := &dbInstance{dk: s.dk}
 	var enc string
 	err := s.db.QueryRow(`SELECT d.id, d.project_id, p.name, d.engine, d.version, d.root_user, d.root_password, d.port, d.exposure, d.created_at, d.image
 		FROM db_instances d JOIN projects p ON p.id=d.project_id WHERE d.id=?`, id).
@@ -61,7 +63,7 @@ func (s *Server) dbForUser(r *http.Request, u *User) (*dbInstance, error) {
 }
 
 func (d *dbInstance) client() dbmgr.Client {
-	return dbmgr.Client{Engine: d.Engine, Container: d.Container, Password: d.password}
+	return dbmgr.Client{Docker: d.dk, Engine: d.Engine, Container: d.Container, Password: d.password}
 }
 
 func (s *Server) handleDBEngines(w http.ResponseWriter, r *http.Request, u *User) error {

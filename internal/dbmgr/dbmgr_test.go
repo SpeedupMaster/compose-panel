@@ -1,7 +1,6 @@
 package dbmgr
 
 import (
-	"context"
 	"strings"
 	"testing"
 )
@@ -85,7 +84,7 @@ func TestMongoRestoreCmdNamespaceMapping(t *testing.T) {
 	cl := Client{Engine: "mongo", Container: "mongo-1", Password: "pw"}
 
 	// Explicit sourceDB maps sourceDB.* -> target.*
-	cmd, err := cl.RestoreCmd(context.Background(), "olddb", "newdb", true)
+	cmd, err := cl.RestoreCmd("olddb", "newdb", true)
 	if err != nil {
 		t.Fatalf("RestoreCmd explicit sourceDB: %v", err)
 	}
@@ -95,7 +94,7 @@ func TestMongoRestoreCmdNamespaceMapping(t *testing.T) {
 	}
 
 	// Unknown/empty sourceDB maps $db$.$coll$ -> target.$coll$
-	cmd2, err := cl.RestoreCmd(context.Background(), "", "imported_db", false)
+	cmd2, err := cl.RestoreCmd("", "imported_db", false)
 	if err != nil {
 		t.Fatalf("RestoreCmd empty sourceDB: %v", err)
 	}

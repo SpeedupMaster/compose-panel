@@ -139,6 +139,7 @@ func (s *Server) handleAllStats(w http.ResponseWriter, r *http.Request, u *User)
 		st *docker.Stats
 	}
 	ch := make(chan res, len(cs))
+	sem := make(chan struct{}, 8)
 	n := 0
 	for _, c := range cs {
 		if !s.userCanContainer(u, c.Labels) {
@@ -146,6 +147,13 @@ func (s *Server) handleAllStats(w http.ResponseWriter, r *http.Request, u *User)
 		}
 		n++
 		go func(id string) {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-r.Context().Done():
+				ch <- res{id, nil}
+				return
+			}
 			ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 			defer cancel()
 			st, _ := s.dk.ContainerStats(ctx, id)
@@ -463,12 +471,8 @@ func (s *Server) handleListVolumes(w http.ResponseWriter, r *http.Request, u *Us
 	usedBy := map[string][]string{}
 	cs, _ := s.dk.ListContainers(r.Context(), true, nil)
 	for _, c := range cs {
-		ci, err := s.dk.InspectContainer(r.Context(), c.Id)
-		if err != nil {
-			continue
-		}
-		for _, m := range ci.Mounts {
-			if m.Type == "volume" {
+		for _, m := range c.Mounts {
+			if m.Type == "volume" && m.Name != "" {
 				usedBy[m.Name] = append(usedBy[m.Name], c.Name())
 			}
 		}

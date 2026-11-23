@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -533,16 +532,15 @@ func (s *Server) runCronTask(id int64, actor string) string {
 			return fmt.Errorf("服务 %s 没有运行中的容器", t.Service)
 		}
 		sort.Slice(cs, func(i, j int) bool { return cs[i].Name() < cs[j].Name() })
-		args := []string{"exec"}
-		if t.User != "" {
-			args = append(args, "-u", t.User)
-		}
-		args = append(args, cs[0].Id, "sh", "-c", t.Command)
 		run.Logf("$ docker exec %s sh -c %q", cs[0].Name(), t.Command)
-		cmd := exec.CommandContext(ctx, "docker", args...)
-		cmd.Stdout, cmd.Stderr = run, run
 		start := time.Now()
-		if err := cmd.Run(); err != nil {
+		err = s.dk.Exec(ctx, cs[0].Id, docker.ExecOptions{
+			User:   t.User,
+			Cmd:    []string{"sh", "-c", t.Command},
+			Stdout: run,
+			Stderr: run,
+		})
+		if err != nil {
 			if ctx.Err() == context.DeadlineExceeded {
 				return fmt.Errorf("执行超时（%d 秒）", t.Timeout)
 			}

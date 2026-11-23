@@ -1,13 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,6 +16,7 @@ import (
 	"compose-panel/internal/auth"
 	"compose-panel/internal/backup"
 	"compose-panel/internal/dbmgr"
+	"compose-panel/internal/docker"
 	"compose-panel/internal/notify"
 )
 
@@ -281,14 +282,6 @@ func checkMin(rep *drillReport, what string, got, min int64) error {
 	return nil
 }
 
-func dockerOut(ctx context.Context, args ...string) (string, error) {
-	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
-	if err != nil {
-		return string(out), fmt.Errorf("%s", strings.TrimSpace(string(out)))
-	}
-	return string(out), nil
-}
-
 func (s *Server) drillDatabase(run *jobRun, d *restoreDrill, b *backupRow, rep *drillReport, open func() (io.ReadCloser, error), tag string) error {
 	ctx := run.Context()
 	inst, err := s.getDB(b.Source.InstanceID)
@@ -307,29 +300,33 @@ func (s *Server) drillDatabase(run *jobRun, d *restoreDrill, b *backupRow, rep *
 	if inst.Engine == "redis" {
 		return s.drillRedis(run, d, rep, open, image, tag)
 	}
-	args := []string{"run", "-d", "--name", tag, "--network", "none", "--label", "panel.drill=1", "--label", "panel.monitor=false"}
+	var env []string
 	switch inst.Engine {
 	case "postgres":
-		args = append(args, "-e", "POSTGRES_PASSWORD="+pw)
+		env = []string{"POSTGRES_PASSWORD=" + pw}
 	case "mysql":
-		args = append(args, "-e", "MYSQL_ROOT_PASSWORD="+pw)
+		env = []string{"MYSQL_ROOT_PASSWORD=" + pw}
 	case "mariadb":
-		args = append(args, "-e", "MARIADB_ROOT_PASSWORD="+pw)
+		env = []string{"MARIADB_ROOT_PASSWORD=" + pw}
 	case "mongo":
-		args = append(args, "-e", "MONGO_INITDB_ROOT_USERNAME=root", "-e", "MONGO_INITDB_ROOT_PASSWORD="+pw)
+		env = []string{"MONGO_INITDB_ROOT_USERNAME=root", "MONGO_INITDB_ROOT_PASSWORD=" + pw}
 	}
-	args = append(args, image)
 	rep.add("启动临时容器 %s（%s）", tag, image)
-	if _, err := dockerOut(ctx, args...); err != nil {
+	if _, err := s.dk.StartDetached(ctx, docker.RunOptions{
+		Name:   tag,
+		Image:  image,
+		Env:    env,
+		Labels: map[string]string{"panel.drill": "1", "panel.monitor": "false"},
+	}); err != nil {
 		return fmt.Errorf("启动临时容器失败：%w", err)
 	}
 	defer func() {
 		cctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		_, _ = dockerOut(cctx, "rm", "-f", "-v", tag)
+		_ = s.dk.RemoveContainerWithVolumes(cctx, tag, true, true)
 		rep.add("已销毁临时容器")
 	}()
-	cl := dbmgr.Client{Engine: inst.Engine, Container: tag, Password: pw}
+	cl := dbmgr.Client{Docker: s.dk, Engine: inst.Engine, Container: tag, Password: pw}
 	if err := waitReady(ctx, cl, pw); err != nil {
 		return err
 	}
@@ -344,12 +341,12 @@ func (s *Server) drillDatabase(run *jobRun, d *restoreDrill, b *backupRow, rep *
 		return err
 	}
 	defer rc.Close()
-	cmd, err := cl.RestoreCmd(ctx, db, db, false)
+	spec, err := cl.RestoreCmd(db, db, false)
 	if err != nil {
 		return err
 	}
 	t := time.Now()
-	if err := dbmgr.RunWithInput(cmd, rc, io.Discard); err != nil {
+	if err := dbmgr.RunWithInput(ctx, s.dk, spec, rc, io.Discard); err != nil {
 		return fmt.Errorf("恢复失败：%w", err)
 	}
 	rep.add("恢复完成（%s）", time.Since(t).Round(time.Second))
@@ -362,7 +359,7 @@ func (s *Server) drillDatabase(run *jobRun, d *restoreDrill, b *backupRow, rep *
 		if expr == "" {
 			expr, what = "db.getCollectionNames().length", "集合数量"
 		}
-		out, err := dbmgr.Exec{Container: tag}.Output(ctx, "", "mongosh", "--quiet", "-u", "root", "-p", pw, "--authenticationDatabase", "admin", db, "--eval", expr)
+		out, err := dbmgr.Exec{Docker: s.dk, Container: tag}.Output(ctx, "", "mongosh", "--quiet", "-u", "root", "-p", pw, "--authenticationDatabase", "admin", db, "--eval", expr)
 		if err != nil {
 			return fmt.Errorf("检查查询失败：%w", err)
 		}
@@ -399,7 +396,7 @@ func (s *Server) drillDatabase(run *jobRun, d *restoreDrill, b *backupRow, rep *
 // stays up for a few seconds.
 func waitReady(ctx context.Context, cl dbmgr.Client, pw string) error {
 	var probe []string
-	ex := dbmgr.Exec{Container: cl.Container}
+	ex := dbmgr.Exec{Docker: cl.Docker, Container: cl.Container}
 	switch cl.Engine {
 	case "postgres":
 		probe = []string{"pg_isready", "-h", "127.0.0.1", "-U", "postgres"}
@@ -433,12 +430,10 @@ func waitReady(ctx context.Context, cl dbmgr.Client, pw string) error {
 
 func (s *Server) drillRedis(run *jobRun, d *restoreDrill, rep *drillReport, open func() (io.ReadCloser, error), image, tag string) error {
 	ctx := run.Context()
-	// Killing the docker CLI on cancel does not stop the container, so name it
-	// and remove it explicitly.
 	defer func() {
 		cctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		_, _ = dockerOut(cctx, "rm", "-f", tag)
+		_ = s.dk.RemoveContainerWithVolumes(cctx, tag, true, true)
 		rep.add("已销毁临时容器")
 	}()
 	rc, err := open()
@@ -453,16 +448,25 @@ i=0; until redis-cli -p 6399 ping 2>/dev/null | grep -q PONG; do i=$((i+1)); [ $
 while redis-cli -p 6399 info persistence | grep -q '^loading:1'; do sleep 0.5; done
 redis-cli -p 6399 info keyspace | awk -F'[=,]' '/^db[0-9]+:keys=/{s+=$2} END{print s+0}'`
 	rep.add("在临时 Redis（%s）中加载 RDB", image)
-	cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-i", "--name", tag, "--network", "none", "--label", "panel.drill=1", "--label", "panel.monitor=false", "--entrypoint", "sh", image, "-c", script)
-	cmd.Stdin = rc
-	out, err := cmd.Output()
+	var out, stderr bytes.Buffer
+	err = s.dk.RunContainer(ctx, docker.RunOptions{
+		Name:       tag,
+		Image:      image,
+		Entrypoint: []string{"sh"},
+		Labels:     map[string]string{"panel.drill": "1", "panel.monitor": "false"},
+		Cmd:        []string{"-c", script},
+		Stdin:      rc,
+		Stdout:     &out,
+		Stderr:     &stderr,
+	})
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("加载失败：%s", strings.TrimSpace(string(ee.Stderr)+string(out)))
+		msg := strings.TrimSpace(stderr.String() + out.String())
+		if msg == "" {
+			msg = err.Error()
 		}
-		return err
+		return fmt.Errorf("加载失败：%s", msg)
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	n, _ := strconv.ParseInt(strings.TrimSpace(lines[len(lines)-1]), 10, 64)
 	return checkMin(rep, "键数量", n, d.MinRows)
 }
@@ -483,17 +487,28 @@ func (s *Server) drillVolume(run *jobRun, d *restoreDrill, rep *drillReport, ope
 		return err
 	}
 	defer rc.Close()
-	cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-i", "--network", "none", "-v", tag+":/v", s.cfg.HelperImage, "tar", "-C", "/v", "-xf", "-")
 	t := time.Now()
-	if err := dbmgr.RunWithInput(cmd, rc, io.Discard); err != nil {
+	err = s.dk.RunContainer(ctx, docker.RunOptions{
+		Image: s.cfg.HelperImage,
+		Binds: []string{tag + ":/v"},
+		Cmd:   []string{"tar", "-C", "/v", "-xf", "-"},
+		Stdin: rc,
+	})
+	if err != nil {
 		return fmt.Errorf("解包失败：%w", err)
 	}
 	rep.add("解包到临时数据卷 %s（%s）", tag, time.Since(t).Round(time.Second))
-	out, err := dockerOut(ctx, "run", "--rm", "--network", "none", "-v", tag+":/v:ro", s.cfg.HelperImage, "sh", "-c", "find /v -type f | wc -l; du -sk /v | cut -f1")
+	var out bytes.Buffer
+	err = s.dk.RunContainer(ctx, docker.RunOptions{
+		Image:  s.cfg.HelperImage,
+		Binds:  []string{tag + ":/v:ro"},
+		Cmd:    []string{"sh", "-c", "find /v -type f | wc -l; du -sk /v | cut -f1"},
+		Stdout: &out,
+	})
 	if err != nil {
 		return err
 	}
-	f := strings.Fields(out)
+	f := strings.Fields(out.String())
 	var files, kb int64
 	if len(f) >= 2 {
 		files, _ = strconv.ParseInt(f[0], 10, 64)

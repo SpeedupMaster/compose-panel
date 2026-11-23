@@ -69,6 +69,13 @@ func (r *Run) Write(p []byte) (int, error) {
 		r.buf = r.buf[i+1:]
 		r.emitLocked(line)
 	}
+	if len(r.buf) == 0 {
+		if cap(r.buf) > 64<<10 {
+			r.buf = nil
+		} else {
+			r.buf = r.buf[:0]
+		}
+	}
 	return len(p), nil
 }
 
@@ -174,7 +181,7 @@ func (m *Manager) Do(spec Spec, fn Func) (string, error) {
 	if id == "" {
 		return "", fmt.Errorf("面板正在恢复，暂不接受新任务")
 	}
-	_, ch, cancel, _ := m.Subscribe(id)
+	_, _, ch, cancel, _ := m.SubscribeStream(id)
 	defer cancel()
 	for range ch {
 	}
@@ -261,27 +268,38 @@ func (m *Manager) execute(run *Run, spec Spec, fn Func) {
 
 func (m *Manager) logPath(id string) string { return filepath.Join(m.dir, filepath.Base(id)+".log") }
 
-// Subscribe returns the log so far and a channel of new lines (closed when the job ends).
-func (m *Manager) Subscribe(id string) (backlog []byte, ch <-chan []byte, cancel func(), running bool) {
+// SubscribeStream returns the log file path, the byte offset already flushed to disk,
+// and a live channel of lines emitted after that offset (closed when the job ends).
+// Callers can stream the first offset bytes from logPath without loading the entire file into memory.
+func (m *Manager) SubscribeStream(id string) (logPath string, offset int64, ch <-chan []byte, cancel func(), running bool) {
+	logPath = m.logPath(id)
 	m.mu.Lock()
 	run := m.live[id]
 	m.mu.Unlock()
 	if run == nil {
-		data, _ := os.ReadFile(m.logPath(id))
+		if fi, err := os.Stat(logPath); err == nil {
+			offset = fi.Size()
+		}
 		c := make(chan []byte)
 		close(c)
-		return data, c, func() {}, false
+		return logPath, offset, c, func() {}, false
 	}
 	run.mu.Lock()
 	defer run.mu.Unlock()
-	data, _ := os.ReadFile(m.logPath(id))
+	if run.file != nil {
+		if fi, err := run.file.Stat(); err == nil {
+			offset = fi.Size()
+		}
+	} else if fi, err := os.Stat(logPath); err == nil {
+		offset = fi.Size()
+	}
 	c := make(chan []byte, 256)
 	if run.done {
 		close(c)
-		return data, c, func() {}, false
+		return logPath, offset, c, func() {}, false
 	}
 	run.subs[c] = struct{}{}
-	return data, c, func() {
+	return logPath, offset, c, func() {
 		run.mu.Lock()
 		if run.subs != nil {
 			if _, ok := run.subs[c]; ok {
@@ -291,6 +309,18 @@ func (m *Manager) Subscribe(id string) (backlog []byte, ch <-chan []byte, cancel
 		}
 		run.mu.Unlock()
 	}, true
+}
+
+// Subscribe returns the log so far and a channel of new lines (closed when the job ends).
+func (m *Manager) Subscribe(id string) (backlog []byte, ch <-chan []byte, cancel func(), running bool) {
+	logPath, offset, ch, cancel, running := m.SubscribeStream(id)
+	if offset > 0 {
+		if f, err := os.Open(logPath); err == nil {
+			backlog, _ = io.ReadAll(io.LimitReader(f, offset))
+			f.Close()
+		}
+	}
+	return backlog, ch, cancel, running
 }
 
 func (m *Manager) Log(id string) ([]byte, error) { return os.ReadFile(m.logPath(id)) }
@@ -308,3 +338,31 @@ func (m *Manager) Cancel(id string) bool {
 
 // Tee returns a writer that writes to the job log and w.
 func (r *Run) Tee(w io.Writer) io.Writer { return io.MultiWriter(r, w) }
+
+// Prune removes completed jobs older than maxAge along with their log files.
+func (m *Manager) Prune(maxAge time.Duration) int {
+	if maxAge <= 0 {
+		return 0
+	}
+	cutoff := time.Now().Add(-maxAge).Unix()
+	rows, err := m.db.Query(`SELECT id FROM jobs WHERE status NOT IN ('queued','running') AND created_at < ?`, cutoff)
+	if err != nil {
+		return 0
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	removed := 0
+	for _, id := range ids {
+		if _, err := m.db.Exec(`DELETE FROM jobs WHERE id=? AND status NOT IN ('queued','running')`, id); err == nil {
+			_ = os.Remove(m.logPath(id))
+			removed++
+		}
+	}
+	return removed
+}

@@ -10,12 +10,13 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"os/exec"
 	"path"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"compose-panel/internal/docker"
 )
 
 // FSEntry is one row of a directory listing.
@@ -132,15 +133,18 @@ func (s *Server) handleContainerFS(w http.ResponseWriter, r *http.Request, u *Us
 	if c.State.Running {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
-		out, err := exec.CommandContext(ctx, "docker", "exec", c.Id, "sh", "-c", lsScript, "sh", p).Output()
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			if e := lsError(ee.ExitCode(), p); e != nil {
+		var out bytes.Buffer
+		err := s.dk.Exec(ctx, c.Id, docker.ExecOptions{
+			Cmd:    []string{"sh", "-c", lsScript, "sh", p},
+			Stdout: &out,
+		})
+		if code, okCode := docker.ExitCode(err); okCode {
+			if e := lsError(code, p); e != nil {
 				return e
 			}
 		}
 		if err == nil {
-			es, trunc := parseLs(out)
+			es, trunc := parseLs(out.Bytes())
 			return ok(w, fsListing{Path: p, Entries: es, Truncated: trunc, Via: "exec"})
 		}
 	}
@@ -324,17 +328,17 @@ func volPath(p string) (rel, full string) {
 	return rel, "/v" + rel
 }
 
-func (s *Server) helperCmd(ctx context.Context, vol string, ro, stdin bool, script string, args ...string) *exec.Cmd {
+func (s *Server) helperRunOpts(vol string, ro bool, script string, args ...string) docker.RunOptions {
 	mount := vol + ":/v"
 	if ro {
 		mount += ":ro"
 	}
-	a := []string{"run", "--rm", "--network", "none"}
-	if stdin {
-		a = append(a, "-i")
+	cmd := append([]string{"sh", "-c", script, "sh"}, args...)
+	return docker.RunOptions{
+		Image: s.cfg.HelperImage,
+		Binds: []string{mount},
+		Cmd:   cmd,
 	}
-	a = append(a, "-v", mount, s.cfg.HelperImage, "sh", "-c", script, "sh")
-	return exec.CommandContext(ctx, "docker", append(a, args...)...)
 }
 
 func (s *Server) handleVolumeFS(w http.ResponseWriter, r *http.Request, u *User) error {
@@ -345,20 +349,24 @@ func (s *Server) handleVolumeFS(w http.ResponseWriter, r *http.Request, u *User)
 	rel, full := volPath(r.URL.Query().Get("path"))
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	var stderr bytes.Buffer
-	cmd := s.helperCmd(ctx, vol, true, false, lsScript, full)
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
-		if e := lsError(ee.ExitCode(), rel); e != nil {
+	var stdout, stderr bytes.Buffer
+	opts := s.helperRunOpts(vol, true, lsScript, full)
+	opts.Stdout = &stdout
+	opts.Stderr = &stderr
+	err = s.dk.RunContainer(ctx, opts)
+	if code, okCode := docker.ExitCode(err); okCode {
+		if e := lsError(code, rel); e != nil {
 			return e
 		}
 	}
 	if err != nil {
-		return fmt.Errorf("%v: %s", err, strings.TrimSpace(stderr.String()))
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%v: %s", err, msg)
 	}
-	es, trunc := parseLs(out)
+	es, trunc := parseLs(stdout.Bytes())
 	return ok(w, fsListing{Path: rel, Entries: es, Truncated: trunc, Via: "helper"})
 }
 
@@ -369,21 +377,23 @@ func (s *Server) handleVolumeDownload(w http.ResponseWriter, r *http.Request, u 
 	}
 	rel, full := volPath(r.URL.Query().Get("path"))
 	script := `if [ -d "$1" ]; then echo D; tar -C "$1" -cf - .; elif [ -f "$1" ]; then echo F; cat -- "$1"; else echo N; fi`
-	cmd := s.helperCmd(r.Context(), vol, true, false, script, full)
-	out, err := cmd.StdoutPipe()
+	var stderr bytes.Buffer
+	opts := s.helperRunOpts(vol, true, script, full)
+	opts.Stderr = &stderr
+	out, err := s.dk.RunContainerStdout(r.Context(), opts)
 	if err != nil {
 		return err
 	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	defer cmd.Wait()
+	defer out.Close()
 	br := bufio.NewReader(out)
 	kind, err := br.ReadString('\n')
 	if err != nil {
-		return fmt.Errorf("读取失败：%s", strings.TrimSpace(stderr.String()))
+		_ = out.Close()
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("读取失败：%s", msg)
 	}
 	base := path.Base(rel)
 	if rel == "/" {
@@ -416,11 +426,18 @@ func (s *Server) handleVolumeUpload(w http.ResponseWriter, r *http.Request, u *U
 	// Keep the owner of the target directory so the app can still read/write the file.
 	script := `[ -d "$1" ] || { echo "目录不存在" >&2; exit 3; }
 cat > "$1/$2" && chown "$(stat -c %u:%g "$1")" "$1/$2"`
-	cmd := s.helperCmd(r.Context(), vol, false, true, script, full, name)
-	cmd.Stdin = r.Body
-	out, err := cmd.CombinedOutput()
+	var out bytes.Buffer
+	opts := s.helperRunOpts(vol, false, script, full, name)
+	opts.Stdin = r.Body
+	opts.Stdout = &out
+	opts.Stderr = &out
+	err = s.dk.RunContainer(r.Context(), opts)
 	if err != nil {
-		err = fmt.Errorf("上传失败：%s", strings.TrimSpace(string(out)))
+		msg := strings.TrimSpace(out.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		err = fmt.Errorf("上传失败：%s", msg)
 	}
 	s.audit(r, u, "volume.upload", vol, path.Join(rel, name), err)
 	return done(w, err)
