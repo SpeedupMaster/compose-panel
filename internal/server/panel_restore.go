@@ -434,6 +434,9 @@ func (s *Server) readPanelRestoreInput(r *http.Request, allowSnapshot, checkSetu
 	var ageIdentity string
 	if strings.HasPrefix(ct, "multipart/form-data") {
 		r.Body = http.MaxBytesReader(nil, r.Body, maxPanelRestoreBodySize)
+		if checkSetupToken {
+			return s.readSetupRestoreMultipart(r)
+		}
 		if err = r.ParseMultipartForm(1 << 20); err != nil {
 			err = bad("解析上传表单失败：%v", err)
 			return
@@ -443,14 +446,6 @@ func (s *Server) readPanelRestoreInput(r *http.Request, allowSnapshot, checkSetu
 				_ = r.MultipartForm.RemoveAll()
 			}
 		}()
-		if checkSetupToken {
-			token := strings.TrimSpace(r.FormValue("token"))
-			if s.setupToken == "" || !auth.ConstantEqual(token, s.setupToken) {
-				s.recordFailure("setup:" + clientIP(r))
-				err = errStatus(http.StatusForbidden, "初始化令牌不正确（见面板容器日志）")
-				return
-			}
-		}
 		masterKey = strings.TrimSpace(r.FormValue("masterKey"))
 		ageIdentity = strings.TrimSpace(r.FormValue("ageIdentity"))
 		confirm = strings.TrimSpace(r.FormValue("confirm"))
@@ -503,6 +498,148 @@ func (s *Server) readPanelRestoreInput(r *http.Request, allowSnapshot, checkSetu
 		return
 	}
 	tmpDB, sourceDesc, err = s.openLocalPanelSnapshot(req.Snapshot, identities)
+	return
+}
+
+func (s *Server) readSetupRestoreMultipart(r *http.Request) (tmpDB, sourceDesc, masterKey, confirm string, dryRun bool, err error) {
+	mr, merr := r.MultipartReader()
+	if merr != nil {
+		err = bad("解析上传表单失败：%v", merr)
+		return
+	}
+	const maxMetaFieldBytes = 16 << 10
+	const maxPreAuthBytes = 64 << 10
+	const maxPreAuthParts = 16
+	var (
+		tokenVerified bool
+		preAuthRead   int64
+		preAuthParts  int
+		ageIdentity   string
+		rawUploadPath string
+	)
+	defer func() {
+		if rawUploadPath != "" {
+			_ = os.Remove(rawUploadPath)
+		}
+	}()
+
+	for {
+		part, perr := mr.NextPart()
+		if perr == io.EOF {
+			break
+		}
+		if perr != nil {
+			err = bad("解析上传表单失败：%v", perr)
+			return
+		}
+		if !tokenVerified {
+			preAuthParts++
+			if preAuthParts > maxPreAuthParts {
+				s.recordFailure("setup:" + clientIP(r))
+				err = errStatus(http.StatusForbidden, "初始化令牌不正确（见面板容器日志）")
+				return
+			}
+		}
+		name := part.FormName()
+		if name == "file" {
+			if !tokenVerified {
+				// Do NOT call part.Close(): multipart.Part.Close drains the entire part body.
+				s.recordFailure("setup:" + clientIP(r))
+				err = errStatus(http.StatusForbidden, "初始化令牌不正确（见面板容器日志）")
+				return
+			}
+			if rawUploadPath != "" {
+				_ = part.Close()
+				continue
+			}
+			sourceDesc = part.FileName()
+			dir := filepath.Join(s.cfg.DataDir, "tmp")
+			if mkerr := os.MkdirAll(dir, 0o700); mkerr != nil {
+				err = mkerr
+				return
+			}
+			f, cerr := os.CreateTemp(dir, "panel-upload-*.raw")
+			if cerr != nil {
+				err = cerr
+				return
+			}
+			rawUploadPath = f.Name()
+			n, copyErr := io.Copy(f, io.LimitReader(part, maxPanelRestoreBodySize+1))
+			if closeErr := f.Close(); copyErr == nil {
+				copyErr = closeErr
+			}
+			if copyErr != nil {
+				err = bad("读取上传文件失败：%v", copyErr)
+				return
+			}
+			if n > maxPanelRestoreBodySize {
+				err = bad("面板备份文件过大（超过 512 MiB）")
+				return
+			}
+			_ = part.Close()
+			continue
+		}
+
+		valBytes, rerr := io.ReadAll(io.LimitReader(part, maxMetaFieldBytes+1))
+		if rerr != nil {
+			err = bad("解析上传表单失败：%v", rerr)
+			return
+		}
+		if len(valBytes) > maxMetaFieldBytes {
+			err = bad("表单字段过大")
+			return
+		}
+		if !tokenVerified {
+			preAuthRead += int64(len(valBytes))
+			if preAuthRead > maxPreAuthBytes {
+				s.recordFailure("setup:" + clientIP(r))
+				err = errStatus(http.StatusForbidden, "初始化令牌不正确（见面板容器日志）")
+				return
+			}
+		}
+		val := strings.TrimSpace(string(valBytes))
+		switch name {
+		case "token":
+			if s.setupToken == "" || !auth.ConstantEqual(val, s.setupToken) {
+				s.recordFailure("setup:" + clientIP(r))
+				err = errStatus(http.StatusForbidden, "初始化令牌不正确（见面板容器日志）")
+				return
+			}
+			tokenVerified = true
+		case "masterKey":
+			masterKey = val
+		case "ageIdentity":
+			ageIdentity = val
+		case "confirm":
+			confirm = val
+		case "dryRun":
+			dryRun = val == "1" || val == "true"
+		}
+		_ = part.Close()
+	}
+
+	if !tokenVerified {
+		s.recordFailure("setup:" + clientIP(r))
+		err = errStatus(http.StatusForbidden, "初始化令牌不正确（见面板容器日志）")
+		return
+	}
+	if rawUploadPath == "" {
+		err = bad("请选择要恢复的面板备份文件")
+		return
+	}
+	identities, ierr := s.allAgeIdentities(ageIdentity)
+	if ierr != nil {
+		err = ierr
+		return
+	}
+	f, oerr := os.Open(rawUploadPath)
+	if oerr != nil {
+		err = oerr
+		return
+	}
+	defer f.Close()
+	encrypted := strings.HasSuffix(strings.ToLower(sourceDesc), ".age")
+	tmpDB, err = s.extractPanelStreamToTemp(f, encrypted, identities)
 	return
 }
 

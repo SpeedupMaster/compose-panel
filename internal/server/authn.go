@@ -71,6 +71,10 @@ func (s *Server) authed(min int, h handlerFunc) http.HandlerFunc {
 			writeErr(w, errStatus(403, "缺少 X-Panel 请求头"))
 			return
 		}
+		if u.TokenScope == "deploy" && !deployTokenAllowed(r) {
+			writeErr(w, errStatus(403, "此操作超出 deploy 令牌权限范围"))
+			return
+		}
 		if !u.can(min) {
 			writeErr(w, errForbidden)
 			return
@@ -79,6 +83,52 @@ func (s *Server) authed(min int, h handlerFunc) http.HandlerFunc {
 			writeErr(w, err)
 		}
 	}
+}
+
+func deployTokenAllowed(r *http.Request) bool {
+	p := r.URL.Path
+	m := r.Method
+	if m == http.MethodGet && (p == "/api/auth/me" || p == "/api/projects") {
+		return true
+	}
+	if !strings.HasPrefix(p, "/api/") {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(p, "/api/"), "/")
+	for _, seg := range parts {
+		if seg == "" || seg == "." || seg == ".." {
+			return false
+		}
+	}
+	switch len(parts) {
+	case 2:
+		if m == http.MethodGet && (parts[0] == "projects" || parts[0] == "deployments" || parts[0] == "jobs") {
+			return true
+		}
+	case 3:
+		switch parts[0] {
+		case "projects":
+			if m == http.MethodPost && (parts[2] == "deploy" || parts[2] == "action") {
+				return true
+			}
+			if m == http.MethodGet && (parts[2] == "deployments" || parts[2] == "images") {
+				return true
+			}
+		case "deployments":
+			if m == http.MethodPost && parts[2] == "rollback" {
+				return true
+			}
+		case "jobs":
+			if m == http.MethodGet && parts[2] == "log" {
+				return true
+			}
+		}
+	case 4:
+		if m == http.MethodPost && parts[0] == "projects" && parts[2] == "images" && parts[3] == "check" {
+			return true
+		}
+	}
+	return false
 }
 
 // public wraps a handler that needs no authentication.
@@ -92,9 +142,9 @@ func public(h func(w http.ResponseWriter, r *http.Request) error) http.HandlerFu
 
 func (s *Server) loadUser(id int64) (*User, error) {
 	u := &User{ID: id}
-	var disabled int
-	err := s.db.QueryRow(`SELECT username, email, role, totp_enabled, disabled FROM users WHERE id=?`, id).
-		Scan(&u.Username, &u.Email, &u.Role, &u.TOTP, &disabled)
+	var disabled, allProjects int
+	err := s.db.QueryRow(`SELECT username, email, role, totp_enabled, disabled, all_projects FROM users WHERE id=?`, id).
+		Scan(&u.Username, &u.Email, &u.Role, &u.TOTP, &disabled, &allProjects)
 	if err != nil {
 		return nil, err
 	}
@@ -102,16 +152,22 @@ func (s *Server) loadUser(id int64) (*User, error) {
 		return nil, errStatus(401, "账号已停用")
 	}
 	u.Level = roleLevel[u.Role]
-	if u.Level < roleAdmin {
+	if u.Level < roleAdmin && allProjects == 0 {
+		u.Projects = []int64{}
 		rows, err := s.db.Query(`SELECT project_id FROM user_projects WHERE user_id=?`, id)
-		if err == nil {
-			for rows.Next() {
-				var pid int64
-				if rows.Scan(&pid) == nil {
-					u.Projects = append(u.Projects, pid)
-				}
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var pid int64
+			if err := rows.Scan(&pid); err != nil {
+				return nil, err
 			}
-			rows.Close()
+			u.Projects = append(u.Projects, pid)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
 		}
 	}
 	return u, nil
@@ -225,7 +281,12 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) error {
 	if s.hasUsers() {
 		return errStatus(409, "已经初始化")
 	}
+	rateKey := "setup:" + clientIP(r)
+	if s.tooManyFailures(rateKey) {
+		return errStatus(429, "初始化令牌尝试次数过多，请 15 分钟后再试")
+	}
 	if s.setupToken == "" || !auth.ConstantEqual(req.Token, s.setupToken) {
+		s.recordFailure(rateKey)
 		return errStatus(403, "初始化令牌不正确（见面板容器日志）")
 	}
 	if err := validUsername(req.Username); err != nil {
@@ -292,7 +353,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, uid int64,
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Value: tok, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode,
-		Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https", Expires: exp,
+		Secure: r.TLS != nil || (isTrustedProxyAddr(r.RemoteAddr) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")), Expires: exp,
 	})
 	return nil
 }
@@ -339,16 +400,41 @@ func (s *Server) tooManyFailures(key string) bool {
 	return len(keep) >= 5
 }
 
+func rateKeyClass(k string) int {
+	switch {
+	case strings.HasPrefix(k, "totp|"):
+		return 2
+	case strings.HasPrefix(k, "setup:"):
+		return 1
+	default:
+		return 0
+	}
+}
+
 func (s *Server) recordFailure(key string) {
 	s.loginMu.Lock()
 	now := time.Now()
 	s.pruneLoginFailuresLocked(now.Add(-15 * time.Minute))
 	const maxTrackedLoginKeys = 4096
-	if _, exists := s.loginFail[key]; !exists && len(s.loginFail) >= maxTrackedLoginKeys {
-		// Evict one arbitrary entry under brute-force flood to keep memory bounded.
-		for k := range s.loginFail {
-			delete(s.loginFail, k)
-			break
+	if _, exists := s.loginFail[key]; !exists {
+		cls := rateKeyClass(key)
+		if cls < 2 {
+			// Bound non-TOTP rate-limit buckets independently so IP/username
+			// flood eviction can never evict totp| (or setup:) keys.
+			count := 0
+			for k := range s.loginFail {
+				if rateKeyClass(k) == cls {
+					count++
+				}
+			}
+			if count >= maxTrackedLoginKeys {
+				for k := range s.loginFail {
+					if rateKeyClass(k) == cls {
+						delete(s.loginFail, k)
+						break
+					}
+				}
+			}
 		}
 	}
 	s.loginFail[key] = append(s.loginFail[key], now)
@@ -558,21 +644,42 @@ func (s *Server) handleRevokeSession(w http.ResponseWriter, r *http.Request, u *
 // ---------- users (admin) ----------
 
 func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request, u *User) error {
-	rows, err := s.db.Query(`SELECT id, username, email, role, totp_enabled, disabled, created_at, last_login_at, last_login_ip FROM users ORDER BY id`)
+	rows, err := s.db.Query(`SELECT id, username, email, role, totp_enabled, disabled, all_projects, created_at, last_login_at, last_login_ip FROM users ORDER BY id`)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	out := []map[string]any{}
+	type userListRow struct {
+		id, created, last             int64
+		name, email, role, ip         string
+		totp, disabled, allProjects   int
+	}
+	var list []userListRow
 	for rows.Next() {
-		var id, created, last int64
-		var name, email, role, ip string
-		var totp, disabled int
-		if err := rows.Scan(&id, &name, &email, &role, &totp, &disabled, &created, &last, &ip); err != nil {
+		var r userListRow
+		if err := rows.Scan(&r.id, &r.name, &r.email, &r.role, &r.totp, &r.disabled, &r.allProjects, &r.created, &r.last, &r.ip); err != nil {
+			rows.Close()
 			return err
 		}
-		out = append(out, map[string]any{"id": id, "username": name, "email": email, "role": role, "totp": totp == 1, "disabled": disabled == 1,
-			"createdAt": created, "lastLoginAt": last, "lastLoginIp": ip, "projects": s.userProjects(id)})
+		list = append(list, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	out := make([]map[string]any, 0, len(list))
+	for _, item := range list {
+		var projects any
+		if item.role != "admin" && item.allProjects == 0 {
+			projects = s.userProjects(item.id)
+		}
+		out = append(out, map[string]any{
+			"id": item.id, "username": item.name, "email": item.email, "role": item.role,
+			"totp": item.totp == 1, "disabled": item.disabled == 1,
+			"createdAt": item.created, "lastLoginAt": item.last, "lastLoginIp": item.ip,
+			"projects": projects,
+		})
 	}
 	return ok(w, out)
 }
@@ -619,9 +726,11 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request, u *Use
 	if _, ok := roleLevel[req.Role]; !ok {
 		return bad("角色无效")
 	}
+	allProjects := req.Role == "admin" || req.Projects == nil
 	pw := auth.RandomPassword(16)
 	hash, _ := auth.HashPassword(pw)
-	res, err := s.db.Exec(`INSERT INTO users(username,email,password_hash,role,created_at) VALUES(?,?,?,?,?)`, req.Username, req.Email, hash, req.Role, time.Now().Unix())
+	res, err := s.db.Exec(`INSERT INTO users(username,email,password_hash,role,all_projects,created_at) VALUES(?,?,?,?,?,?)`,
+		req.Username, req.Email, hash, req.Role, boolInt(allProjects), time.Now().Unix())
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return bad("用户名已存在")
@@ -629,7 +738,11 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request, u *Use
 		return err
 	}
 	id, _ := res.LastInsertId()
-	s.setUserProjects(id, req.Projects)
+	if allProjects {
+		s.setUserProjects(id, nil)
+	} else {
+		s.setUserProjects(id, req.Projects)
+	}
 	s.audit(r, u, "user.create", req.Username, "角色 "+req.Role, nil)
 	s.notify.Emit(notify.Event{Type: "security_login", Title: "新增用户", Body: fmt.Sprintf("%s 创建了用户 %s（%s）", u.Username, req.Username, req.Role), Target: req.Username})
 	return ok(w, map[string]any{"id": id, "password": pw})
@@ -650,14 +763,20 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, u *Use
 	if id == u.ID && (req.Role != "admin" || req.Disabled) {
 		return bad("不能降低或停用自己的账号")
 	}
-	_, err = s.db.Exec(`UPDATE users SET email=?, role=?, disabled=? WHERE id=?`, req.Email, req.Role, boolInt(req.Disabled), id)
+	allProjects := req.Role == "admin" || req.Projects == nil
+	_, err = s.db.Exec(`UPDATE users SET email=?, role=?, disabled=?, all_projects=? WHERE id=?`,
+		req.Email, req.Role, boolInt(req.Disabled), boolInt(allProjects), id)
 	if err != nil {
 		return err
 	}
 	if req.Disabled {
 		_, _ = s.db.Exec(`DELETE FROM sessions WHERE user_id=?`, id)
 	}
-	s.setUserProjects(id, req.Projects)
+	if allProjects {
+		s.setUserProjects(id, nil)
+	} else {
+		s.setUserProjects(id, req.Projects)
+	}
 	s.audit(r, u, "user.update", fmt.Sprint(id), fmt.Sprintf("角色 %s 停用 %v", req.Role, req.Disabled), nil)
 	return ok(w, nil)
 }
@@ -739,6 +858,12 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, u *Us
 	}
 	if req.Scope != "read" && req.Scope != "deploy" && req.Scope != "full" {
 		return bad("权限范围无效")
+	}
+	if req.Scope == "deploy" && !u.can(roleOperator) {
+		return errStatus(403, "当前角色无法创建 deploy 权限令牌")
+	}
+	if req.Scope == "full" && !u.can(roleAdmin) {
+		return errStatus(403, "当前角色无法创建 full 权限令牌")
 	}
 	tok := "cpt_" + auth.RandomToken(24)
 	var exp int64

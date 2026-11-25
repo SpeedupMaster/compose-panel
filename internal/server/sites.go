@@ -279,10 +279,18 @@ func (s *Server) handleListSites(w http.ResponseWriter, r *http.Request, u *User
 	certs := s.allCerts()
 	out := []map[string]any{}
 	for _, x := range list {
-		if x.ProjectID > 0 && !u.canProject(x.ProjectID) {
+		if x.ProjectID > 0 {
+			if !u.canProject(x.ProjectID) {
+				continue
+			}
+		} else if !u.can(roleAdmin) && u.Projects != nil {
 			continue
 		}
-		out = append(out, map[string]any{"site": x, "target": s.upstreamFor(x), "cert": certFor(certs, x.Domains[0])})
+		var cert *certView
+		if len(x.Domains) > 0 {
+			cert = certFor(certs, x.Domains[0])
+		}
+		out = append(out, map[string]any{"site": x, "target": s.upstreamFor(x), "cert": cert})
 	}
 	return ok(w, map[string]any{"sites": out, "panelDomain": s.setting("panel_domain", "")})
 }
@@ -293,11 +301,27 @@ func (s *Server) handleSaveSite(w http.ResponseWriter, r *http.Request, u *User)
 		return err
 	}
 	id, _ := pathID(r, "id")
+	if id > 0 {
+		existingSite, err := s.siteForUser(id, u)
+		if err != nil {
+			return err
+		}
+		if existingSite.ProjectID <= 0 && !u.can(roleAdmin) {
+			return errForbidden
+		}
+	}
+	if req.ProjectID < 0 {
+		return bad("项目 ID 无效")
+	}
+	if req.ProjectID == 0 {
+		if !u.can(roleAdmin) {
+			return errForbidden
+		}
+	} else if !u.canProject(req.ProjectID) {
+		return errForbidden
+	}
 	if err := s.checkSiteReq(&req, id); err != nil {
 		return err
-	}
-	if req.ProjectID > 0 && !u.canProject(req.ProjectID) {
-		return errForbidden
 	}
 	var projectID any
 	if req.ProjectID > 0 {
@@ -351,8 +375,14 @@ func (s *Server) handleDeleteSite(w http.ResponseWriter, r *http.Request, u *Use
 	if err != nil {
 		return err
 	}
-	var domains string
-	_ = s.db.QueryRow(`SELECT domains FROM sites WHERE id=?`, id).Scan(&domains)
+	x, err := s.siteForUser(id, u)
+	if err != nil {
+		return err
+	}
+	if x.ProjectID == 0 && !u.can(roleAdmin) {
+		return errForbidden
+	}
+	domains := strings.Join(x.Domains, ",")
 	_, err = s.db.Exec(`DELETE FROM sites WHERE id=?`, id)
 	s.audit(r, u, "site.delete", domains, "", err)
 	if err != nil {

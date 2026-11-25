@@ -54,6 +54,31 @@ func (s *Server) queryJobs(where string, args ...any) []jobRow {
 	return out
 }
 
+func (s *Server) canAccessJobWithNames(u *User, j jobRow, allowed map[string]bool) bool {
+	if u.can(roleAdmin) || u.Projects == nil {
+		return true
+	}
+	if allowed == nil {
+		allowed = s.allowedProjectNames(u)
+	}
+	switch {
+	case j.Kind == "deploy" || j.Kind == "cron.task" || j.Kind == "database.import" || strings.HasPrefix(j.Kind, "project."):
+		return allowed[j.Target]
+	case j.Kind == "backup" || j.Kind == "backup.verify" || j.Kind == "backup.restore" || j.Kind == "backup.drill":
+		if j.Target == "" || j.Target == "panel" || strings.HasPrefix(j.Target, "volume/") {
+			return false
+		}
+		projName, _, _ := strings.Cut(j.Target, "/")
+		return allowed[projName]
+	default:
+		return false
+	}
+}
+
+func (s *Server) canAccessJob(u *User, j jobRow) bool {
+	return s.canAccessJobWithNames(u, j, nil)
+}
+
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request, u *User) error {
 	where, args := "WHERE 1=1", []any{}
 	q := r.URL.Query()
@@ -72,6 +97,33 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request, u *User)
 	if v := q.Get("target"); v != "" {
 		where += " AND target=?"
 		args = append(args, v)
+	}
+	restricted := !u.can(roleAdmin) && u.Projects != nil
+	if restricted {
+		allowed := s.allowedProjectNames(u)
+		all := s.queryJobs(where+" ORDER BY created_at DESC, rowid DESC", args...)
+		filtered := make([]jobRow, 0, len(all))
+		for _, j := range all {
+			if s.canAccessJobWithNames(u, j, allowed) {
+				filtered = append(filtered, j)
+			}
+		}
+		if q.Has("page") {
+			page := max(queryInt(r, "page", 1), 1)
+			size := min(max(queryInt(r, "pageSize", 20), 1), 200)
+			total := len(filtered)
+			if last := max((total+size-1)/size, 1); page > last {
+				page = last
+			}
+			start := min((page-1)*size, total)
+			end := min(start+size, total)
+			return ok(w, map[string]any{"items": nonNil(filtered[start:end]), "total": total, "page": page, "pageSize": size})
+		}
+		limit := min(max(queryInt(r, "limit", 100), 1), 500)
+		if len(filtered) > limit {
+			filtered = filtered[:limit]
+		}
+		return ok(w, nonNil(filtered))
 	}
 	if q.Has("page") {
 		// Paged: {items, total, page, pageSize}. Without page, the plain list (older callers).
@@ -94,14 +146,21 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request, u *User) e
 	if len(list) == 0 {
 		return errNotFound
 	}
+	if !s.canAccessJob(u, list[0]) {
+		return errForbidden
+	}
 	return ok(w, list[0])
 }
 
 // handleJobLog streams a job's log as SSE: the backlog first, then live lines.
 func (s *Server) handleJobLog(w http.ResponseWriter, r *http.Request, u *User) error {
 	id := r.PathValue("id")
-	if len(s.queryJobs("WHERE id=?", id)) == 0 {
+	list := s.queryJobs("WHERE id=?", id)
+	if len(list) == 0 {
 		return errNotFound
+	}
+	if !s.canAccessJob(u, list[0]) {
+		return errForbidden
 	}
 	logPath, offset, ch, cancel, _ := s.jobs.SubscribeStream(id)
 	defer cancel()
@@ -164,6 +223,13 @@ func (s *Server) handleJobLog(w http.ResponseWriter, r *http.Request, u *User) e
 
 func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request, u *User) error {
 	id := r.PathValue("id")
+	list := s.queryJobs("WHERE id=?", id)
+	if len(list) == 0 {
+		return errNotFound
+	}
+	if !s.canAccessJob(u, list[0]) {
+		return errForbidden
+	}
 	if !s.jobs.Cancel(id) {
 		return bad("任务已结束")
 	}
@@ -279,7 +345,13 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request, u *User
 }
 
 func (s *Server) handleRunSchedule(w http.ResponseWriter, r *http.Request, u *User) error {
+	if !u.can(roleAdmin) && u.Projects != nil {
+		return errForbidden
+	}
 	key := r.PathValue("key")
+	if (strings.HasPrefix(key, "drill:") || key == "system:panel-backup" || key == "system:prune") && !u.can(roleAdmin) {
+		return errForbidden
+	}
 	var jobID string
 	switch {
 	case strings.HasPrefix(key, "policy:"):
@@ -656,9 +728,23 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request, u *User)
 	out := map[string]any{}
 	out["host"] = hostStats(s.cfg.DataDir)
 	byProject := s.containersByProject(ctx)
+	restricted := !u.can(roleAdmin) && u.Projects != nil
+	var allowedNames map[string]bool
+	if restricted {
+		allowedNames = s.allowedProjectNames(u)
+	}
 	var running, total, unhealthy int
 	all, derr := s.dk.ListContainers(ctx, true, nil)
-	for _, c := range all {
+	visible := all
+	if restricted {
+		visible = make([]dockerContainer, 0, len(all))
+		for _, c := range all {
+			if allowedNames[c.Labels["com.docker.compose.project"]] {
+				visible = append(visible, c)
+			}
+		}
+	}
+	for _, c := range visible {
 		total++
 		if c.State == "running" {
 			running++
@@ -687,8 +773,12 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request, u *User)
 	}
 	out["projects"] = nonNil(projects)
 	// Recent deployments.
-	drows, err := s.db.Query(`SELECT d.id, d.number, d.status, d.trigger, d.actor, d.commit_sha, d.commit_msg, d.job_id, d.error, d.created_at, d.finished_at, p.id, p.name
-		FROM deployments d JOIN projects p ON p.id=d.project_id ORDER BY d.id DESC LIMIT 8`)
+	depSQL := `SELECT d.id, d.number, d.status, d.trigger, d.actor, d.commit_sha, d.commit_msg, d.job_id, d.error, d.created_at, d.finished_at, p.id, p.name
+		FROM deployments d JOIN projects p ON p.id=d.project_id ORDER BY d.id DESC`
+	if !restricted {
+		depSQL += ` LIMIT 8`
+	}
+	drows, err := s.db.Query(depSQL)
 	deps := []map[string]any{}
 	if err == nil {
 		for drows.Next() {
@@ -697,6 +787,9 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request, u *User)
 			var pname string
 			if drows.Scan(&d.ID, &d.Number, &d.Status, &d.Trigger, &d.Actor, &d.CommitSHA, &d.CommitMsg, &d.JobID, &d.Error, &d.CreatedAt, &d.FinishedAt, &pid, &pname) == nil && u.canProject(pid) {
 				deps = append(deps, map[string]any{"deployment": d, "projectId": pid, "project": pname})
+				if len(deps) >= 8 {
+					break
+				}
 			}
 		}
 		drows.Close()
@@ -706,8 +799,30 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request, u *User)
 	var bOK, bFail int
 	var bSize int64
 	since := time.Now().Add(-24 * time.Hour).Unix()
-	_ = s.db.QueryRow(`SELECT COALESCE(sum(status='success'),0), COALESCE(sum(status='failed'),0), COALESCE(sum(CASE WHEN status='success' THEN size END),0) FROM backups WHERE started_at>=?`, since).Scan(&bOK, &bFail, &bSize)
-	out["backups"] = map[string]any{"success": bOK, "failed": bFail, "size": bSize, "recentFailures": s.listBackups(`WHERE b.status='failed' AND b.started_at>=? ORDER BY b.started_at DESC LIMIT 5`, since)}
+	var recentFailures []backupRow
+	if restricted {
+		var volProjects map[string]string
+		recentFailures = []backupRow{}
+		for _, b := range s.listBackups(`WHERE b.started_at>=? ORDER BY b.started_at DESC`, since) {
+			if !s.canAccessBackupSource(ctx, u, b.Source, &volProjects, allowedNames) {
+				continue
+			}
+			switch b.Status {
+			case "success":
+				bOK++
+				bSize += b.Size
+			case "failed":
+				bFail++
+				if len(recentFailures) < 5 {
+					recentFailures = append(recentFailures, b)
+				}
+			}
+		}
+	} else {
+		_ = s.db.QueryRow(`SELECT COALESCE(sum(status='success'),0), COALESCE(sum(status='failed'),0), COALESCE(sum(CASE WHEN status='success' THEN size END),0) FROM backups WHERE started_at>=?`, since).Scan(&bOK, &bFail, &bSize)
+		recentFailures = s.listBackups(`WHERE b.status='failed' AND b.started_at>=? ORDER BY b.started_at DESC LIMIT 5`, since)
+	}
+	out["backups"] = map[string]any{"success": bOK, "failed": bFail, "size": bSize, "recentFailures": recentFailures}
 	// Certificates expiring soon.
 	days, _ := strconv.Atoi(s.setting("cert_alert_days", "14"))
 	expiring := []certView{}
@@ -717,8 +832,22 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request, u *User)
 		}
 	}
 	out["certs"] = expiring
-	out["jobs"] = s.queryJobs(`WHERE status IN ('queued','running') OR created_at>=? ORDER BY created_at DESC LIMIT 8`, time.Now().Add(-6*time.Hour).Unix())
-	out["unhealthy"] = unhealthyList(all)
+	if restricted {
+		allJobs := s.queryJobs(`WHERE status IN ('queued','running') OR created_at>=? ORDER BY created_at DESC`, time.Now().Add(-6*time.Hour).Unix())
+		visJobs := make([]jobRow, 0, min(len(allJobs), 8))
+		for _, j := range allJobs {
+			if s.canAccessJobWithNames(u, j, allowedNames) {
+				visJobs = append(visJobs, j)
+				if len(visJobs) >= 8 {
+					break
+				}
+			}
+		}
+		out["jobs"] = visJobs
+	} else {
+		out["jobs"] = s.queryJobs(`WHERE status IN ('queued','running') OR created_at>=? ORDER BY created_at DESC LIMIT 8`, time.Now().Add(-6*time.Hour).Unix())
+	}
+	out["unhealthy"] = unhealthyList(visible)
 	return ok(w, out)
 }
 

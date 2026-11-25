@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
   totp_enabled   INTEGER NOT NULL DEFAULT 0,
   recovery_codes TEXT NOT NULL DEFAULT '',   -- newline separated sha256 hashes
   disabled       INTEGER NOT NULL DEFAULT 0,
+  all_projects   INTEGER NOT NULL DEFAULT 1,
   created_at     INTEGER NOT NULL,
   last_login_at  INTEGER NOT NULL DEFAULT 0,
   last_login_ip  TEXT NOT NULL DEFAULT ''

@@ -378,6 +378,84 @@ func (p *policy) keep() backup.Keep {
 	return backup.Keep{Daily: p.KeepDaily, Weekly: p.KeepWeekly, Monthly: p.KeepMonthly, Yearly: p.KeepYearly}
 }
 
+func (s *Server) allowedProjectNames(u *User) map[string]bool {
+	if u.can(roleAdmin) || u.Projects == nil {
+		return nil
+	}
+	out := map[string]bool{}
+	rows, err := s.db.Query(`SELECT id, name FROM projects`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var name string
+		if rows.Scan(&id, &name) == nil && u.canProject(id) {
+			out[name] = true
+		}
+	}
+	return out
+}
+
+func (s *Server) volumeProjectMap(ctx context.Context) map[string]string {
+	out := map[string]string{}
+	if s.dk == nil || ctx == nil {
+		return out
+	}
+	vols, err := s.dk.ListVolumes(ctx)
+	if err != nil {
+		return out
+	}
+	for _, v := range vols {
+		if p := v.Labels["com.docker.compose.project"]; p != "" {
+			out[v.Name] = p
+		}
+	}
+	return out
+}
+
+func (s *Server) canAccessBackupSource(ctx context.Context, u *User, src BackupSource, volProjects *map[string]string, allowedNames map[string]bool) bool {
+	if u.can(roleAdmin) || u.Projects == nil {
+		return true
+	}
+	switch src.Kind {
+	case "dir":
+		return src.ProjectID > 0 && u.canProject(src.ProjectID)
+	case "database":
+		if src.InstanceID <= 0 {
+			return false
+		}
+		var pid int64
+		if err := s.db.QueryRow(`SELECT project_id FROM db_instances WHERE id=?`, src.InstanceID).Scan(&pid); err != nil {
+			return false
+		}
+		return pid > 0 && u.canProject(pid)
+	case "volume":
+		if src.Volume == "" {
+			return false
+		}
+		var vp map[string]string
+		if volProjects != nil {
+			if *volProjects == nil {
+				*volProjects = s.volumeProjectMap(ctx)
+			}
+			vp = *volProjects
+		} else {
+			vp = s.volumeProjectMap(ctx)
+		}
+		if allowedNames == nil {
+			allowedNames = s.allowedProjectNames(u)
+		}
+		proj := vp[src.Volume]
+		return proj != "" && allowedNames[proj]
+	case "panel":
+		return false
+	default:
+		return false
+	}
+}
+
 func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request, u *User) error {
 	rows, err := s.db.Query(`SELECT ` + policyCols + ` FROM backup_policies p LEFT JOIN storage_targets t ON t.id=p.storage_id ORDER BY p.id`)
 	if err != nil {
@@ -393,6 +471,17 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request, u *U
 		list = append(list, p)
 	}
 	rows.Close()
+	if !u.can(roleAdmin) && u.Projects != nil {
+		allowedNames := s.allowedProjectNames(u)
+		var volProjects map[string]string
+		filtered := make([]*policy, 0, len(list))
+		for _, p := range list {
+			if s.canAccessBackupSource(r.Context(), u, p.Source, &volProjects, allowedNames) {
+				filtered = append(filtered, p)
+			}
+		}
+		list = filtered
+	}
 	for _, p := range list {
 		b := s.listBackups(`WHERE b.policy_id=? ORDER BY b.started_at DESC LIMIT 1`, p.ID)
 		if len(b) > 0 {
@@ -448,6 +537,9 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request, u *U
 	if err := s.checkPolicyReq(&req); err != nil {
 		return err
 	}
+	if !s.canAccessBackupSource(r.Context(), u, req.Source, nil, nil) {
+		return errForbidden
+	}
 	src, _ := json.Marshal(req.Source)
 	res, err := s.db.Exec(`INSERT INTO backup_policies(name,source,schedule,keep_daily,keep_weekly,keep_monthly,keep_yearly,storage_id,encrypt,age_recipient,enabled,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, string(src), req.Schedule, req.KeepDaily, req.KeepWeekly, req.KeepMonthly, req.KeepYearly, req.StorageID, boolInt(req.Encrypt), req.AgeRecipient, boolInt(req.Enabled), time.Now().Unix())
@@ -465,12 +557,22 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request, u *U
 	if err != nil {
 		return err
 	}
+	old, err := s.getPolicy(id)
+	if err != nil {
+		return err
+	}
+	if !s.canAccessBackupSource(r.Context(), u, old.Source, nil, nil) {
+		return errForbidden
+	}
 	var req policyReq
 	if err := readJSON(r, &req); err != nil {
 		return err
 	}
 	if err := s.checkPolicyReq(&req); err != nil {
 		return err
+	}
+	if !s.canAccessBackupSource(r.Context(), u, req.Source, nil, nil) {
+		return errForbidden
 	}
 	src, _ := json.Marshal(req.Source)
 	_, err = s.db.Exec(`UPDATE backup_policies SET name=?, source=?, schedule=?, keep_daily=?, keep_weekly=?, keep_monthly=?, keep_yearly=?, storage_id=?, encrypt=?, age_recipient=?, enabled=? WHERE id=?`,
@@ -524,6 +626,9 @@ func (s *Server) handleRunPolicy(w http.ResponseWriter, r *http.Request, u *User
 	if err != nil {
 		return err
 	}
+	if !s.canAccessBackupSource(r.Context(), u, p.Source, nil, nil) {
+		return errForbidden
+	}
 	jobID := s.runPolicy(p, u.Username)
 	s.audit(r, u, "backup.run", p.Name, "手动执行", nil)
 	return ok(w, map[string]any{"jobId": jobID})
@@ -541,6 +646,9 @@ func (s *Server) handleBackupNow(w http.ResponseWriter, r *http.Request, u *User
 	}
 	if err := s.validateSource(&req.Source); err != nil {
 		return err
+	}
+	if !s.canAccessBackupSource(r.Context(), u, req.Source, nil, nil) {
+		return errForbidden
 	}
 	if req.StorageID == 0 {
 		_ = s.db.QueryRow(`SELECT id FROM storage_targets ORDER BY id LIMIT 1`).Scan(&req.StorageID)
@@ -613,6 +721,21 @@ func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request, u *Us
 		args = append(args, "%"+v+"%")
 	}
 	limit := min(max(queryInt(r, "limit", 100), 1), 500)
+	if !u.can(roleAdmin) && u.Projects != nil {
+		allowedNames := s.allowedProjectNames(u)
+		var volProjects map[string]string
+		all := s.listBackups(where+" ORDER BY b.started_at DESC", args...)
+		filtered := make([]backupRow, 0, min(len(all), limit))
+		for _, b := range all {
+			if s.canAccessBackupSource(r.Context(), u, b.Source, &volProjects, allowedNames) {
+				filtered = append(filtered, b)
+				if len(filtered) >= limit {
+					break
+				}
+			}
+		}
+		return ok(w, filtered)
+	}
 	return ok(w, s.listBackups(where+" ORDER BY b.started_at DESC LIMIT ?", append(args, limit)...))
 }
 
@@ -686,6 +809,9 @@ func (s *Server) handleVerifyBackup(w http.ResponseWriter, r *http.Request, u *U
 	b, err := s.backupByID(r)
 	if err != nil {
 		return err
+	}
+	if !s.canAccessBackupSource(r.Context(), u, b.Source, nil, nil) {
+		return errForbidden
 	}
 	var req struct {
 		AgeIdentity string `json:"ageIdentity"`
@@ -1317,6 +1443,11 @@ func (s *Server) restoreDirOverwrite(rc io.Reader, dir string) error {
 // handleBackupSources lists what can be backed up.
 func (s *Server) handleBackupSources(w http.ResponseWriter, r *http.Request, u *User) error {
 	out := map[string]any{}
+	restricted := !u.can(roleAdmin) && u.Projects != nil
+	var allowedNames map[string]bool
+	if restricted {
+		allowedNames = s.allowedProjectNames(u)
+	}
 	dbs := []map[string]any{}
 	rows, _ := s.db.Query(`SELECT id FROM db_instances`)
 	var ids []int64
@@ -1330,7 +1461,7 @@ func (s *Server) handleBackupSources(w http.ResponseWriter, r *http.Request, u *
 	}
 	for _, id := range ids {
 		d, err := s.getDB(id)
-		if err != nil {
+		if err != nil || !u.canProject(d.ProjectID) {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
@@ -1349,7 +1480,11 @@ func (s *Server) handleBackupSources(w http.ResponseWriter, r *http.Request, u *
 	vols, _ := s.dk.ListVolumes(r.Context())
 	vn := []map[string]any{}
 	for _, v := range vols {
-		vn = append(vn, map[string]any{"name": v.Name, "project": v.Labels["com.docker.compose.project"]})
+		proj := v.Labels["com.docker.compose.project"]
+		if restricted && (proj == "" || !allowedNames[proj]) {
+			continue
+		}
+		vn = append(vn, map[string]any{"name": v.Name, "project": proj})
 	}
 	out["volumes"] = vn
 	ps := []map[string]any{}
@@ -1357,7 +1492,7 @@ func (s *Server) handleBackupSources(w http.ResponseWriter, r *http.Request, u *
 	if prow != nil {
 		for prow.Next() {
 			p, err := s.scanProject(prow)
-			if err != nil {
+			if err != nil || !u.canProject(p.ID) {
 				continue
 			}
 			ps = append(ps, map[string]any{"id": p.ID, "name": p.Name, "dirs": s.detectProjectDirs(p)})
