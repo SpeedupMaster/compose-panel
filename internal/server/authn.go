@@ -1,14 +1,18 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/csv"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"compose-panel/internal/auth"
@@ -176,11 +180,12 @@ func (s *Server) loadUser(id int64) (*User, error) {
 func (s *Server) authenticate(r *http.Request) (*User, error) {
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		tok := strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
-		var uid, exp int64
+		var uid, exp, lastUsedAt int64
 		var scope string
 		var tid int64
-		err := s.db.QueryRow(`SELECT id, user_id, scope, expires_at FROM api_tokens WHERE token_hash=?`, auth.SHA256Hex(tok)).Scan(&tid, &uid, &scope, &exp)
-		if err != nil || (exp > 0 && exp < time.Now().Unix()) {
+		err := s.db.QueryRow(`SELECT id, user_id, scope, expires_at, last_used_at FROM api_tokens WHERE token_hash=?`, auth.SHA256Hex(tok)).Scan(&tid, &uid, &scope, &exp, &lastUsedAt)
+		now := time.Now().Unix()
+		if err != nil || (exp > 0 && exp < now) {
 			return nil, errStatus(401, "API 令牌无效或已过期")
 		}
 		u, err := s.loadUser(uid)
@@ -194,7 +199,9 @@ func (s *Server) authenticate(r *http.Request) (*User, error) {
 		case "deploy":
 			u.Level = min(u.Level, roleOperator)
 		}
-		_, _ = s.db.Exec(`UPDATE api_tokens SET last_used_at=?, last_used_ip=? WHERE id=?`, time.Now().Unix(), clientIP(r), tid)
+		if now-lastUsedAt > 60 {
+			_, _ = s.db.Exec(`UPDATE api_tokens SET last_used_at=?, last_used_ip=? WHERE id=?`, now, clientIP(r), tid)
+		}
 		return u, nil
 	}
 	c, err := r.Cookie(cookieName)
@@ -222,6 +229,43 @@ func (s *Server) authenticate(r *http.Request) (*User, error) {
 
 // ---------- audit ----------
 
+const (
+	defaultAuditKeepDays = 180
+	defaultAuditMaxRows  = 50000
+)
+
+var auditPruneState = struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+}{last: map[string]time.Time{}}
+
+func (s *Server) shouldPruneAudit(now time.Time) bool {
+	key := s.bootID
+	if key == "" {
+		key = "default"
+	}
+	auditPruneState.mu.Lock()
+	defer auditPruneState.mu.Unlock()
+	if len(auditPruneState.last) > 256 {
+		cut := now.Add(-2 * time.Hour)
+		for k, t := range auditPruneState.last {
+			if t.Before(cut) {
+				delete(auditPruneState.last, k)
+			}
+		}
+	}
+	if last, ok := auditPruneState.last[key]; ok && now.Sub(last) < time.Hour {
+		return false
+	}
+	auditPruneState.last[key] = now
+	return true
+}
+
+// AuditCLI records a CLI-initiated administrative action into the audit hash chain.
+func (s *Server) AuditCLI(action, target, detail string) {
+	s.audit(nil, &User{Username: "cli"}, action, target, detail, nil)
+}
+
 func (s *Server) audit(r *http.Request, u *User, action, target, detail string, err error) {
 	actor := "system"
 	if u != nil {
@@ -244,12 +288,114 @@ func (s *Server) audit(r *http.Request, u *User, action, target, detail string, 
 	}
 	s.auditMu.Lock()
 	defer s.auditMu.Unlock()
+	tx, txErr := s.db.Begin()
+	if txErr != nil {
+		slog.Error("audit begin transaction failed", "action", action, "err", txErr)
+		return
+	}
+	defer tx.Rollback()
 	var prev string
-	_ = s.db.QueryRow(`SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1`).Scan(&prev)
-	ts := time.Now().Unix()
+	scanErr := tx.QueryRow(`SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1`).Scan(&prev)
+	if errors.Is(scanErr, sql.ErrNoRows) {
+		scanErr = tx.QueryRow(`SELECT value FROM settings WHERE key='audit_anchor_hash'`).Scan(&prev)
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			prev = ""
+			scanErr = nil
+		}
+	}
+	if scanErr != nil {
+		slog.Error("audit read previous hash failed", "action", action, "err", scanErr)
+		return
+	}
+	now := time.Now()
+	ts := now.Unix()
 	h := auditHash(prev, ts, actor, action, target, ip, result, detail)
-	_, _ = s.db.Exec(`INSERT INTO audit_log(ts,actor,action,target,ip,result,detail,prev_hash,hash) VALUES(?,?,?,?,?,?,?,?,?)`,
-		ts, actor, action, target, ip, result, detail, prev, h)
+	if _, execErr := tx.Exec(`INSERT INTO audit_log(ts,actor,action,target,ip,result,detail,prev_hash,hash) VALUES(?,?,?,?,?,?,?,?,?)`,
+		ts, actor, action, target, ip, result, detail, prev, h); execErr != nil {
+		slog.Error("audit insert failed", "action", action, "err", execErr)
+		return
+	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		slog.Error("audit commit failed", "action", action, "err", commitErr)
+		return
+	}
+	if s.shouldPruneAudit(now) {
+		if pruneErr := s.pruneAuditLogLocked(defaultAuditKeepDays, defaultAuditMaxRows); pruneErr != nil {
+			slog.Error("audit log prune failed", "err", pruneErr)
+		}
+	}
+}
+
+// PruneAuditLog trims old or excess audit_log rows while anchoring the hash chain
+// in settings('audit_anchor_hash') so audit verification remains mathematically continuous.
+func (s *Server) PruneAuditLog(keepDays, maxRows int) error {
+	s.auditMu.Lock()
+	defer s.auditMu.Unlock()
+	return s.pruneAuditLogLocked(keepDays, maxRows)
+}
+
+func (s *Server) pruneAuditLogLocked(keepDays, maxRows int) error {
+	if keepDays <= 0 && maxRows <= 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var cutoffID int64
+	if maxRows > 0 {
+		var count int
+		if err := tx.QueryRow(`SELECT count(*) FROM audit_log`).Scan(&count); err != nil {
+			return err
+		}
+		if count > maxRows {
+			var id int64
+			err := tx.QueryRow(`SELECT id FROM audit_log ORDER BY id ASC LIMIT 1 OFFSET ?`, count-maxRows-1).Scan(&id)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if id > cutoffID {
+				cutoffID = id
+			}
+		}
+	}
+	if keepDays > 0 {
+		cutoffTS := time.Now().Add(-time.Duration(keepDays) * 24 * time.Hour).Unix()
+		var firstKeptID int64
+		err := tx.QueryRow(`SELECT id FROM audit_log WHERE ts>=? ORDER BY id ASC LIMIT 1`, cutoffTS).Scan(&firstKeptID)
+		var ageCutoffID sql.NullInt64
+		switch {
+		case err == nil:
+			if err := tx.QueryRow(`SELECT MAX(id) FROM audit_log WHERE id<?`, firstKeptID).Scan(&ageCutoffID); err != nil {
+				return err
+			}
+		case errors.Is(err, sql.ErrNoRows):
+			if err := tx.QueryRow(`SELECT MAX(id) FROM audit_log WHERE ts<?`, cutoffTS).Scan(&ageCutoffID); err != nil {
+				return err
+			}
+		default:
+			return err
+		}
+		if ageCutoffID.Valid && ageCutoffID.Int64 > cutoffID {
+			cutoffID = ageCutoffID.Int64
+		}
+	}
+	if cutoffID <= 0 {
+		return nil
+	}
+	var cutoffHash string
+	if err := tx.QueryRow(`SELECT hash FROM audit_log WHERE id=?`, cutoffID).Scan(&cutoffHash); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO settings(key,value) VALUES('audit_anchor_hash',?)`, cutoffHash); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM audit_log WHERE id<=?`, cutoffID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func auditHash(prev string, ts int64, actor, action, target, ip, result, detail string) string {
@@ -295,6 +441,9 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) error {
 	if len(req.Password) < 10 {
 		return bad("密码至少 10 位")
 	}
+	if len(req.Password) > 72 {
+		return bad("密码长度不能超过 72 字节")
+	}
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
 		return err
@@ -319,7 +468,17 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) error {
 	}
 	u, _ := s.loadUser(uid)
 	s.audit(r, u, "setup", req.Username, "创建管理员", nil)
-	go s.syncCaddy(r.Context())
+	baseCtx := s.bgCtx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	s.bgWG.Add(1)
+	go func() {
+		defer s.bgWG.Done()
+		cctx, cancel := context.WithTimeout(baseCtx, 15*time.Second)
+		defer cancel()
+		_ = s.syncCaddy(cctx)
+	}()
 	return ok(w, u)
 }
 
@@ -497,9 +656,23 @@ func (s *Server) handleTOTPLogin(w http.ResponseWriter, r *http.Request) error {
 		return errStatus(429, "失败次数过多，请 15 分钟后再试")
 	}
 	var secretEnc, codes string
-	_ = s.db.QueryRow(`SELECT totp_secret, recovery_codes FROM users WHERE id=?`, uid).Scan(&secretEnc, &codes)
+	var lastStep int64
+	_ = s.db.QueryRow(`SELECT totp_secret, recovery_codes, last_totp_step FROM users WHERE id=?`, uid).Scan(&secretEnc, &codes, &lastStep)
 	code := strings.ReplaceAll(strings.TrimSpace(req.Code), " ", "")
-	valid := auth.TOTPValid(s.box.MustOpen(secretEnc), code, time.Now())
+	matchedStep, valid := auth.TOTPVerifyStep(s.box.MustOpen(secretEnc), code, time.Now())
+	if valid {
+		if matchedStep <= lastStep {
+			valid = false
+		} else {
+			res, err := s.db.Exec(`UPDATE users SET last_totp_step=? WHERE id=? AND last_totp_step<?`, matchedStep, uid, matchedStep)
+			if err != nil {
+				return err
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				valid = false
+			}
+		}
+	}
 	if !valid && len(code) > 6 {
 		// recovery code
 		h := auth.SHA256Hex(strings.ToLower(code))
@@ -554,6 +727,9 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request, u 
 	if len(req.New) < 10 {
 		return bad("新密码至少 10 位")
 	}
+	if len(req.New) > 72 {
+		return bad("密码长度不能超过 72 字节")
+	}
 	nh, err := auth.HashPassword(req.New)
 	if err != nil {
 		return err
@@ -582,7 +758,8 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request, u *Use
 	}
 	var enc string
 	_ = s.db.QueryRow(`SELECT totp_secret FROM users WHERE id=?`, u.ID).Scan(&enc)
-	if enc == "" || !auth.TOTPValid(s.box.MustOpen(enc), req.Code, time.Now()) {
+	matchedStep, validCode := auth.TOTPVerifyStep(s.box.MustOpen(enc), req.Code, time.Now())
+	if enc == "" || !validCode {
 		return bad("验证码不正确")
 	}
 	var codes, hashes []string
@@ -591,7 +768,7 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request, u *Use
 		codes = append(codes, c)
 		hashes = append(hashes, auth.SHA256Hex(c))
 	}
-	_, err := s.db.Exec(`UPDATE users SET totp_enabled=1, recovery_codes=? WHERE id=?`, strings.Join(hashes, "\n"), u.ID)
+	_, err := s.db.Exec(`UPDATE users SET totp_enabled=1, last_totp_step=?, recovery_codes=? WHERE id=?`, matchedStep, strings.Join(hashes, "\n"), u.ID)
 	s.audit(r, u, "user.totp", u.Username, "启用两步验证", err)
 	if err != nil {
 		return err
@@ -609,7 +786,7 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request, u *Us
 	if !auth.CheckPassword(hash, req.Password) {
 		return bad("密码不正确")
 	}
-	_, err := s.db.Exec(`UPDATE users SET totp_enabled=0, totp_secret='', recovery_codes='' WHERE id=?`, u.ID)
+	_, err := s.db.Exec(`UPDATE users SET totp_enabled=0, totp_secret='', last_totp_step=0, recovery_codes='' WHERE id=?`, u.ID)
 	s.audit(r, u, "user.totp", u.Username, "关闭两步验证", err)
 	return ok(w, nil)
 }
@@ -788,7 +965,7 @@ func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request,
 	}
 	pw := auth.RandomPassword(16)
 	hash, _ := auth.HashPassword(pw)
-	res, err := s.db.Exec(`UPDATE users SET password_hash=?, totp_enabled=0, totp_secret='', recovery_codes='' WHERE id=?`, hash, id)
+	res, err := s.db.Exec(`UPDATE users SET password_hash=?, totp_enabled=0, totp_secret='', last_totp_step=0, recovery_codes='' WHERE id=?`, hash, id)
 	if err != nil {
 		return err
 	}
@@ -967,6 +1144,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, u *User) er
 }
 
 func (s *Server) handleAuditExport(w http.ResponseWriter, r *http.Request, u *User) error {
+	loc := s.location()
 	q, args := s.auditQuery(r)
 	rows, err := s.db.Query(q+` ORDER BY id`, args...)
 	if err != nil {
@@ -978,7 +1156,6 @@ func (s *Server) handleAuditExport(w http.ResponseWriter, r *http.Request, u *Us
 	_, _ = w.Write([]byte("\xEF\xBB\xBF"))
 	cw := csv.NewWriter(w)
 	_ = cw.Write([]string{"id", "time", "actor", "action", "target", "ip", "result", "detail", "hash"})
-	loc := s.location()
 	count := 0
 	for rows.Next() {
 		var a auditRow
@@ -995,12 +1172,14 @@ func (s *Server) handleAuditExport(w http.ResponseWriter, r *http.Request, u *Us
 }
 
 func (s *Server) handleAuditVerify(w http.ResponseWriter, r *http.Request, u *User) error {
+	s.auditMu.Lock()
+	defer s.auditMu.Unlock()
+	prev := s.setting("audit_anchor_hash", "")
 	rows, err := s.db.Query(`SELECT id, ts, actor, action, target, ip, result, detail, prev_hash, hash FROM audit_log ORDER BY id`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	prev := ""
 	count := 0
 	for rows.Next() {
 		var a auditRow

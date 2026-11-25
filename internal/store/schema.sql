@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS users (
   role           TEXT NOT NULL,              -- admin | operator | viewer
   totp_secret    TEXT NOT NULL DEFAULT '',   -- encrypted
   totp_enabled   INTEGER NOT NULL DEFAULT 0,
+  last_totp_step INTEGER NOT NULL DEFAULT 0,
   recovery_codes TEXT NOT NULL DEFAULT '',   -- newline separated sha256 hashes
   disabled       INTEGER NOT NULL DEFAULT 0,
   all_projects   INTEGER NOT NULL DEFAULT 1,
@@ -35,6 +36,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   ip           TEXT NOT NULL DEFAULT '',
   user_agent   TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 
 CREATE TABLE IF NOT EXISTS api_tokens (
   id           INTEGER PRIMARY KEY,
@@ -69,6 +72,7 @@ CREATE TABLE IF NOT EXISTS projects (
   created_at       INTEGER NOT NULL,
   updated_at       INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_projects_webhook ON projects(webhook_token);
 
 CREATE TABLE IF NOT EXISTS project_files (
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -88,6 +92,7 @@ CREATE TABLE IF NOT EXISTS deployments (
   commit_msg  TEXT NOT NULL DEFAULT '',
   compose     TEXT NOT NULL DEFAULT '',
   env         TEXT NOT NULL DEFAULT '',      -- encrypted snapshot
+  files_json  TEXT NOT NULL DEFAULT '',      -- inline project_files snapshot
   job_id      TEXT NOT NULL DEFAULT '',
   error       TEXT NOT NULL DEFAULT '',
   created_at  INTEGER NOT NULL,
@@ -161,6 +166,8 @@ CREATE TABLE IF NOT EXISTS backups (
   finished_at  INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS backups_policy ON backups(policy_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_backups_storage ON backups(storage_id);
+CREATE INDEX IF NOT EXISTS idx_backups_started ON backups(started_at);
 
 CREATE TABLE IF NOT EXISTS sites (
   id          INTEGER PRIMARY KEY,
@@ -256,6 +263,7 @@ CREATE TABLE IF NOT EXISTS metrics (
   PRIMARY KEY (name, ts)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS metrics_ts ON metrics(ts);
+CREATE INDEX IF NOT EXISTS idx_metrics_project_ts ON metrics(project, ts);
 
 CREATE TABLE IF NOT EXISTS templates (
   id          INTEGER PRIMARY KEY,
@@ -275,8 +283,9 @@ CREATE TABLE IF NOT EXISTS image_checks (
   service       TEXT NOT NULL,
   image         TEXT NOT NULL,
   local_digest  TEXT NOT NULL DEFAULT '',
-  remote_digest TEXT NOT NULL DEFAULT '',
-  status        TEXT NOT NULL,               -- current | update | local | error
+  remote_digest    TEXT NOT NULL DEFAULT '',
+  last_auto_digest TEXT NOT NULL DEFAULT '',
+  status           TEXT NOT NULL,               -- current | update | local | error
   error         TEXT NOT NULL DEFAULT '',
   checked_at    INTEGER NOT NULL,
   PRIMARY KEY (project_id, service)

@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -75,15 +76,142 @@ type Project struct {
 
 const projectCols = `id, name, description, kind, source, workdir, git_url, git_branch, git_compose_path, git_key, webhook_token, webhook_secret, auto_deploy, compose, env, options, created_at, updated_at`
 
+const maskedSecretPlaceholder = "••••••"
+
+var scpGitURLRe = regexp.MustCompile(`^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:\S+$`)
+
+func isSSHGitURL(u string) bool {
+	if strings.HasPrefix(strings.ToLower(u), "ssh://") {
+		return true
+	}
+	return !strings.Contains(u, "://") && scpGitURLRe.MatchString(u)
+}
+
+func validateGitURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return bad("Git 地址不能为空")
+	}
+	if strings.HasPrefix(raw, "-") {
+		return bad("Git 地址不能以 - 开头")
+	}
+	if strings.ContainsAny(raw, " \t\r\n\x00") {
+		return bad("Git 地址包含非法空白或控制字符")
+	}
+	lower := strings.ToLower(raw)
+	if strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "ssh://") {
+		u, err := url.Parse(raw)
+		if err != nil || u.Hostname() == "" || strings.HasPrefix(u.Hostname(), "-") {
+			return bad("Git 地址格式无效")
+		}
+		return nil
+	}
+	if !strings.Contains(raw, "://") && scpGitURLRe.MatchString(raw) {
+		at := strings.IndexByte(raw, '@')
+		colon := strings.IndexByte(raw, ':')
+		if at > 0 && colon > at+1 {
+			user := raw[:at]
+			host := raw[at+1 : colon]
+			if !strings.HasPrefix(user, "-") && !strings.HasPrefix(host, "-") {
+				return nil
+			}
+		}
+	}
+	return bad("Git 地址仅支持 https://、http://、ssh:// 或 user@host:path 格式")
+}
+
+func validateGitBranch(branch string) error {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return bad("Git 分支不能为空")
+	}
+	if strings.HasPrefix(branch, "-") {
+		return bad("Git 分支名不能以 - 开头")
+	}
+	if strings.ContainsAny(branch, " \t\r\n\x00") || strings.Contains(branch, "..") || strings.Contains(branch, "@{") {
+		return bad("Git 分支名不合法")
+	}
+	return nil
+}
+
+func (s *Server) openGitURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "v1:") {
+		if plain, err := s.box.Open(raw); err == nil {
+			return plain
+		}
+		return ""
+	}
+	return raw
+}
+
+func maskGitURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User == nil {
+		return raw
+	}
+	user := u.User.Username()
+	_, hasPass := u.User.Password()
+	if !hasPass && user == "" {
+		return raw
+	}
+	uCopy := *u
+	uCopy.User = nil
+	rest := strings.TrimPrefix(uCopy.String(), u.Scheme+"://")
+	if hasPass {
+		return u.Scheme + "://" + url.User(user).String() + ":" + maskedSecretPlaceholder + "@" + rest
+	}
+	return u.Scheme + "://" + maskedSecretPlaceholder + "@" + rest
+}
+
+func mergeMaskedGitURL(incoming, existing string) (string, error) {
+	if !strings.Contains(incoming, maskedSecretPlaceholder) {
+		return incoming, nil
+	}
+	const sentinel = "__PANEL_MASKED_SECRET__"
+	incU, err := url.Parse(strings.ReplaceAll(incoming, maskedSecretPlaceholder, sentinel))
+	if err != nil || (incU.Scheme != "http" && incU.Scheme != "https") || incU.User == nil {
+		return "", bad("Git 地址格式无效，请重新填写完整地址")
+	}
+	extU, err := url.Parse(existing)
+	if err != nil || (extU.Scheme != "http" && extU.Scheme != "https") || extU.User == nil {
+		return "", bad("无法保留原仓库密码，请重新填写完整 Git 地址")
+	}
+	if !strings.EqualFold(incU.Host, extU.Host) {
+		return "", bad("修改仓库地址主机时请重新填写密码或令牌")
+	}
+	incUser := incU.User.Username()
+	incPass, incHasPass := incU.User.Password()
+	if incHasPass && incPass == sentinel {
+		if extPass, ok := extU.User.Password(); ok {
+			incU.User = url.UserPassword(incUser, extPass)
+			return incU.String(), nil
+		}
+		if extU.User.Username() != "" {
+			incU.User = url.UserPassword(incUser, extU.User.Username())
+			return incU.String(), nil
+		}
+		return "", bad("无法保留原仓库密码，请重新填写完整 Git 地址")
+	}
+	if !incHasPass && incUser == sentinel {
+		incU.User = extU.User
+		return incU.String(), nil
+	}
+	return "", bad("Git 地址包含无效掩码，请重新填写密码或令牌")
+}
+
 func (s *Server) scanProject(row interface{ Scan(...any) error }) (*Project, error) {
 	p := &Project{}
-	var envEnc, opts string
+	var gitURLRaw, envEnc, opts string
 	var auto int
-	err := row.Scan(&p.ID, &p.Name, &p.Description, &p.Kind, &p.Source, &p.Workdir, &p.GitURL, &p.GitBranch, &p.GitComposePath,
+	err := row.Scan(&p.ID, &p.Name, &p.Description, &p.Kind, &p.Source, &p.Workdir, &gitURLRaw, &p.GitBranch, &p.GitComposePath,
 		&p.gitKeyEnc, &p.WebhookToken, &p.webhookSecretEnc, &auto, &p.Compose, &envEnc, &opts, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
+	p.GitURL = s.openGitURL(gitURLRaw)
 	p.AutoDeploy = auto == 1
 	p.HasGitKey = p.gitKeyEnc != ""
 	p.Env = []EnvVar{}
@@ -394,6 +522,7 @@ func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request, u *Use
 	if p.WebhookToken != "" {
 		p.WebhookURL = "/hooks/p/" + p.WebhookToken
 	}
+	p.GitURL = maskGitURL(p.GitURL)
 	cs, _ := s.dk.ProjectContainers(r.Context(), p.Name)
 	containers := []containerDTO{}
 	for _, c := range cs {
@@ -443,17 +572,24 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request, u *
 	if req.Source == "inline" && strings.TrimSpace(req.Compose) == "" {
 		return bad("Compose 内容不能为空")
 	}
-	if req.Source == "git" && req.GitURL == "" {
-		return bad("Git 地址不能为空")
+	req.GitURL = strings.TrimSpace(req.GitURL)
+	req.GitBranch = strings.TrimSpace(req.GitBranch)
+	if req.GitBranch == "" {
+		req.GitBranch = "main"
+	}
+	if req.Source == "git" {
+		if err := validateGitURL(req.GitURL); err != nil {
+			return err
+		}
+		if err := validateGitBranch(req.GitBranch); err != nil {
+			return err
+		}
 	}
 	if err := validateEnv(req.Env); err != nil {
 		return err
 	}
 	if err := cleanProjectFiles(req.Files); err != nil {
 		return err
-	}
-	if req.GitBranch == "" {
-		req.GitBranch = "main"
 	}
 	if req.GitComposePath == "" {
 		req.GitComposePath = "compose.yml"
@@ -472,7 +608,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request, u *
 	envJSON, _ := json.Marshal(req.Env)
 	opts, _ := json.Marshal(req.Options)
 	gitKey := ""
-	if req.Source == "git" && (strings.HasPrefix(req.GitURL, "git@") || strings.HasPrefix(req.GitURL, "ssh://")) {
+	if req.Source == "git" && isSSHGitURL(req.GitURL) {
 		k, err := newDeployKey()
 		if err != nil {
 			return err
@@ -482,7 +618,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request, u *
 	now := time.Now().Unix()
 	res, err := s.db.Exec(`INSERT INTO projects(name,description,kind,source,git_url,git_branch,git_compose_path,git_key,webhook_token,auto_deploy,compose,env,options,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		req.Name, req.Description, "app", req.Source, req.GitURL, req.GitBranch, req.GitComposePath, gitKey, auth.RandomToken(18),
+		req.Name, req.Description, "app", req.Source, s.box.Seal(req.GitURL), req.GitBranch, req.GitComposePath, gitKey, auth.RandomToken(18),
 		boolInt(req.AutoDeploy), req.Compose, s.box.Seal(string(envJSON)), string(opts), now, now)
 	if err != nil {
 		return err
@@ -528,6 +664,7 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request, u *
 			req.Env[i].Value = old[e.Key]
 		}
 	}
+	req.GitBranch = strings.TrimSpace(req.GitBranch)
 	if req.GitBranch == "" {
 		req.GitBranch = p.GitBranch
 	}
@@ -536,6 +673,20 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request, u *
 	}
 	if strings.Contains(req.GitComposePath, "..") {
 		return bad("Compose 路径不合法")
+	}
+	gitURL := p.GitURL
+	if p.Source == "git" {
+		merged, err := mergeMaskedGitURL(strings.TrimSpace(req.GitURL), p.GitURL)
+		if err != nil {
+			return err
+		}
+		if err := validateGitURL(merged); err != nil {
+			return err
+		}
+		if err := validateGitBranch(req.GitBranch); err != nil {
+			return err
+		}
+		gitURL = merged
 	}
 	if p.Source == "imported" && req.Compose != "" {
 		cp := s.composeProject(p, false)
@@ -553,19 +704,15 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request, u *
 	envJSON, _ := json.Marshal(req.Env)
 	opts, _ := json.Marshal(req.Options)
 	gitKey := p.gitKeyEnc
-	if p.Source == "git" && gitKey == "" && (strings.HasPrefix(req.GitURL, "git@") || strings.HasPrefix(req.GitURL, "ssh://")) {
+	if p.Source == "git" && gitKey == "" && isSSHGitURL(gitURL) {
 		k, err := newDeployKey()
 		if err != nil {
 			return err
 		}
 		gitKey = s.box.Seal(k)
 	}
-	gitURL := req.GitURL
-	if p.Source != "git" {
-		gitURL = p.GitURL
-	}
 	_, err = s.db.Exec(`UPDATE projects SET description=?, git_url=?, git_branch=?, git_compose_path=?, git_key=?, auto_deploy=?, compose=?, env=?, options=?, updated_at=? WHERE id=?`,
-		req.Description, gitURL, req.GitBranch, req.GitComposePath, gitKey, boolInt(req.AutoDeploy), req.Compose, s.box.Seal(string(envJSON)), string(opts), time.Now().Unix(), p.ID)
+		req.Description, s.box.Seal(gitURL), req.GitBranch, req.GitComposePath, gitKey, boolInt(req.AutoDeploy), req.Compose, s.box.Seal(string(envJSON)), string(opts), time.Now().Unix(), p.ID)
 	s.audit(r, u, "project.update", p.Name, "", err)
 	if err != nil {
 		return err
@@ -809,6 +956,12 @@ func buildProjectAction(p *Project, action, service string) (projectActionPlan, 
 	}
 }
 
+func (s *Server) projectHasEnabledSites(projectID int64) bool {
+	var n int
+	_ = s.db.QueryRow(`SELECT count(*) FROM sites WHERE project_id=? AND enabled=1`, projectID).Scan(&n)
+	return n > 0
+}
+
 func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request, u *User) error {
 	p, err := s.projectForUser(r, u)
 	if err != nil {
@@ -828,7 +981,7 @@ func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request, u *
 	}
 	jobID := s.jobs.Submit(jobSpec("project."+req.Action, plan.Title, p.Name, u.Username, "project:"+p.Name), func(run *jobRun) error {
 		ctx := run.Context()
-		if err := s.prepareWorkdir(run, p, nil); err != nil {
+		if err := s.prepareWorkdir(run, p, nil, false); err != nil {
 			return err
 		}
 		cp := s.composeProject(p, true)
@@ -848,7 +1001,14 @@ func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request, u *
 				run.SetProgress(step.ProgressAfter)
 			}
 		}
-		if plan.SyncCaddy {
+		needCaddySync := plan.SyncCaddy
+		if !needCaddySync {
+			switch req.Action {
+			case "start", "restart", "recreate", "stop", "down":
+				needCaddySync = s.projectHasEnabledSites(p.ID)
+			}
+		}
+		if needCaddySync {
 			if err := s.syncCaddy(ctx); err != nil {
 				run.Logf("注意：同步反向代理配置失败：%v", err)
 			}
