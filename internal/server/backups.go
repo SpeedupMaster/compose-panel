@@ -805,6 +805,22 @@ func (s *Server) handleDownloadBackup(w http.ResponseWriter, r *http.Request, u 
 	return nil
 }
 
+type countingHashWriter struct {
+	w io.Writer
+	n *int64
+}
+
+func (c *countingHashWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	*c.n += int64(n)
+	return n, err
+}
+
+type teeReadCloser struct {
+	io.Reader
+	io.Closer
+}
+
 func (s *Server) handleVerifyBackup(w http.ResponseWriter, r *http.Request, u *User) error {
 	b, err := s.backupByID(r)
 	if err != nil {
@@ -828,16 +844,30 @@ func (s *Server) handleVerifyBackup(w http.ResponseWriter, r *http.Request, u *U
 		if err != nil {
 			return err
 		}
-		run.Logf("下载并计算 SHA-256：%s", b.ObjectKey)
+		run.Logf("单趟下载、校验 SHA-256 并解密解压：%s", b.ObjectKey)
 		rcRaw, err := st.Get(run.Context(), b.ObjectKey)
 		if err != nil {
 			return fmt.Errorf("下载失败：%w", err)
 		}
 		h := sha256.New()
-		gotSize, copyErr := io.Copy(h, rcRaw)
-		rcRaw.Close()
+		var gotSize int64
+		tee := &teeReadCloser{
+			Reader: io.TeeReader(rcRaw, &countingHashWriter{w: h, n: &gotSize}),
+			Closer: rcRaw,
+		}
+		plain, err := backup.OpenStream(tee, b.Encrypted, ids)
+		if err != nil {
+			_ = rcRaw.Close()
+			return err
+		}
+		n, copyErr := io.Copy(io.Discard, plain)
+		if copyErr == nil {
+			// Drain any unread trailing bytes from the raw stream so size and SHA-256 cover the entire object.
+			_, copyErr = io.Copy(io.Discard, tee)
+		}
+		_ = plain.Close()
 		if copyErr != nil {
-			return fmt.Errorf("读取失败：%w", copyErr)
+			return fmt.Errorf("解压/解密失败：%w", copyErr)
 		}
 		gotSHA := hex.EncodeToString(h.Sum(nil))
 		if b.Size > 0 && gotSize != b.Size {
@@ -850,15 +880,6 @@ func (s *Server) handleVerifyBackup(w http.ResponseWriter, r *http.Request, u *U
 			run.Logf("校验和一致（%s）", gotSHA[:16])
 		} else {
 			run.Logf("SHA-256：%s，大小 %s", gotSHA[:16], humanBytes(gotSize))
-		}
-		rc, err := backup.OpenObject(run.Context(), st, b.ObjectKey, b.Encrypted, ids...)
-		if err != nil {
-			return err
-		}
-		n, err := io.Copy(io.Discard, rc)
-		rc.Close()
-		if err != nil {
-			return fmt.Errorf("解压/解密失败：%w", err)
 		}
 		if b.SHA256 == "" || b.Size == 0 {
 			_, _ = s.db.Exec(`UPDATE backups SET sha256=?, size=? WHERE id=?`, gotSHA, gotSize, b.ID)
@@ -1032,6 +1053,9 @@ func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request, u *
 		plan.SourceDatabase = strings.TrimSpace(req.SourceDatabase)
 		if plan.SourceDatabase == "" {
 			plan.SourceDatabase = b.Source.Database
+		}
+		if plan.SourceDatabase != "" && d.Engine != "redis" && !dbmgr.ValidIdent(plan.SourceDatabase) {
+			return bad("源库名无效")
 		}
 		if d.Engine == "redis" {
 			if req.Confirm != d.Name {

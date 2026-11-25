@@ -12,9 +12,17 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
+
+type cpuSample struct {
+	totalUsage  int64
+	systemUsage int64
+	seenAt      time.Time
+}
 
 type Client struct {
 	http    *http.Client
@@ -22,11 +30,14 @@ type Client struct {
 	network string
 	addr    string
 	base    string
+
+	cpuMu   sync.Mutex
+	prevCPU map[string]cpuSample
 }
 
 // New accepts unix:///path or tcp://host:port.
 func New(host string) *Client {
-	c := &Client{base: "http://docker"}
+	c := &Client{base: "http://docker", prevCPU: map[string]cpuSample{}}
 	switch {
 	case strings.HasPrefix(host, "unix://"):
 		c.network, c.addr = "unix", strings.TrimPrefix(host, "unix://")
@@ -339,11 +350,64 @@ type cpuStats struct {
 	OnlineCPUs  int64 `json:"online_cpus"`
 }
 
-// ContainerStats takes one sample (the daemon waits ~1s for the CPU delta).
+const maxPrevCPUCache = 1024
+
+func (c *Client) getPrevCPU(id string) (cpuSample, bool) {
+	c.cpuMu.Lock()
+	defer c.cpuMu.Unlock()
+	if c.prevCPU == nil {
+		return cpuSample{}, false
+	}
+	s, ok := c.prevCPU[id]
+	return s, ok
+}
+
+func (c *Client) setPrevCPU(id string, s cpuSample) {
+	c.cpuMu.Lock()
+	defer c.cpuMu.Unlock()
+	if c.prevCPU == nil {
+		c.prevCPU = map[string]cpuSample{}
+	}
+	c.prevCPU[id] = s
+	if len(c.prevCPU) > maxPrevCPUCache {
+		now := s.seenAt
+		for k, v := range c.prevCPU {
+			if now.Sub(v.seenAt) > 10*time.Minute {
+				delete(c.prevCPU, k)
+			}
+		}
+		if len(c.prevCPU) > maxPrevCPUCache {
+			type entry struct {
+				id     string
+				seenAt time.Time
+			}
+			all := make([]entry, 0, len(c.prevCPU))
+			for k, v := range c.prevCPU {
+				all = append(all, entry{id: k, seenAt: v.seenAt})
+			}
+			sort.Slice(all, func(i, j int) bool { return all[i].seenAt.Before(all[j].seenAt) })
+			for i := 0; i < len(all)-maxPrevCPUCache/2; i++ {
+				delete(c.prevCPU, all[i].id)
+			}
+		}
+	}
+}
+
+// ContainerStats takes one fast one-shot sample and computes CPU% from the cached
+// previous sample. On a cold first-ever read where Docker omits precpu_stats, it
+// performs a single non-one-shot read so callers get immediate CPU% while all
+// subsequent polls stay fast (~2ms one-shot=1).
 func (c *Client) ContainerStats(ctx context.Context, id string) (*Stats, error) {
+	prev, hasPrev := c.getPrevCPU(id)
 	var r rawStats
-	if err := c.do(ctx, "GET", "/containers/"+url.PathEscape(id)+"/stats", url.Values{"stream": {"0"}}, nil, &r); err != nil {
+	if err := c.do(ctx, "GET", "/containers/"+url.PathEscape(id)+"/stats", url.Values{"stream": {"0"}, "one-shot": {"1"}}, nil, &r); err != nil {
 		return nil, err
+	}
+	if !hasPrev && r.PreCPUStats.SystemUsage == 0 {
+		var full rawStats
+		if err := c.do(ctx, "GET", "/containers/"+url.PathEscape(id)+"/stats", url.Values{"stream": {"0"}}, nil, &full); err == nil {
+			r = full
+		}
 	}
 	s := &Stats{MemLimit: r.MemoryStats.Limit, PIDs: r.PidsStats.Current}
 	cache := r.MemoryStats.Stats["inactive_file"]
@@ -354,13 +418,28 @@ func (c *Client) ContainerStats(ctx context.Context, id string) (*Stats, error) 
 	if s.MemUsage < 0 {
 		s.MemUsage = r.MemoryStats.Usage
 	}
-	cpuDelta := float64(r.CPUStats.CPUUsage.TotalUsage - r.PreCPUStats.CPUUsage.TotalUsage)
-	sysDelta := float64(r.CPUStats.SystemUsage - r.PreCPUStats.SystemUsage)
+	var preTotal, preSystem int64
+	if r.PreCPUStats.SystemUsage > 0 {
+		preTotal = r.PreCPUStats.CPUUsage.TotalUsage
+		preSystem = r.PreCPUStats.SystemUsage
+	} else if hasPrev {
+		preTotal = prev.totalUsage
+		preSystem = prev.systemUsage
+	}
+	if r.CPUStats.SystemUsage > 0 {
+		c.setPrevCPU(id, cpuSample{
+			totalUsage:  r.CPUStats.CPUUsage.TotalUsage,
+			systemUsage: r.CPUStats.SystemUsage,
+			seenAt:      time.Now(),
+		})
+	}
+	cpuDelta := float64(r.CPUStats.CPUUsage.TotalUsage - preTotal)
+	sysDelta := float64(r.CPUStats.SystemUsage - preSystem)
 	cpus := float64(r.CPUStats.OnlineCPUs)
 	if cpus == 0 {
 		cpus = 1
 	}
-	if sysDelta > 0 && cpuDelta > 0 {
+	if preSystem > 0 && sysDelta > 0 && cpuDelta > 0 {
 		s.CPUPercent = cpuDelta / sysDelta * cpus * 100
 	}
 	for _, n := range r.Networks {
@@ -465,11 +544,24 @@ func (c *Client) ExecTTY(ctx context.Context, id string, cmd []string, user stri
 	if err != nil {
 		return nil, "", err
 	}
+	deadline := time.Now().Add(15 * time.Second)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
+		deadline = dl
+	}
+	_ = conn.SetDeadline(deadline)
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+	})
 	payload := `{"Detach":false,"Tty":true}`
-	fmt.Fprintf(conn, "POST /exec/%s/start HTTP/1.1\r\nHost: docker\r\nContent-Type: application/json\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Length: %d\r\n\r\n%s",
-		created.Id, len(payload), payload)
+	if _, err := fmt.Fprintf(conn, "POST /exec/%s/start HTTP/1.1\r\nHost: docker\r\nContent-Type: application/json\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Length: %d\r\n\r\n%s",
+		url.PathEscape(created.Id), len(payload), payload); err != nil {
+		stop()
+		conn.Close()
+		return nil, "", err
+	}
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, nil)
+	stop()
 	if err != nil {
 		conn.Close()
 		return nil, "", err
@@ -478,12 +570,17 @@ func (c *Client) ExecTTY(ctx context.Context, id string, cmd []string, user stri
 		conn.Close()
 		return nil, "", fmt.Errorf("exec start: %s", resp.Status)
 	}
+	if ctx.Err() != nil {
+		conn.Close()
+		return nil, "", ctx.Err()
+	}
+	_ = conn.SetDeadline(time.Time{})
 	return &HijackedConn{Conn: conn, r: br}, created.Id, nil
 }
 
 func (c *Client) ExecResize(ctx context.Context, execID string, rows, cols int) error {
 	q := url.Values{"h": {fmt.Sprint(rows)}, "w": {fmt.Sprint(cols)}}
-	return c.do(ctx, "POST", "/exec/"+execID+"/resize", q, nil, nil)
+	return c.do(ctx, "POST", "/exec/"+url.PathEscape(execID)+"/resize", q, nil, nil)
 }
 
 // ---------- images / volumes / networks ----------

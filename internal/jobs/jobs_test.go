@@ -2,10 +2,13 @@ package jobs
 
 import (
 	"bufio"
+	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -194,5 +197,123 @@ func TestSubscribeStreamDeliversBacklogAndLiveLinesWithoutGaps(t *testing.T) {
 		if strings.Count(joined, want) != 1 {
 			t.Errorf("expected %q once in streamed lines, got:\n%s", want, joined)
 		}
+	}
+}
+
+func TestManagerCloseCancelsAndWaitsForActiveJobs(t *testing.T) {
+	tmp := t.TempDir()
+	db, err := store.Open(filepath.Join(tmp, "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	jm, err := New(db, filepath.Join(tmp, "jobs"), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	var finished atomic.Bool
+	id := jm.Submit(Spec{Kind: "backup.drill", Title: "long job"}, func(r *Run) error {
+		close(started)
+		<-r.Context().Done()
+		time.Sleep(30 * time.Millisecond)
+		finished.Store(true)
+		return r.Context().Err()
+	})
+	<-started
+
+	if !jm.HasLiveKind("backup.drill") {
+		t.Fatalf("expected HasLiveKind(backup.drill) to be true while running")
+	}
+
+	jm.Close(3 * time.Second)
+	if !finished.Load() {
+		t.Fatalf("Close returned before active job goroutine finished")
+	}
+	if jm.HasLiveKind("backup.drill") {
+		t.Fatalf("expected HasLiveKind(backup.drill) to be false after Close")
+	}
+	if got := jm.Submit(Spec{Kind: "test", Title: "after-close"}, func(r *Run) error { return nil }); got != "" {
+		t.Fatalf("expected Submit after Close to return empty id, got %q", got)
+	}
+	var status string
+	_ = db.QueryRow(`SELECT status FROM jobs WHERE id=?`, id).Scan(&status)
+	if status != "canceled" {
+		t.Fatalf("job status after Close = %q, want canceled", status)
+	}
+}
+
+func TestRunWriteCapsPartialLineBuffer(t *testing.T) {
+	tmp := t.TempDir()
+	db, err := store.Open(filepath.Join(tmp, "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	jm, err := New(db, filepath.Join(tmp, "jobs"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer jm.Close(time.Second)
+
+	id, err := jm.Do(Spec{Kind: "test", Title: "progress"}, func(r *Run) error {
+		// 160 KiB of CR-only progress frames without any newline.
+		chunk := bytes.Repeat([]byte("progress=50%\r"), 13000)
+		if _, err := r.Write(chunk); err != nil {
+			return err
+		}
+		r.mu.Lock()
+		bufLen := len(r.buf)
+		r.mu.Unlock()
+		if bufLen >= maxPartialLine {
+			return fmt.Errorf("partial buffer grew to %d >= %d", bufLen, maxPartialLine)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Do() error: %v", err)
+	}
+	data, err := jm.Log(id)
+	if err != nil || len(data) == 0 {
+		t.Fatalf("expected emitted log chunks, got len=%d err=%v", len(data), err)
+	}
+}
+
+func TestManagerPruneBatchDeletesOver200Rows(t *testing.T) {
+	tmp := t.TempDir()
+	db, err := store.Open(filepath.Join(tmp, "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	logDir := filepath.Join(tmp, "jobs")
+	jm, err := New(db, logDir, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer jm.Close(time.Second)
+
+	oldTS := time.Now().Add(-60 * 24 * time.Hour).Unix()
+	for i := 0; i < 235; i++ {
+		id := fmt.Sprintf("job_old_%03d", i)
+		if _, err := db.Exec(`INSERT INTO jobs(id,kind,title,target,status,actor,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?)`,
+			id, "test", id, "t", "success", "admin", oldTS, oldTS); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.WriteFile(filepath.Join(logDir, id+".log"), []byte("x\n"), 0o640)
+	}
+
+	removed := jm.Prune(30 * 24 * time.Hour)
+	if removed != 235 {
+		t.Fatalf("Prune removed = %d, want 235", removed)
+	}
+	var remaining int
+	_ = db.QueryRow(`SELECT count(*) FROM jobs`).Scan(&remaining)
+	if remaining != 0 {
+		t.Fatalf("remaining = %d, want 0", remaining)
 	}
 }

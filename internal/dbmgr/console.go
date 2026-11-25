@@ -830,7 +830,7 @@ func (c Client) Console(ctx context.Context, database, sql string, readOnly bool
 		} else {
 			input += body + ";\n"
 		}
-		spec = c.exec().Spec(true, c.mysqlBin(), "-uroot", "--batch", "--raw", "-D", database)
+		spec = c.exec().Spec(true, c.mysqlBin(), "-uroot", "--batch", "-D", database)
 	}
 	out := &limitWriter{max: 8 << 20, cancel: cancel}
 	var errb bytes.Buffer
@@ -930,7 +930,7 @@ func (c Client) Columns(ctx context.Context, database, table string) ([]Column, 
 			WHERE a.attrelid = ('public.' || `+sqlString(c.quoteIdent(table))+`)::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum`)
 	case "mysql", "mariadb":
 		rows, err = c.rows(ctx, database, `SELECT column_name, column_type, is_nullable, COALESCE(column_default,''), column_key, extra
-			FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = `+sqlString(table)+` ORDER BY ordinal_position`)
+			FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = `+mysqlString(table)+` ORDER BY ordinal_position`)
 	default:
 		return nil, fmt.Errorf("不支持")
 	}
@@ -957,7 +957,7 @@ func (c Client) Indexes(ctx context.Context, database, table string) ([]Index, e
 			FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid WHERE x.indrelid = ('public.' || `+sqlString(c.quoteIdent(table))+`)::regclass ORDER BY 1`)
 	case "mysql", "mariadb":
 		rows, err = c.rows(ctx, database, `SELECT index_name, GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ', '), IF(MAX(non_unique)=0,'t','f'), MAX(index_type)
-			FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = `+sqlString(table)+` GROUP BY index_name ORDER BY 1`)
+			FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = `+mysqlString(table)+` GROUP BY index_name ORDER BY 1`)
 	default:
 		return nil, fmt.Errorf("不支持")
 	}

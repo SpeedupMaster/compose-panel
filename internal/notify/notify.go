@@ -114,7 +114,6 @@ func (n *Notifier) Emit(ev Event) {
 			n.mu.Unlock()
 			return
 		}
-		n.last[key] = now
 	}
 	n.mu.Unlock()
 
@@ -155,6 +154,12 @@ func (n *Notifier) Emit(ev Event) {
 			if err != nil {
 				status = err.Error()
 				slog.Warn("notify send", "channel", c.id, "err", err)
+			} else if !skipDedup {
+				n.mu.Lock()
+				if !n.closed {
+					n.last[key] = time.Now()
+				}
+				n.mu.Unlock()
 			}
 			_, _ = n.db.ExecContext(n.ctx, `UPDATE notify_channels SET last_sent_at=?, last_status=? WHERE id=?`, time.Now().Unix(), status, c.id)
 		}(c)
@@ -218,7 +223,9 @@ func Send(ctx context.Context, hc *http.Client, kind string, c ChannelConfig, ev
 		req.Header.Set("Content-Type", "application/json")
 		return doHTTP(hc, req)
 	case "email":
-		return sendMail(c, ev)
+		mctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		return sendMail(mctx, c, ev)
 	case "dingtalk", "feishu", "bark":
 		return sendIM(ctx, hc, kind, c, ev)
 	}
@@ -239,25 +246,29 @@ func doHTTP(hc *http.Client, req *http.Request) error {
 	return nil
 }
 
-func sendMail(c ChannelConfig, ev Event) error {
+func stripCRLF(s string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
+}
+
+func sendMail(ctx context.Context, c ChannelConfig, ev Event) error {
 	if c.Port == 0 {
 		c.Port = 465
 	}
 	addr := net.JoinHostPort(c.Host, fmt.Sprint(c.Port))
-	from := c.From
+	from := stripCRLF(strings.TrimSpace(c.From))
 	if from == "" {
-		from = c.Username
+		from = stripCRLF(strings.TrimSpace(c.Username))
 	}
 	to := []string{}
 	for _, t := range strings.Split(c.To, ",") {
-		if t = strings.TrimSpace(t); t != "" {
+		if t = stripCRLF(strings.TrimSpace(t)); t != "" {
 			to = append(to, t)
 		}
 	}
 	if len(to) == 0 {
 		return fmt.Errorf("收件人不能为空")
 	}
-	subject := "=?UTF-8?B?" + b64(ev.Title) + "?="
+	subject := "=?UTF-8?B?" + b64(stripCRLF(ev.Title)) + "?="
 	msg := "From: " + from + "\r\nTo: " + strings.Join(to, ", ") + "\r\nSubject: " + subject +
 		"\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" + b64(text(ev))
 
@@ -265,16 +276,30 @@ func sendMail(c ChannelConfig, ev Event) error {
 	var err error
 	d := &net.Dialer{Timeout: 15 * time.Second}
 	if c.Port == 465 {
-		conn, err = tls.DialWithDialer(d, "tcp", addr, &tls.Config{ServerName: c.Host})
+		td := &tls.Dialer{NetDialer: d, Config: &tls.Config{ServerName: c.Host}}
+		conn, err = td.DialContext(ctx, "tcp", addr)
 	} else {
-		conn, err = d.Dial("tcp", addr)
+		conn, err = d.DialContext(ctx, "tcp", addr)
 	}
 	if err != nil {
 		return err
 	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(20 * time.Second)
+	}
+	_ = conn.SetDeadline(deadline)
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+	})
+	defer stop()
+
 	cl, err := smtp.NewClient(conn, c.Host)
 	if err != nil {
 		conn.Close()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return err
 	}
 	defer cl.Close()

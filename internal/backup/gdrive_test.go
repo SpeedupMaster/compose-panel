@@ -838,3 +838,62 @@ func TestGDriveListNestedAndPaginated(t *testing.T) {
 		t.Fatalf("GDrive.List keys = %v, want %v", keys, want)
 	}
 }
+
+func TestGDriveUploadChunkRetriesOnTransientErrors(t *testing.T) {
+	origBackoffs := gdriveRetryBackoffs
+	gdriveRetryBackoffs = []time.Duration{2 * time.Millisecond, 4 * time.Millisecond, 6 * time.Millisecond}
+	t.Cleanup(func() { gdriveRetryBackoffs = origBackoffs })
+
+	var attempts int
+	var mu sync.Mutex
+	statuses := []int{http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusOK}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "tok-retry", "expires_in": 3600})
+			return
+		}
+		mu.Lock()
+		idx := attempts
+		attempts++
+		mu.Unlock()
+		code := http.StatusOK
+		if idx < len(statuses) {
+			code = statuses[idx]
+		}
+		w.WriteHeader(code)
+		if code >= 400 {
+			_, _ = w.Write([]byte(`{"error":{"message":"transient"}}`))
+		}
+	}))
+	defer ts.Close()
+
+	g := newTestGDrive(t, ts, TargetConfig{})
+	code, err := g.uploadChunk(context.Background(), ts.URL+"/upload", []byte("chunkdata"), "bytes 0-8/9")
+	if err != nil {
+		t.Fatalf("uploadChunk after 3 transient errors failed: %v", err)
+	}
+	if code != http.StatusOK {
+		t.Fatalf("uploadChunk status = %d, want 200", code)
+	}
+	mu.Lock()
+	gotAttempts := attempts
+	mu.Unlock()
+	if gotAttempts != 4 {
+		t.Fatalf("uploadChunk attempts = %d, want 4 (1 initial + 3 retries)", gotAttempts)
+	}
+
+	// Context cancellation aborts retry backoff promptly.
+	gdriveRetryBackoffs = []time.Duration{5 * time.Second}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	mu.Lock()
+	attempts = 0
+	mu.Unlock()
+	start := time.Now()
+	if _, err := g.uploadChunk(ctx, ts.URL+"/upload", []byte("chunkdata"), "bytes 0-8/9"); err == nil {
+		t.Fatalf("expected error on canceled context during backoff")
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("canceled backoff took %v, want prompt return", time.Since(start))
+	}
+}

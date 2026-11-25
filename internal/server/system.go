@@ -250,7 +250,7 @@ func (s *Server) reloadSchedules() {
 	s.cronMu.Lock()
 	defer s.cronMu.Unlock()
 	if s.cron != nil {
-		s.cron.Stop()
+		<-s.cron.Stop().Done()
 	}
 	c := cron.New(cron.WithLocation(s.location()), cron.WithParser(cronParser))
 	s.cronIDs = map[string]cron.EntryID{}

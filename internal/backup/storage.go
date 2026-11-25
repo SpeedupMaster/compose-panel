@@ -38,6 +38,7 @@ func sharedHTTPTransport(insecure bool) *http.Transport {
 		sec.MaxIdleConns = 16
 		sec.MaxIdleConnsPerHost = 4
 		sec.IdleConnTimeout = 30 * time.Second
+		sec.ResponseHeaderTimeout = 30 * time.Second
 		sharedSecureTransport = sec
 
 		ins := sec.Clone()

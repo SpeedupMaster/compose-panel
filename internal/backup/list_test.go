@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLocalListWalkAndFilters(t *testing.T) {
@@ -166,5 +168,51 @@ func TestSFTPRelKeyPreservesRootDotfiles(t *testing.T) {
 		if strings.Contains(tc.want, ".panel-write-test") && !IsIgnoredObjectKey(got) {
 			t.Errorf("dotfile %q was not ignored by IsIgnoredObjectKey", got)
 		}
+	}
+}
+
+func TestSharedHTTPTransportSetsResponseHeaderTimeout(t *testing.T) {
+	if got := sharedHTTPTransport(false).ResponseHeaderTimeout; got != 30*time.Second {
+		t.Fatalf("secure ResponseHeaderTimeout = %v, want 30s", got)
+	}
+	if got := sharedHTTPTransport(true).ResponseHeaderTimeout; got != 30*time.Second {
+		t.Fatalf("insecure ResponseHeaderTimeout = %v, want 30s", got)
+	}
+}
+
+func TestSFTPDialRespectsContextCancellationDuringHandshake(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		time.Sleep(10 * time.Second)
+	}()
+
+	addr := ln.Addr().(*net.TCPAddr)
+	st, err := NewSFTP(TargetConfig{
+		Host:     "127.0.0.1",
+		Port:     addr.Port,
+		Username: "tester",
+		Password: "secret",
+	})
+	if err != nil {
+		t.Fatalf("NewSFTP: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err = st.Test(ctx)
+	if err == nil {
+		t.Fatalf("expected error from stalled SFTP peer")
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("SFTP.Test hung for %v despite canceled ctx", time.Since(start))
 	}
 }

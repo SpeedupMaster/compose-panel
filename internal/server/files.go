@@ -36,17 +36,25 @@ type fsListing struct {
 	Via       string    `json:"via"` // exec | archive | helper
 }
 
-const maxListEntries = 3000
+const (
+	maxListEntries = 3000
+	maxUploadBytes = 2 << 30
+)
 
-// lsScript prints "<link>|<type>|<size>|<mtime>|<mode>|<name>" per entry of $1.
+// lsScript prints NUL-terminated "<link>|<type>|<size>|<mtime>|<mode>|<name>\0" per entry of $1.
+// Using NUL as record delimiter prevents filenames containing newlines or '|' from spoofing entries.
 // Exit 3: no such path, 4: not a directory.
 const lsScript = `cd -- "$1" 2>/dev/null || { [ -e "$1" ] && exit 4; exit 3; }
 n=0
 for f in .[!.]* ..?* *; do
   [ -e "$f" ] || [ -L "$f" ] || continue
-  n=$((n+1)); if [ $n -gt ` + "3000" + ` ]; then echo TRUNCATED; break; fi
+  n=$((n+1)); if [ $n -gt ` + "3000" + ` ]; then printf 'TRUNCATED\0'; break; fi
   if [ -L "$f" ]; then if [ -d "$f" ]; then l=D; else l=L; fi; else l=-; fi
-  printf '%s|' "$l"; stat -c '%F|%s|%Y|%A|%n' -- "$f" 2>/dev/null || echo "other|0|0|?|$f"
+  if s=$(stat -c '%F|%s|%Y|%A' -- "$f" 2>/dev/null); then
+    printf '%s|%s|%s\0' "$l" "$s" "$f"
+  else
+    printf '%s|other|0|0|?|%s\0' "$l" "$f"
+  fi
 done`
 
 var errNoShell = errors.New("no shell")
@@ -54,15 +62,16 @@ var errNoShell = errors.New("no shell")
 func parseLs(out []byte) ([]FSEntry, bool) {
 	entries := []FSEntry{}
 	trunc := false
-	sc := bufio.NewScanner(bytes.NewReader(out))
-	sc.Buffer(make([]byte, 64<<10), 1<<20)
-	for sc.Scan() {
-		line := sc.Text()
-		if line == "TRUNCATED" {
+	for _, raw := range bytes.Split(out, []byte{0}) {
+		if len(raw) == 0 {
+			continue
+		}
+		rec := string(raw)
+		if rec == "TRUNCATED" {
 			trunc = true
 			continue
 		}
-		f := strings.SplitN(line, "|", 6)
+		f := strings.SplitN(rec, "|", 6)
 		if len(f) != 6 {
 			continue
 		}
@@ -284,6 +293,10 @@ func (s *Server) handleContainerUpload(w http.ResponseWriter, r *http.Request, u
 	if r.ContentLength < 0 {
 		return bad("缺少 Content-Length")
 	}
+	if r.ContentLength > maxUploadBytes {
+		return errStatus(http.StatusRequestEntityTooLarge, "上传文件超过大小限制（最大 2 GiB）")
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	if st, err := s.dk.StatPath(r.Context(), c.Id, dir); err != nil || !st.IsDir() {
 		return bad("目标目录不存在：%s", dir)
 	}
@@ -423,9 +436,14 @@ func (s *Server) handleVolumeUpload(w http.ResponseWriter, r *http.Request, u *U
 	if !validFileName(name) {
 		return bad("文件名无效")
 	}
-	// Keep the owner of the target directory so the app can still read/write the file.
+	if r.ContentLength > maxUploadBytes {
+		return errStatus(http.StatusRequestEntityTooLarge, "上传文件超过大小限制（最大 2 GiB）")
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
+	// Refuse overwriting a symlink and keep the owner of the target directory without dereferencing symlinks.
 	script := `[ -d "$1" ] || { echo "目录不存在" >&2; exit 3; }
-cat > "$1/$2" && chown "$(stat -c %u:%g "$1")" "$1/$2"`
+[ ! -L "$1/$2" ] || { echo "目标路径是符号链接，拒绝覆盖" >&2; exit 4; }
+cat > "$1/$2" && { uidgid="$(stat -c %u:%g "$1")" && (chown -h "$uidgid" "$1/$2" 2>/dev/null || chown "$uidgid" "$1/$2"); }`
 	var out bytes.Buffer
 	opts := s.helperRunOpts(vol, false, script, full, name)
 	opts.Stdin = r.Body
@@ -433,11 +451,16 @@ cat > "$1/$2" && chown "$(stat -c %u:%g "$1")" "$1/$2"`
 	opts.Stderr = &out
 	err = s.dk.RunContainer(r.Context(), opts)
 	if err != nil {
-		msg := strings.TrimSpace(out.String())
-		if msg == "" {
-			msg = err.Error()
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			err = errStatus(http.StatusRequestEntityTooLarge, "上传文件超过大小限制（最大 2 GiB）")
+		} else {
+			msg := strings.TrimSpace(out.String())
+			if msg == "" {
+				msg = err.Error()
+			}
+			err = fmt.Errorf("上传失败：%s", msg)
 		}
-		err = fmt.Errorf("上传失败：%s", msg)
 	}
 	s.audit(r, u, "volume.upload", vol, path.Join(rel, name), err)
 	return done(w, err)

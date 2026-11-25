@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +17,13 @@ import (
 	"compose-panel/internal/dbmgr"
 	"compose-panel/internal/docker"
 )
+
+const (
+	maxDBImportBytes          = 10 << 30
+	minImportFreeBytes uint64 = 512 << 20
+)
+
+var getHostStats = hostStats
 
 func (s *Server) dbAndName(r *http.Request, u *User) (*dbInstance, string, error) {
 	d, err := s.dbForUser(r, u)
@@ -133,9 +142,17 @@ func (s *Server) handleDBExport(w http.ResponseWriter, r *http.Request, u *User)
 		zw = gzip.NewWriter(w)
 		dst = zw
 	}
-	_, _ = io.Copy(dst, br)
+	_, copyErr := io.Copy(dst, br)
+	closeErr := stdout.Close()
+	if copyErr != nil || closeErr != nil {
+		slog.Error("database export truncated", "instance", d.Name, "db", db, "copyErr", copyErr, "closeErr", closeErr, "stderr", strings.TrimSpace(stderr.String()))
+		panic(http.ErrAbortHandler)
+	}
 	if zw != nil {
-		_ = zw.Close()
+		if err := zw.Close(); err != nil {
+			slog.Error("database export gzip close failed", "instance", d.Name, "db", db, "err", err)
+			panic(http.ErrAbortHandler)
+		}
 	}
 	return nil
 }
@@ -152,6 +169,19 @@ func (s *Server) handleDBImport(w http.ResponseWriter, r *http.Request, u *User)
 	if !(strings.HasSuffix(lower, ".sql") || strings.HasSuffix(lower, ".dump") || strings.HasSuffix(lower, ".pgdump") || strings.HasSuffix(lower, ".backup")) {
 		return bad("只支持 .sql / .dump（可再加 .gz 压缩）")
 	}
+	if r.ContentLength > maxDBImportBytes {
+		return errStatus(http.StatusRequestEntityTooLarge, "上传文件超过大小限制（最大 10 GiB）")
+	}
+	if hs := getHostStats(s.cfg.DataDir); hs.DiskTotal > 0 {
+		var free uint64
+		if hs.DiskTotal > hs.DiskUsed {
+			free = hs.DiskTotal - hs.DiskUsed
+		}
+		if free < minImportFreeBytes {
+			return errStatus(http.StatusInsufficientStorage, "磁盘可用空间不足 512 MiB，无法上传导入文件")
+		}
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxDBImportBytes)
 	dir := filepath.Join(s.cfg.DataDir, "tmp")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -164,6 +194,10 @@ func (s *Server) handleDBImport(w http.ResponseWriter, r *http.Request, u *User)
 	f.Close()
 	if err != nil {
 		os.Remove(f.Name())
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return errStatus(http.StatusRequestEntityTooLarge, "上传文件超过大小限制（最大 10 GiB）")
+		}
 		return fmt.Errorf("上传中断：%w", err)
 	}
 	tmp := f.Name()
@@ -173,11 +207,17 @@ func (s *Server) handleDBImport(w http.ResponseWriter, r *http.Request, u *User)
 		defer os.Remove(tmp)
 		return s.runDBImport(run, d, db, tmp, gz, n)
 	})
+	if jobID == "" {
+		os.Remove(tmp)
+		return bad("面板正在恢复，暂不接受新任务")
+	}
 	s.audit(r, u, "database.import", d.Name+"/"+db, name+" ("+humanBytes(n)+")", nil)
 	return ok(w, map[string]any{"jobId": jobID})
 }
 
 func (s *Server) runDBImport(run *jobRun, d *dbInstance, db, file string, gz bool, size int64) error {
+	ctx, cancel := context.WithTimeout(run.Context(), 2*time.Hour)
+	defer cancel()
 	f, err := os.Open(file)
 	if err != nil {
 		return err
@@ -204,7 +244,7 @@ func (s *Server) runDBImport(run *jobRun, d *dbInstance, db, file string, gz boo
 	}
 	run.Logf("$ docker exec -i %s %s", d.Container, strings.Join(spec.Args, " "))
 	start := time.Now()
-	if err := dbmgr.RunWithInput(run.Context(), s.dk, spec, &progressReader{r: br, total: size, run: run, f: f}, run); err != nil {
+	if err := dbmgr.RunWithInput(ctx, s.dk, spec, &progressReader{r: br, total: size, run: run, f: f}, run); err != nil {
 		return fmt.Errorf("导入失败：%w", err)
 	}
 	run.Logf("==> 导入完成，用时 %s", time.Since(start).Round(time.Second))
