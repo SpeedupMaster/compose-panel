@@ -262,6 +262,16 @@ func TestDangerGuardrail(t *testing.T) {
 			sql:  "EXPLAIN ANALYZE DELETE FROM t",
 			want: []string{"DELETE 没有 WHERE 条件，将删除整表数据"},
 		},
+		{
+			name: "bare CR terminates dash line comment before drop",
+			sql:  "-- x\rDROP TABLE users\nSELECT 1",
+			want: []string{"包含 DROP 语句"},
+		},
+		{
+			name: "bare CR terminates hash line comment before delete",
+			sql:  "# x\rDELETE FROM users\nSELECT 1",
+			want: []string{"DELETE 没有 WHERE 条件，将删除整表数据"},
+		},
 	}
 
 	for _, tc := range cases {
@@ -303,6 +313,8 @@ func TestConsoleBlocksRCEAndReadOnlyBypass(t *testing.T) {
 		{"pg hash is not comment before bang", "postgres", true, "# \\! id\nSELECT 1"},
 		{"pg plain string backslash does not escape quote", "postgres", true, `SELECT 'foo\' \! id`},
 		{"pg backtick is not quote", "postgres", true, "SELECT `\\! id`"},
+		{"pg bare CR escapes dash comment to bang", "postgres", true, "-- x\r\\! id\nSELECT 1"},
+		{"pg bare CR escapes dash comment to drop", "postgres", true, "-- x\rDROP TABLE users;\nSELECT 1"},
 		{"pg copy to program rw", "postgres", false, `COPY (SELECT 1) TO PROGRAM 'id'`},
 		{"pg copy from program rw", "postgres", false, `COPY t FROM PROGRAM 'id'`},
 
@@ -312,6 +324,20 @@ func TestConsoleBlocksRCEAndReadOnlyBypass(t *testing.T) {
 		{"mysql use cmd", "mysql", true, `\u mysql`},
 		{"mysql reconnect cmd", "mysql", true, `\r`},
 		{"mysql dash without space is not comment", "mysql", true, "--\\! id\nSELECT 1"},
+		{"mysql bare CR escapes dash comment to bang", "mysql", true, "-- x\r\\! id\nSELECT 1"},
+		{"mysql bare CR escapes hash comment to drop", "mysql", true, "# x\rDROP TABLE users;\nSELECT 1"},
+		{"mysql long-form source rw", "mysql", false, `source /etc/passwd`},
+		{"mysql long-form source after stmt rw", "mysql", false, `SELECT 1; source /etc/passwd`},
+		{"mysql long-form source at line start rw", "mysql", false, "SELECT 1\nsource /etc/passwd"},
+		{"mysql long-form delimiter at line start rw", "mysql", false, "SELECT 1\n  delimiter //"},
+		{"mysql long-form system rw", "mysql", false, `system id`},
+		{"mysql long-form tee rw", "mysql", false, `tee /tmp/pwn`},
+		{"mysql long-form notee rw", "mysql", false, `notee`},
+		{"mysql long-form pager rw", "mysql", false, `pager sh -c id`},
+		{"mysql long-form nopager rw", "mysql", false, `nopager`},
+		{"mysql long-form edit rw", "mysql", false, `edit`},
+		{"mysql long-form connect rw", "mysql", false, `connect mysql`},
+		{"mariadb long-form rehash rw", "mariadb", false, `rehash`},
 		{"mysql dollar is not quote", "mysql", true, `SELECT $a$ \! id $a$`},
 		{"mysql exec comment bang", "mysql", true, `/*!50000 \! id */`},
 		{"mysql load data rw", "mysql", false, `LOAD DATA INFILE '/etc/passwd' INTO TABLE t`},
@@ -387,6 +413,7 @@ func TestConsoleBlocksRCEAndReadOnlyBypass(t *testing.T) {
 		{"mysql hash comment with bang", "mysql", true, "# \\! comment\nSELECT 1"},
 		{"mysql dash space comment with bang", "mysql", true, "-- \\! comment\nSELECT 1"},
 		{"mysql backslash in quoted string", "mysql", true, `SELECT 'it\'s \\! ok'`},
+		{"mysql column named source allowed", "mysql", true, `SELECT source, system FROM logs WHERE source = 'web'`},
 		{"mysql rw update", "mysql", false, `UPDATE t SET a = 1 WHERE id = 1`},
 	}
 

@@ -28,9 +28,10 @@ const (
 )
 
 type sqlToken struct {
-	kind  sqlTokKind
-	raw   string
-	upper string
+	kind      sqlTokKind
+	raw       string
+	upper     string
+	lineStart bool
 }
 
 func (t sqlToken) isWord(w string) bool { return t.kind == tokWord && t.upper == w }
@@ -160,9 +161,17 @@ func tokenizeSQL(sql string, d sqlDialect) ([]sqlToken, error) {
 	var toks []sqlToken
 	n := len(sql)
 	execCommentDepth := 0
+	atLineStart := true
+	emit := func(kind sqlTokKind, raw, upper string) {
+		toks = append(toks, sqlToken{kind: kind, raw: raw, upper: upper, lineStart: atLineStart})
+		atLineStart = false
+	}
 	for i := 0; i < n; {
 		ch := sql[i]
 		if isASCIISpace(ch) {
+			if ch == '\n' || ch == '\r' {
+				atLineStart = true
+			}
 			i++
 			continue
 		}
@@ -172,20 +181,20 @@ func tokenizeSQL(sql string, d sqlDialect) ([]sqlToken, error) {
 			i += 2
 			continue
 		}
-		// Line comment: --
+		// Line comment: -- (terminated by \n or bare \r as in PostgreSQL scan.l)
 		if ch == '-' && i+1 < n && sql[i+1] == '-' {
 			if !d.dashNeedsSpace || i+2 == n || isASCIISpace(sql[i+2]) {
 				i += 2
-				for i < n && sql[i] != '\n' {
+				for i < n && sql[i] != '\n' && sql[i] != '\r' {
 					i++
 				}
 				continue
 			}
 		}
-		// Line comment: # (MySQL/MariaDB)
+		// Line comment: # (MySQL/MariaDB, terminated by \n or bare \r)
 		if d.hashComment && ch == '#' {
 			i++
-			for i < n && sql[i] != '\n' {
+			for i < n && sql[i] != '\n' && sql[i] != '\r' {
 				i++
 			}
 			continue
@@ -236,7 +245,7 @@ func tokenizeSQL(sql string, d sqlDialect) ([]sqlToken, error) {
 			if err != nil {
 				return nil, err
 			}
-			toks = append(toks, sqlToken{kind: tokString, raw: sql[i:end]})
+			emit(tokString, sql[i:end], "")
 			i = end
 			continue
 		}
@@ -246,7 +255,7 @@ func tokenizeSQL(sql string, d sqlDialect) ([]sqlToken, error) {
 			if err != nil {
 				return nil, err
 			}
-			toks = append(toks, sqlToken{kind: tokString, raw: sql[i:end]})
+			emit(tokString, sql[i:end], "")
 			i = end
 			continue
 		}
@@ -256,7 +265,7 @@ func tokenizeSQL(sql string, d sqlDialect) ([]sqlToken, error) {
 			if err != nil {
 				return nil, err
 			}
-			toks = append(toks, sqlToken{kind: tokIdent, raw: sql[i:end]})
+			emit(tokIdent, sql[i:end], "")
 			i = end
 			continue
 		}
@@ -266,7 +275,7 @@ func tokenizeSQL(sql string, d sqlDialect) ([]sqlToken, error) {
 			if err != nil {
 				return nil, err
 			}
-			toks = append(toks, sqlToken{kind: tokIdent, raw: sql[i:end]})
+			emit(tokIdent, sql[i:end], "")
 			i = end
 			continue
 		}
@@ -279,28 +288,28 @@ func tokenizeSQL(sql string, d sqlDialect) ([]sqlToken, error) {
 					if d.strictUnclosed {
 						return nil, errors.New("SQL 语法错误：美元符字符串未闭合")
 					}
-					toks = append(toks, sqlToken{kind: tokString, raw: sql[i:]})
+					emit(tokString, sql[i:], "")
 					i = n
 					continue
 				}
 				end := i + len(delim) + idx + len(delim)
-				toks = append(toks, sqlToken{kind: tokString, raw: sql[i:end]})
+				emit(tokString, sql[i:end], "")
 				i = end
 				continue
 			}
 		}
 		switch ch {
 		case ';':
-			toks = append(toks, sqlToken{kind: tokSemi, raw: ";"})
+			emit(tokSemi, ";", "")
 			i++
 		case '(':
-			toks = append(toks, sqlToken{kind: tokLParen, raw: "("})
+			emit(tokLParen, "(", "")
 			i++
 		case ')':
-			toks = append(toks, sqlToken{kind: tokRParen, raw: ")"})
+			emit(tokRParen, ")", "")
 			i++
 		case '\\':
-			toks = append(toks, sqlToken{kind: tokBackslash, raw: `\`})
+			emit(tokBackslash, `\`, "")
 			i++
 		default:
 			if isWordStart(ch) {
@@ -310,10 +319,10 @@ func tokenizeSQL(sql string, d sqlDialect) ([]sqlToken, error) {
 					i++
 				}
 				raw := sql[start:i]
-				toks = append(toks, sqlToken{kind: tokWord, raw: raw, upper: strings.ToUpper(raw)})
+				emit(tokWord, raw, strings.ToUpper(raw))
 				continue
 			}
-			toks = append(toks, sqlToken{kind: tokOther, raw: sql[i : i+1]})
+			emit(tokOther, sql[i:i+1], "")
 			i++
 		}
 	}
@@ -697,6 +706,21 @@ func validateReadOnlyStmt(toks []sqlToken) error {
 	return nil
 }
 
+var mysqlCLICommands = map[string]bool{
+	"SOURCE":    true,
+	"SYSTEM":    true,
+	"TEE":       true,
+	"NOTEE":     true,
+	"DELIMITER": true,
+	"PAGER":     true,
+	"NOPAGER":   true,
+	"EDIT":      true,
+	"CONNECT":   true,
+	"REHASH":    true,
+	"CHARSET":   true,
+	"PROMPT":    true,
+}
+
 func validateConsoleSQL(engine, sql string, readOnly bool) error {
 	if strings.TrimSpace(sql) == "" {
 		return errors.New("SQL 不能为空")
@@ -718,6 +742,11 @@ func validateConsoleSQL(engine, sql string, readOnly bool) error {
 	for _, st := range stmts {
 		switch engine {
 		case "mysql", "mariadb":
+			for i, t := range st {
+				if t.kind == tokWord && (i == 0 || t.lineStart) && mysqlCLICommands[t.upper] {
+					return fmt.Errorf("SQL 控制台禁止执行 MySQL 客户端命令 %s", t.upper)
+				}
+			}
 			if len(st) > 0 && st[0].isWord("LOAD") {
 				return errors.New("SQL 控制台禁止执行 LOAD DATA / LOAD XML 语句")
 			}
