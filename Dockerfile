@@ -3,7 +3,7 @@
 #   docker build --build-arg GOPROXY=https://goproxy.cn,direct --build-arg NPM_REGISTRY=https://registry.npmmirror.com -t compose-panel .
 
 # ---- web ----
-FROM node:20-alpine AS web
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 ARG NPM_REGISTRY=https://registry.npmjs.org
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
@@ -12,8 +12,11 @@ COPY web/ ./
 RUN npm run build
 
 # ---- go ----
-FROM golang:1-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 ARG GOPROXY=https://proxy.golang.org,direct
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+ARG VERSION=0.1.0
 ENV GOPROXY=$GOPROXY CGO_ENABLED=0
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -22,7 +25,7 @@ COPY cmd ./cmd
 COPY internal ./internal
 COPY web/embed.go ./web/embed.go
 COPY --from=web /src/web/dist ./web/dist
-RUN go vet ./... && go build -trimpath -ldflags="-s -w" -o /out/panel ./cmd/panel
+RUN go vet ./... && GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X compose-panel/internal/server.Version=${VERSION}" -o /out/panel ./cmd/panel
 
 # ---- compose ----
 FROM alpine:3.20 AS compose-bin
