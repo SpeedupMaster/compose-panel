@@ -32,6 +32,57 @@ func TestOpenConfiguresLowMemoryPragmasAndPool(t *testing.T) {
 	if got := db.Stats().MaxOpenConnections; got != 4 {
 		t.Errorf("MaxOpenConnections = %d, want 4", got)
 	}
+
+	// Hold 4 concurrent read cursors to open 4 connections, then close them;
+	// with SetMaxIdleConns(4), all 4 should remain idle with zero MaxIdleClosed churn.
+	var rowsList []*sql.Rows
+	for i := 0; i < 4; i++ {
+		r, err := db.Query(`SELECT 1 UNION ALL SELECT 2`)
+		if err != nil {
+			t.Fatalf("concurrent query %d: %v", i, err)
+		}
+		if !r.Next() {
+			t.Fatalf("concurrent query %d returned no row", i)
+		}
+		rowsList = append(rowsList, r)
+	}
+	for _, r := range rowsList {
+		_ = r.Close()
+	}
+	stats := db.Stats()
+	if stats.Idle < 2 {
+		t.Errorf("Idle connections = %d, want >= 2 (SetMaxIdleConns(4))", stats.Idle)
+	}
+	if stats.MaxIdleClosed != 0 {
+		t.Errorf("MaxIdleClosed = %d, want 0", stats.MaxIdleClosed)
+	}
+
+	wantIndexes := []string{
+		"idx_projects_webhook",
+		"idx_sessions_user",
+		"idx_sessions_expires",
+		"idx_metrics_project_ts",
+		"idx_backups_storage",
+		"idx_backups_started",
+	}
+	for _, idx := range wantIndexes {
+		var name string
+		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='index' AND name=?`, idx).Scan(&name); err != nil {
+			t.Errorf("missing expected index %s: %v", idx, err)
+		}
+	}
+
+	// Verify new schema columns exist on fresh database.
+	for _, tc := range []struct{ table, col string }{
+		{"users", "last_totp_step"},
+		{"deployments", "files_json"},
+		{"image_checks", "last_auto_digest"},
+	} {
+		var dummy any
+		if err := db.QueryRow(`SELECT `+tc.col+` FROM `+tc.table+` LIMIT 0`).Scan(&dummy); err != nil && err != sql.ErrNoRows {
+			t.Errorf("column %s.%s check failed: %v", tc.table, tc.col, err)
+		}
+	}
 }
 
 func TestOpenMigratesAndBackfillsUserAllProjects(t *testing.T) {

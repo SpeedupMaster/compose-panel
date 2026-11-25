@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,8 +53,43 @@ func (s *Server) startDeploy(p *Project, trigger, actor string, fromDeployment i
 type deployState struct {
 	compose   string
 	env       []EnvVar
+	files     []projectFile
+	hasFiles  bool
 	commitSHA string
 	commitMsg string
+}
+
+func (s *Server) replaceProjectFiles(projectID int64, files []projectFile) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM project_files WHERE project_id=?`, projectID); err != nil {
+		return err
+	}
+	for _, f := range files {
+		if _, err := tx.Exec(`INSERT INTO project_files(project_id,path,content) VALUES(?,?,?)`, projectID, f.Path, f.Content); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func removeStaleInlineFiles(dir string, oldFiles, newFiles []projectFile) {
+	keep := make(map[string]bool, len(newFiles))
+	for _, f := range newFiles {
+		keep[f.Path] = true
+	}
+	for _, f := range oldFiles {
+		if keep[f.Path] {
+			continue
+		}
+		target := filepath.Join(dir, filepath.FromSlash(f.Path))
+		if strings.HasPrefix(target, dir+string(os.PathSeparator)) {
+			_ = os.Remove(target)
+		}
+	}
 }
 
 func (s *Server) runDeploy(run *jobRun, projectID, depID, fromDeployment int64) (err error) {
@@ -89,10 +125,21 @@ func (s *Server) runDeploy(run *jobRun, projectID, depID, fromDeployment int64) 
 		}
 		pin = st
 		run.Logf("回滚到部署快照 #%d", fromDeployment)
+		envJSON, _ := json.Marshal(st.env)
+		now := time.Now().Unix()
 		if p.Source == "inline" {
-			envJSON, _ := json.Marshal(st.env)
-			_, _ = s.db.Exec(`UPDATE projects SET compose=?, env=?, updated_at=? WHERE id=?`, st.compose, s.box.Seal(string(envJSON)), time.Now().Unix(), p.ID)
+			oldFiles := s.projectFiles(p.ID)
+			_, _ = s.db.Exec(`UPDATE projects SET compose=?, env=?, updated_at=? WHERE id=?`, st.compose, s.box.Seal(string(envJSON)), now, p.ID)
 			p.Compose, p.Env = st.compose, st.env
+			if st.hasFiles {
+				if err := s.replaceProjectFiles(p.ID, st.files); err != nil {
+					return fmt.Errorf("恢复项目文件失败：%w", err)
+				}
+				removeStaleInlineFiles(s.projectDir(p), oldFiles, st.files)
+			}
+		} else {
+			_, _ = s.db.Exec(`UPDATE projects SET env=?, updated_at=? WHERE id=?`, s.box.Seal(string(envJSON)), now, p.ID)
+			p.Env = st.env
 		}
 	}
 
@@ -103,8 +150,13 @@ func (s *Server) runDeploy(run *jobRun, projectID, depID, fromDeployment int64) 
 		return err
 	}
 	envJSON, _ := json.Marshal(state.env)
-	_, _ = s.db.Exec(`UPDATE deployments SET compose=?, env=?, commit_sha=?, commit_msg=? WHERE id=?`,
-		state.compose, s.box.Seal(string(envJSON)), state.commitSHA, state.commitMsg, depID)
+	filesJSON := ""
+	if p.Source == "inline" {
+		b, _ := json.Marshal(nonNil(state.files))
+		filesJSON = string(b)
+	}
+	_, _ = s.db.Exec(`UPDATE deployments SET compose=?, env=?, files_json=?, commit_sha=?, commit_msg=? WHERE id=?`,
+		state.compose, s.box.Seal(string(envJSON)), filesJSON, state.commitSHA, state.commitMsg, depID)
 
 	run.SetProgress(25)
 	if s.enterDeployMaintenance(ctx, p.ID) {
@@ -159,8 +211,8 @@ func (s *Server) previousSuccess(projectID, before int64) int64 {
 
 func (s *Server) deploymentState(id int64) (*deployState, error) {
 	st := &deployState{}
-	var envEnc string
-	if err := s.db.QueryRow(`SELECT compose, env, commit_sha, commit_msg FROM deployments WHERE id=?`, id).Scan(&st.compose, &envEnc, &st.commitSHA, &st.commitMsg); err != nil {
+	var envEnc, filesJSON string
+	if err := s.db.QueryRow(`SELECT compose, env, files_json, commit_sha, commit_msg FROM deployments WHERE id=?`, id).Scan(&st.compose, &envEnc, &filesJSON, &st.commitSHA, &st.commitMsg); err != nil {
 		return nil, err
 	}
 	if envEnc != "" {
@@ -169,6 +221,11 @@ func (s *Server) deploymentState(id int64) (*deployState, error) {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(raw), &st.env)
+	}
+	if filesJSON != "" {
+		if err := json.Unmarshal([]byte(filesJSON), &st.files); err == nil {
+			st.hasFiles = true
+		}
 	}
 	return st, nil
 }
@@ -181,10 +238,18 @@ func (s *Server) prepareDeploy(run *jobRun, p *Project, pin *deployState) (*depl
 			p.Compose = pin.compose
 		}
 	}
-	if err := s.prepareWorkdir(run, p, pin); err != nil {
+	if err := s.prepareWorkdir(run, p, pin, true); err != nil {
 		return nil, err
 	}
 	st := &deployState{env: p.Env, compose: p.Compose}
+	if p.Source == "inline" {
+		if pin != nil && pin.hasFiles {
+			st.files = pin.files
+		} else {
+			st.files = s.projectFiles(p.ID)
+		}
+		st.hasFiles = true
+	}
 	cp := s.composeProject(p, false)
 	if p.Source != "inline" && len(cp.Files) > 0 {
 		if b, err := os.ReadFile(cp.Files[0]); err == nil {
@@ -205,8 +270,9 @@ func short(sha string) string {
 	return sha
 }
 
-// prepareWorkdir writes compose, env and override files. For git projects it clones or updates the repo.
-func (s *Server) prepareWorkdir(run *jobRun, p *Project, pin *deployState) error {
+// prepareWorkdir writes compose, env and override files. For git projects it syncs the repo when syncGit is true,
+// or only clones if the checkout is missing when syncGit is false (lifecycle actions).
+func (s *Server) prepareWorkdir(run *jobRun, p *Project, pin *deployState, syncGit bool) error {
 	ctx := run.Context()
 	dir := s.projectDir(p)
 	if err := os.MkdirAll(filepath.Join(dir, ".panel"), 0o750); err != nil {
@@ -217,7 +283,13 @@ func (s *Server) prepareWorkdir(run *jobRun, p *Project, pin *deployState) error
 		if err := os.WriteFile(filepath.Join(dir, "compose.yml"), []byte(p.Compose), 0o640); err != nil {
 			return err
 		}
-		for _, f := range s.projectFiles(p.ID) {
+		dbFiles := s.projectFiles(p.ID)
+		files := dbFiles
+		if pin != nil && pin.hasFiles {
+			removeStaleInlineFiles(dir, dbFiles, pin.files)
+			files = pin.files
+		}
+		for _, f := range files {
 			target := filepath.Join(dir, filepath.FromSlash(f.Path))
 			if !strings.HasPrefix(target, dir+string(os.PathSeparator)) {
 				continue
@@ -228,12 +300,19 @@ func (s *Server) prepareWorkdir(run *jobRun, p *Project, pin *deployState) error
 			}
 		}
 	case "git":
-		ref := ""
-		if pin != nil {
-			ref = pin.commitSHA
-		}
-		if err := s.gitSync(run, p, ref); err != nil {
-			return err
+		srcGit := filepath.Join(dir, "src", ".git")
+		if syncGit {
+			ref := ""
+			if pin != nil {
+				ref = pin.commitSHA
+			}
+			if err := s.gitSync(run, p, ref); err != nil {
+				return err
+			}
+		} else if _, err := os.Stat(srcGit); err != nil {
+			if err := s.gitSync(run, p, ""); err != nil {
+				return err
+			}
 		}
 	}
 	if p.Source != "imported" || len(p.Env) > 0 {
@@ -367,7 +446,12 @@ func (s *Server) registryConfig(cp *compose.Project) func() {
 	for rows.Next() {
 		var host, user, enc string
 		if rows.Scan(&host, &user, &enc) == nil {
-			auths[host] = map[string]string{"auth": base64.StdEncoding.EncodeToString([]byte(user + ":" + s.box.MustOpen(enc)))}
+			entry := map[string]string{"auth": base64.StdEncoding.EncodeToString([]byte(user + ":" + s.box.MustOpen(enc)))}
+			auths[host] = entry
+			if normRegistryHost(host) == "docker.io" {
+				auths["https://index.docker.io/v1/"] = entry
+				auths["docker.io"] = entry
+			}
 		}
 	}
 	rows.Close()
@@ -386,8 +470,41 @@ func (s *Server) registryConfig(cp *compose.Project) func() {
 
 // ---------- git ----------
 
-func (s *Server) gitEnv(p *Project) ([]string, func(), error) {
-	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+// sanitizeGitURL strips embedded user:pass credentials from HTTP(S) git URLs
+// and returns the sanitized URL plus an HTTP Basic Authorization extraHeader.
+func sanitizeGitURL(raw string) (cleanURL, extraHeader string) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User == nil {
+		return raw, ""
+	}
+	user := u.User.Username()
+	pass, hasPass := u.User.Password()
+	if user == "" && !hasPass {
+		return raw, ""
+	}
+	uCopy := *u
+	uCopy.User = nil
+	cred := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+	return uCopy.String(), "Authorization: Basic " + cred
+}
+
+func (s *Server) gitEnv(p *Project, extraHeader string) ([]string, func(), error) {
+	base := os.Environ()
+	env := make([]string, 0, len(base)+6)
+	for _, kv := range base {
+		if strings.HasPrefix(kv, "GIT_CONFIG_COUNT=") || strings.HasPrefix(kv, "GIT_CONFIG_KEY_") || strings.HasPrefix(kv, "GIT_CONFIG_VALUE_") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	env = append(env, "GIT_TERMINAL_PROMPT=0")
+	if extraHeader != "" {
+		env = append(env,
+			"GIT_CONFIG_COUNT=1",
+			"GIT_CONFIG_KEY_0=http.extraHeader",
+			"GIT_CONFIG_VALUE_0="+extraHeader,
+		)
+	}
 	cleanup := func() {}
 	if p.gitKeyEnc != "" {
 		key, err := s.box.Open(p.gitKeyEnc)
@@ -403,14 +520,21 @@ func (s *Server) gitEnv(p *Project) ([]string, func(), error) {
 		_ = os.Chmod(f.Name(), 0o600)
 		cleanup = func() { os.Remove(f.Name()) }
 		known := filepath.Join(s.cfg.DataDir, "known_hosts")
-		env = append(env, fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=%s", f.Name(), known))
+		env = append(env, fmt.Sprintf(`GIT_SSH_COMMAND=ssh -i "%s" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="%s"`, f.Name(), known))
 	}
 	return env, cleanup, nil
 }
 
 func (s *Server) gitSync(run *jobRun, p *Project, ref string) error {
 	ctx := run.Context()
-	env, cleanup, err := s.gitEnv(p)
+	if strings.HasPrefix(p.GitBranch, "-") || strings.HasPrefix(ref, "-") {
+		return fmt.Errorf("无效的 Git 分支或提交标识")
+	}
+	cleanURL, extraHeader := sanitizeGitURL(p.GitURL)
+	if strings.HasPrefix(cleanURL, "-") {
+		return fmt.Errorf("无效的 Git 仓库地址")
+	}
+	env, cleanup, err := s.gitEnv(p, extraHeader)
 	if err != nil {
 		return err
 	}
@@ -423,25 +547,33 @@ func (s *Server) gitSync(run *jobRun, p *Project, ref string) error {
 		fmt.Fprintf(run, "$ git %s\n", strings.Join(args, " "))
 		return c.Run()
 	}
+	refspec := "+refs/heads/" + p.GitBranch + ":refs/remotes/origin/" + p.GitBranch
 	if _, err := os.Stat(filepath.Join(src, ".git")); err != nil {
 		_ = os.RemoveAll(src)
-		if err := git("clone", "--branch", p.GitBranch, "--single-branch", p.GitURL, src); err != nil {
+		if err := git("clone", "--depth", "50", "--branch", p.GitBranch, "--single-branch", cleanURL, src); err != nil {
 			return fmt.Errorf("克隆仓库失败：%w", err)
 		}
 	} else {
-		if err := git("-C", src, "remote", "set-url", "origin", p.GitURL); err != nil {
+		if err := git("-C", src, "remote", "set-url", "origin", cleanURL); err != nil {
 			return err
 		}
-		if err := git("-C", src, "fetch", "--prune", "origin", p.GitBranch); err != nil {
+		if err := git("-C", src, "fetch", "--depth", "50", "--prune", "origin", refspec); err != nil {
 			return fmt.Errorf("拉取仓库失败：%w", err)
 		}
 	}
-	target := "origin/" + p.GitBranch
 	if ref != "" {
-		target = ref
+		if err := git("-C", src, "checkout", "--force", ref); err != nil {
+			if ferr := git("-C", src, "fetch", "origin", ref); ferr != nil {
+				_ = git("-C", src, "fetch", "--unshallow", "origin", refspec)
+			}
+			if err := git("-C", src, "checkout", "--force", ref); err != nil {
+				return fmt.Errorf("检出 %s 失败：%w", ref, err)
+			}
+		}
+		return nil
 	}
-	if err := git("-C", src, "reset", "--hard", target); err != nil {
-		return fmt.Errorf("检出 %s 失败：%w", target, err)
+	if err := git("-C", src, "checkout", "--force", "-B", p.GitBranch, "origin/"+p.GitBranch); err != nil {
+		return fmt.Errorf("检出 origin/%s 失败：%w", p.GitBranch, err)
 	}
 	return nil
 }

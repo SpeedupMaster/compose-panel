@@ -87,20 +87,33 @@ func totpAt(secret string, counter uint64) (string, error) {
 	return fmt.Sprintf("%06d", code), nil
 }
 
-// TOTPValid checks a 6-digit code, allowing one 30s step of clock drift.
-func TOTPValid(secret, code string, now time.Time) bool {
+// TOTPVerifyStep checks a 6-digit code allowing one 30s step of clock drift,
+// returning the matched 30s time-step counter and true on success.
+func TOTPVerifyStep(secret, code string, now time.Time) (int64, bool) {
 	code = strings.ReplaceAll(strings.TrimSpace(code), " ", "")
 	if len(code) != 6 {
-		return false
+		return 0, false
 	}
-	step := uint64(now.Unix() / 30)
-	for _, c := range []uint64{step - 1, step, step + 1} {
-		want, err := totpAt(secret, c)
+	step := now.Unix() / 30
+	if step <= 0 {
+		return 0, false
+	}
+	for _, c := range []int64{step - 1, step, step + 1} {
+		if c < 0 {
+			continue
+		}
+		want, err := totpAt(secret, uint64(c))
 		if err == nil && ConstantEqual(want, code) {
-			return true
+			return c, true
 		}
 	}
-	return false
+	return 0, false
+}
+
+// TOTPValid checks a 6-digit code, allowing one 30s step of clock drift.
+func TOTPValid(secret, code string, now time.Time) bool {
+	_, ok := TOTPVerifyStep(secret, code, now)
+	return ok
 }
 
 func TOTPURI(issuer, account, secret string) string {

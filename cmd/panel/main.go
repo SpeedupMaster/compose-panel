@@ -50,9 +50,10 @@ func main() {
 		if err != nil {
 			fatal(err)
 		}
+		defer srv.DB().Close()
 		pw := auth.RandomPassword(16)
 		hash, _ := auth.HashPassword(pw)
-		res, err := srv.DB().Exec(`UPDATE users SET password_hash=?, totp_enabled=0, totp_secret='', recovery_codes='', disabled=0 WHERE username=?`, hash, os.Args[2])
+		res, err := srv.DB().Exec(`UPDATE users SET password_hash=?, totp_enabled=0, totp_secret='', last_totp_step=0, recovery_codes='', disabled=0 WHERE username=?`, hash, os.Args[2])
 		if err != nil {
 			fatal(err)
 		}
@@ -60,6 +61,7 @@ func main() {
 			fatal(fmt.Errorf("用户 %s 不存在", os.Args[2]))
 		}
 		_, _ = srv.DB().Exec(`DELETE FROM sessions WHERE user_id=(SELECT id FROM users WHERE username=?)`, os.Args[2])
+		srv.AuditCLI("user.reset_password", os.Args[2], "CLI 重置密码并关闭两步验证")
 		fmt.Printf("已重置 %s 的密码并关闭两步验证。新密码：%s\n", os.Args[2], pw)
 	case "restore-panel":
 		fs := flag.NewFlagSet("restore-panel", flag.ExitOnError)

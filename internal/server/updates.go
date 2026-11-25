@@ -48,15 +48,16 @@ func (s *Server) runExtraSchedule(key, actor string) (string, bool) {
 // ---------- image update detection ----------
 
 type ImageCheck struct {
-	ProjectID    int64  `json:"projectId"`
-	Project      string `json:"project,omitempty"`
-	Service      string `json:"service"`
-	Image        string `json:"image"`
-	LocalDigest  string `json:"localDigest"`
-	RemoteDigest string `json:"remoteDigest"`
-	Status       string `json:"status"` // current | update | local | pinned | error
-	Error        string `json:"error"`
-	CheckedAt    int64  `json:"checkedAt"`
+	ProjectID      int64  `json:"projectId"`
+	Project        string `json:"project,omitempty"`
+	Service        string `json:"service"`
+	Image          string `json:"image"`
+	LocalDigest    string `json:"localDigest"`
+	RemoteDigest   string `json:"remoteDigest"`
+	LastAutoDigest string `json:"-"`
+	Status         string `json:"status"` // current | update | local | pinned | error
+	Error          string `json:"error"`
+	CheckedAt      int64  `json:"checkedAt"`
 }
 
 func registryHost(ref string) string {
@@ -120,7 +121,7 @@ func (s *Server) checkProjectImages(ctx context.Context, p *Project, cache diges
 			continue
 		}
 		seen[svc] = true
-		ic := ImageCheck{ProjectID: p.ID, Service: svc, Image: c.Image, CheckedAt: now}
+		ic := ImageCheck{ProjectID: p.ID, Service: svc, Image: c.Image, LastAutoDigest: old[svc].LastAutoDigest, CheckedAt: now}
 		if strings.HasPrefix(ic.Image, "sha256:") {
 			if ci, err := s.dk.InspectContainer(ctx, c.Id); err == nil {
 				ic.Image = ci.Config.Image
@@ -234,7 +235,7 @@ func (s *Server) recheckAfterDeploy(projectID int64) {
 }
 
 func (s *Server) imageChecks(projectID int64) []ImageCheck {
-	q := `SELECT c.project_id, p.name, c.service, c.image, c.local_digest, c.remote_digest, c.status, c.error, c.checked_at
+	q := `SELECT c.project_id, p.name, c.service, c.image, c.local_digest, c.remote_digest, c.last_auto_digest, c.status, c.error, c.checked_at
 		FROM image_checks c JOIN projects p ON p.id=c.project_id`
 	var rows *sql.Rows
 	var err error
@@ -250,7 +251,7 @@ func (s *Server) imageChecks(projectID int64) []ImageCheck {
 	defer rows.Close()
 	for rows.Next() {
 		var c ImageCheck
-		if rows.Scan(&c.ProjectID, &c.Project, &c.Service, &c.Image, &c.LocalDigest, &c.RemoteDigest, &c.Status, &c.Error, &c.CheckedAt) == nil {
+		if rows.Scan(&c.ProjectID, &c.Project, &c.Service, &c.Image, &c.LocalDigest, &c.RemoteDigest, &c.LastAutoDigest, &c.Status, &c.Error, &c.CheckedAt) == nil {
 			out = append(out, c)
 		}
 	}
@@ -287,10 +288,14 @@ func (s *Server) runImageChecks(actor string) string {
 				continue
 			}
 			var pending []string
+			var autoTargets []ImageCheck
 			for _, c := range checks {
 				switch c.Status {
 				case "update":
 					pending = append(pending, c.Service)
+					if c.RemoteDigest != "" && c.RemoteDigest != c.LastAutoDigest {
+						autoTargets = append(autoTargets, c)
+					}
 					run.Logf("%s/%s：%s 有新版本", p.Name, c.Service, c.Image)
 				case "error":
 					run.Logf("%s/%s：%s 检查失败：%s", p.Name, c.Service, c.Image, c.Error)
@@ -299,14 +304,19 @@ func (s *Server) runImageChecks(actor string) string {
 			updates += len(pending)
 			if len(fresh) > 0 {
 				body := "服务 " + strings.Join(fresh, "、") + " 的镜像有新版本。"
-				if p.Options.AutoUpdate {
+				if p.Options.AutoUpdate && len(autoTargets) > 0 {
 					body += "已开启自动更新，正在重新部署。"
 				}
 				s.notify.Emit(notify.Event{Type: "image_update", Title: "镜像有新版本：" + p.Name, Body: body, Target: p.Name, Link: fmt.Sprintf("/projects/%d", p.ID)})
 			}
-			if len(pending) > 0 && p.Options.AutoUpdate {
+			if len(autoTargets) > 0 && p.Options.AutoUpdate {
+				for _, c := range autoTargets {
+					_, _ = s.db.Exec(`UPDATE image_checks SET last_auto_digest=? WHERE project_id=? AND service=?`, c.RemoteDigest, p.ID, c.Service)
+				}
 				jobID, _ := s.startDeploy(p, "image_update", "system", 0)
 				run.Logf("%s：已开启自动更新，提交部署任务 %s", p.Name, jobID)
+			} else if len(pending) > 0 && p.Options.AutoUpdate {
+				run.Logf("%s：当前新版本镜像已尝试过自动更新，跳过重复部署", p.Name)
 			}
 		}
 		run.Logf("==> 完成：检查 %d 个项目，%d 个服务有更新", len(ids), updates)

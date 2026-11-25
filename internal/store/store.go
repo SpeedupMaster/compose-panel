@@ -28,6 +28,18 @@ var migrations = []string{
 	`ALTER TABLE backups ADD COLUMN origin TEXT NOT NULL DEFAULT 'backup'`,
 	`ALTER TABLE db_instances ADD COLUMN image TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE users ADD COLUMN all_projects INTEGER NOT NULL DEFAULT 1`,
+	`ALTER TABLE users ADD COLUMN last_totp_step INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE deployments ADD COLUMN files_json TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE image_checks ADD COLUMN last_auto_digest TEXT NOT NULL DEFAULT ''`,
+}
+
+var indexes = []string{
+	`CREATE INDEX IF NOT EXISTS idx_projects_webhook ON projects(webhook_token)`,
+	`CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)`,
+	`CREATE INDEX IF NOT EXISTS idx_metrics_project_ts ON metrics(project, ts)`,
+	`CREATE INDEX IF NOT EXISTS idx_backups_storage ON backups(storage_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_backups_started ON backups(started_at)`,
 }
 
 // Open opens (and creates if needed) the panel database in WAL mode.
@@ -39,7 +51,7 @@ func Open(path string) (*sql.DB, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(4)
-	db.SetMaxIdleConns(1)
+	db.SetMaxIdleConns(4)
 	db.SetConnMaxIdleTime(2 * time.Minute)
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
@@ -49,6 +61,12 @@ func Open(path string) (*sql.DB, error) {
 		if _, err := db.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			db.Close()
 			return nil, fmt.Errorf("migrate %q: %w", m, err)
+		}
+	}
+	for _, idx := range indexes {
+		if _, err := db.Exec(idx); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("create index %q: %w", idx, err)
 		}
 	}
 	if _, err := db.Exec(`UPDATE users SET all_projects=0 WHERE role<>'admin' AND id IN (SELECT DISTINCT user_id FROM user_projects)`); err != nil {
