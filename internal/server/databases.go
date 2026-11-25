@@ -177,6 +177,11 @@ func (s *Server) handleCreateDatabase(w http.ResponseWriter, r *http.Request, u 
 		return err
 	}
 	id, _ := res.LastInsertId()
+	if !u.can(roleAdmin) && u.Projects != nil {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO user_projects(user_id, project_id) VALUES(?,?)`, u.ID, pid); err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
@@ -548,12 +553,11 @@ func (s *Server) handleDBQuery(w http.ResponseWriter, r *http.Request, u *User) 
 	if strings.TrimSpace(req.SQL) == "" {
 		return bad("SQL 不能为空")
 	}
-	// Viewers may only run read-only queries.
 	if !u.can(roleOperator) {
-		req.ReadOnly = true
+		return errForbidden
 	}
 	if !req.ReadOnly && !req.Confirm {
-		if reasons := dbmgr.Danger(req.SQL); len(reasons) > 0 {
+		if reasons := dbmgr.DangerForEngine(d.Engine, req.SQL); len(reasons) > 0 {
 			return ok(w, map[string]any{"needConfirm": true, "reasons": reasons})
 		}
 	}

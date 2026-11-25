@@ -119,9 +119,22 @@ type ImageInspect struct {
 	}
 }
 
+func validateImageRef(ref string) error {
+	if strings.TrimSpace(ref) == "" {
+		return fmt.Errorf("invalid image reference: empty")
+	}
+	if strings.Contains(ref, "..") || strings.ContainsAny(ref, "\r\n\x00") {
+		return fmt.Errorf("invalid image reference %q", ref)
+	}
+	return nil
+}
+
 func (c *Client) InspectImage(ctx context.Context, ref string) (*ImageInspect, error) {
+	if err := validateImageRef(ref); err != nil {
+		return nil, err
+	}
 	var out ImageInspect
-	return &out, c.do(ctx, "GET", "/images/"+ref+"/json", nil, nil, &out)
+	return &out, c.do(ctx, "GET", "/images/"+url.PathEscape(ref)+"/json", nil, nil, &out)
 }
 
 // RegistryAuth is sent as X-Registry-Auth.
@@ -134,7 +147,10 @@ type RegistryAuth struct {
 // DistributionDigest asks the registry (through the daemon) for the current
 // manifest digest of ref, without pulling it.
 func (c *Client) DistributionDigest(ctx context.Context, ref string, auth *RegistryAuth) (string, error) {
-	u := c.base + "/distribution/" + ref + "/json"
+	if err := validateImageRef(ref); err != nil {
+		return "", err
+	}
+	u := c.base + "/distribution/" + url.PathEscape(ref) + "/json"
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		return "", err

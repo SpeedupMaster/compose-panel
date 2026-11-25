@@ -280,8 +280,16 @@ func (s *S3) key(k string) string {
 	return s.prefix + "/" + k
 }
 
+func s3PutOptions() minio.PutObjectOptions {
+	return minio.PutObjectOptions{
+		ContentType: "application/octet-stream",
+		PartSize:    s3PartSize,
+		NumThreads:  1,
+	}
+}
+
 func (s *S3) Put(ctx context.Context, key string, r io.Reader) (int64, error) {
-	info, err := s.c.PutObject(ctx, s.bucket, s.key(key), r, -1, minio.PutObjectOptions{ContentType: "application/octet-stream", PartSize: s3PartSize})
+	info, err := s.c.PutObject(ctx, s.bucket, s.key(key), r, -1, s3PutOptions())
 	if err != nil {
 		return 0, err
 	}

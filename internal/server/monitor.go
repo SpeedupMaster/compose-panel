@@ -19,6 +19,74 @@ const (
 	jobsRetention    = 30 * 24 * time.Hour
 )
 
+var caddyStartRetryDelays = []time.Duration{
+	time.Second,
+	3 * time.Second,
+	5 * time.Second,
+}
+
+func isCaddyContainer(attrs map[string]string) bool {
+	return strings.TrimPrefix(attrs["name"], "/") == "panel-caddy" ||
+		attrs["com.docker.compose.service"] == "caddy"
+}
+
+func (s *Server) expectsCaddyConfig() bool {
+	if strings.TrimSpace(s.setting("panel_domain", "")) != "" {
+		return true
+	}
+	var n int
+	_ = s.db.QueryRow(`SELECT count(*) FROM sites WHERE enabled=1`).Scan(&n)
+	return n > 0
+}
+
+func (s *Server) ensureCaddyLoaded(ctx context.Context) {
+	if s.caddy == nil || !s.expectsCaddyConfig() {
+		return
+	}
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	loaded, err := s.caddy.IsLoaded(cctx)
+	cancel()
+	if err != nil || loaded {
+		return
+	}
+	slog.Warn("caddy http config missing, resyncing")
+	sctx, scancel := context.WithTimeout(ctx, 30*time.Second)
+	defer scancel()
+	if err := s.syncCaddy(sctx); err != nil {
+		slog.Warn("caddy auto-resync failed", "err", err)
+	} else {
+		slog.Info("caddy config restored")
+	}
+}
+
+func (s *Server) resyncCaddyAfterStart(ctx context.Context) {
+	if s.caddy == nil {
+		return
+	}
+	for i := 0; i <= len(caddyStartRetryDelays); i++ {
+		if i > 0 {
+			timer := time.NewTimer(caddyStartRetryDelays[i-1])
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := s.syncCaddy(cctx)
+		cancel()
+		if err == nil {
+			slog.Info("caddy config synced after container start")
+			return
+		}
+		slog.Warn("caddy resync after start failed", "attempt", i+1, "err", err)
+	}
+}
+
 func (s *Server) housekeep(ctx context.Context) {
 	now := time.Now()
 	_, _ = s.db.ExecContext(ctx, `DELETE FROM metrics WHERE ts < ?`, now.Add(-metricsRetention).Unix())
@@ -52,6 +120,9 @@ func (s *Server) metricsLoop(ctx context.Context) {
 			return
 		}
 		s.sampleMetrics(ctx, time.Now().Truncate(time.Minute).Unix())
+		if ctx.Err() == nil {
+			s.ensureCaddyLoaded(ctx)
+		}
 		if n%60 == 0 && ctx.Err() == nil {
 			s.housekeep(ctx)
 		}
@@ -259,9 +330,15 @@ func (s *Server) eventsLoop(ctx context.Context) {
 	for ctx.Err() == nil {
 		err := s.dk.Events(ctx, map[string][]string{
 			"type":  {"container"},
-			"event": {"die", "oom", "kill", "stop", "health_status"},
+			"event": {"die", "oom", "kill", "stop", "health_status", "start"},
 		}, func(ev docker.Event) {
 			a := ev.Actor.Attributes
+			if ev.Action == "start" {
+				if isCaddyContainer(a) {
+					s.goBackground(s.resyncCaddyAfterStart)
+				}
+				return
+			}
 			if a["com.docker.compose.project"] == "" || a["panel.monitor"] == "false" || a["com.docker.compose.oneoff"] == "True" {
 				return
 			}
