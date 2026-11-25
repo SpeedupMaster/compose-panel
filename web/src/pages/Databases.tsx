@@ -4,8 +4,7 @@ import { ago, bytes, get, post } from '../api'
 import { useCan } from '../auth'
 import { Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Select, Status, useJobLog, useLoad } from '../components/ui'
 import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
-
-export const exposureName: Record<string, string> = { internal: '仅内部网络', local: '本机 127.0.0.1', public: '公网' }
+import { defaultImage, engineLabel, exposureName, ImageField, pgMajorFromImage } from '../components/shared'
 
 export default function Databases() {
   const { data, error } = useLoad(() => get<any[]>('/databases'), [], 10000)
@@ -74,32 +73,6 @@ export default function Databases() {
   )
 }
 
-// Mirrors dbmgr.PostgresMajorFromImage: postgres:18-alpine, pgvector/pgvector:pg17,
-// timescale/timescaledb:2.17.2-pg16 → major version; '' when the tag doesn't say.
-export function pgMajorFromImage(image: string) {
-  const ref = image.trim().split('@')[0]
-  const i = ref.lastIndexOf(':')
-  if (i < 0 || i < ref.lastIndexOf('/')) return ''
-  const tag = ref.slice(i + 1)
-  return (tag.match(/pg-?(\d{2})(?:\D|$)/i) || tag.match(/^(\d{2})(?:\D|$)/) || [])[1] || ''
-}
-
-export const defaultImage = (eng: any, version: string) => (eng?.image || '').replace('{v}', version)
-
-// Example of a compatible variant, shown under the image field.
-function imageExample(engine: string, version: string) {
-  const v = version.split('.')[0]
-  switch (engine) {
-    case 'postgres': return `pgvector/pgvector:pg${v}、postgis/postgis:${v}-3.5`
-    case 'redis': return 'valkey/valkey:8-alpine'
-    default: return `registry.example.com/${engine}:${version}`
-  }
-}
-
-export function engineLabel(id: string) {
-  return ({ postgres: 'PostgreSQL', mysql: 'MySQL', mariadb: 'MariaDB', mongo: 'MongoDB', redis: 'Redis' } as Record<string, string>)[id] || id
-}
-
 function CreateDB({ onClose }: { onClose: () => void }) {
   const { data: engines } = useLoad(() => get<any[]>('/db-engines'))
   const nav = useNavigate()
@@ -165,19 +138,5 @@ function CreateDB({ onClose }: { onClose: () => void }) {
       <p className="label" style={{ margin: 0 }}>root 密码随机生成并加密保存。应用项目可通过共享网络 <code className="mono">panel-db</code> 以实例名访问。</p>
       <ErrorBox error={err} />
     </Modal>
-  )
-}
-
-export function ImageField({ engine, value, placeholder, version, onChange, readOnly, className }: {
-  engine: string; value: string; placeholder: string; version: string; onChange: (v: string) => void; readOnly?: boolean; className?: string
-}) {
-  const m = engine === 'postgres' ? pgMajorFromImage(value) : ''
-  return (
-    <Field label="镜像（可选）" className={className} hint={m && m !== version.split('.')[0]
-      ? <span style={{ color: '#A41E14' }}>该镜像是 PostgreSQL {m}，与版本 {version} 不一致</span>
-      : <>留空用官方镜像；也可填兼容变体，如 <span className="mono">{imageExample(engine, version)}</span></>}>
-      <input className="input mono" value={value} readOnly={readOnly} placeholder={placeholder} spellCheck={false} autoComplete="off"
-        onChange={(e) => onChange(e.target.value.trim())} />
-    </Field>
   )
 }

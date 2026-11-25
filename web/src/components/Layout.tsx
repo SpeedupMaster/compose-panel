@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { get, post } from '../api'
 import { roleName, useAuth, useCan } from '../auth'
-import { Icon, lockBodyScroll, useJobLog } from './ui'
+import { Icon, Loading, lockBodyScroll, useEscapeLayer, useJobLog } from './ui'
 
 type NavItem = { to: string; label: string; icon: string; admin?: boolean; badge?: number }
 
@@ -17,13 +17,11 @@ export default function Layout() {
   const openJob = useJobLog()
 
   useEffect(() => setOpen(false), [loc.pathname, loc.search])
+  useEscapeLayer(open, () => setOpen(false))
   useEffect(() => {
     if (!open) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
-    window.addEventListener('keydown', onKey)
     const unlock = window.matchMedia('(max-width: 860px)').matches ? lockBodyScroll() : undefined
     return () => {
-      window.removeEventListener('keydown', onKey)
       unlock?.()
     }
   }, [open])
@@ -159,7 +157,9 @@ export default function Layout() {
         </div>
       </aside>
       <main className="main">
-        <Outlet />
+        <Suspense fallback={<Loading />}>
+          <Outlet />
+        </Suspense>
       </main>
     </div>
   )

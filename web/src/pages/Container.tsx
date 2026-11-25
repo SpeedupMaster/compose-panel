@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
-import '@xterm/xterm/css/xterm.css'
+import type { Terminal } from '@xterm/xterm'
 import { bytes, dateTime, get, post, streamLines } from '../api'
 import { useCan } from '../auth'
 import { MetricsPanel } from '../components/charts'
@@ -82,11 +80,24 @@ function Logs({ id, running }: { id: string; running: boolean }) {
     let raf = 0
     setLines([])
     setEnded(false)
-    const close = streamLines(`/containers/${id}/logs?tail=${tail}&follow=${follow && running ? 1 : 0}`, (l) => {
-      buf.push(l)
-      if (buf.length > 20000) buf.splice(0, buf.length - 20000)
-      if (!raf && !pausedRef.current) raf = requestAnimationFrame(() => { raf = 0; setLines([...buf]) })
-    }, () => { setEnded(true); setLines([...buf]) })
+    const reset = () => {
+      buf.length = 0
+      if (raf) {
+        cancelAnimationFrame(raf)
+        raf = 0
+      }
+      if (!pausedRef.current) setLines([])
+    }
+    const close = streamLines(
+      `/containers/${id}/logs?tail=${tail}&follow=${follow && running ? 1 : 0}`,
+      (l) => {
+        buf.push(l)
+        if (buf.length > 20000) buf.splice(0, buf.length - 20000)
+        if (!raf && !pausedRef.current) raf = requestAnimationFrame(() => { raf = 0; setLines([...buf]) })
+      },
+      () => { setEnded(true); setLines([...buf]) },
+      reset,
+    )
     return () => { close(); if (raf) cancelAnimationFrame(raf) }
   }, [id, tail, follow, running])
   const shown = ts ? lines : lines.map((l) => l.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z\s/, ''))
@@ -131,78 +142,108 @@ function Term({ id }: { id: string }) {
     if (!el) return
     let disposed = false
     let rafId = 0
-    const term = new Terminal({ fontFamily: "'IBM Plex Mono', 'Microsoft YaHei UI', 'PingFang SC', Consolas, monospace", fontSize: window.innerWidth <= 860 ? 12 : 13, cursorBlink: true, theme: { background: '#121315' }, scrollback: 5000 })
-    const fit = new FitAddon()
-    term.loadAddon(fit)
-    termRef.current = term
-    const fitSafe = () => {
-      if (disposed || !el.isConnected || el.clientWidth === 0 || el.clientHeight === 0) return false
-      try {
-        fit.fit()
-        return true
-      } catch {
-        return false
-      }
-    }
-    term.open(el)
-    fitSafe()
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const qs = new URLSearchParams()
-    if (shell !== 'auto') qs.set('shell', shell)
-    if (user) qs.set('user', user)
-    const ws = new WebSocket(`${proto}//${location.host}/api/containers/${id}/terminal?${qs}`)
-    ws.binaryType = 'arraybuffer'
+    let term: Terminal | null = null
+    let ws: WebSocket | null = null
+    let ro: ResizeObserver | null = null
+    let onDataSub: { dispose: () => void } | null = null
     setState('connecting')
-    wsRef.current = ws
-    const sendSize = () => !disposed && ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
-    rafId = requestAnimationFrame(() => {
-      if (!disposed) {
+
+    Promise.all([
+      import('@xterm/xterm'),
+      import('@xterm/addon-fit'),
+      import('@xterm/xterm/css/xterm.css'),
+    ])
+      .then(([{ Terminal: XTerm }, { FitAddon }]) => {
+        if (disposed || !el.isConnected) return
+        term = new XTerm({
+          fontFamily: "'IBM Plex Mono', 'Microsoft YaHei UI', 'PingFang SC', Consolas, monospace",
+          fontSize: window.innerWidth <= 860 ? 12 : 13,
+          cursorBlink: true,
+          theme: { background: '#121315' },
+          scrollback: 5000,
+        })
+        const fit = new FitAddon()
+        term.loadAddon(fit)
+        termRef.current = term
+        const fitSafe = () => {
+          if (disposed || !el.isConnected || el.clientWidth === 0 || el.clientHeight === 0) return false
+          try {
+            fit.fit()
+            return true
+          } catch {
+            return false
+          }
+        }
+        term.open(el)
         fitSafe()
-        sendSize()
-      }
-    })
-    ws.onopen = () => {
-      if (disposed) return
-      setState('open')
-      sendSize()
-      term.focus()
-    }
-    ws.onmessage = (e) => {
-      if (!disposed) term.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data))
-    }
-    ws.onclose = () => {
-      if (disposed) return
-      setState('closed')
-      try {
-        term.write('\r\n\x1b[90m[连接已关闭]\x1b[0m\r\n')
-      } catch {}
-    }
-    const d = term.onData((data) => !disposed && ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: 'input', data })))
-    const ro = new ResizeObserver(() => {
-      if (disposed) return
-      fitSafe()
-      sendSize()
-    })
-    ro.observe(el)
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+        const qs = new URLSearchParams()
+        if (shell !== 'auto') qs.set('shell', shell)
+        if (user) qs.set('user', user)
+        ws = new WebSocket(`${proto}//${location.host}/api/containers/${id}/terminal?${qs}`)
+        ws.binaryType = 'arraybuffer'
+        wsRef.current = ws
+        const curTerm = term
+        const curWs = ws
+        const sendSize = () =>
+          !disposed && curWs.readyState === WebSocket.OPEN && curWs.send(JSON.stringify({ type: 'resize', cols: curTerm.cols, rows: curTerm.rows }))
+        rafId = requestAnimationFrame(() => {
+          if (!disposed) {
+            fitSafe()
+            sendSize()
+          }
+        })
+        curWs.onopen = () => {
+          if (disposed) return
+          setState('open')
+          sendSize()
+          curTerm.focus()
+        }
+        curWs.onmessage = (e) => {
+          if (!disposed) curTerm.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data))
+        }
+        curWs.onclose = () => {
+          if (disposed) return
+          setState('closed')
+          try {
+            curTerm.write('\r\n\x1b[90m[连接已关闭]\x1b[0m\r\n')
+          } catch {}
+        }
+        onDataSub = curTerm.onData((data) => !disposed && curWs.readyState === WebSocket.OPEN && curWs.send(JSON.stringify({ type: 'input', data })))
+        ro = new ResizeObserver(() => {
+          if (disposed) return
+          fitSafe()
+          sendSize()
+        })
+        ro.observe(el)
+      })
+      .catch(() => {
+        if (!disposed) setState('closed')
+      })
+
     return () => {
       disposed = true
       if (rafId) cancelAnimationFrame(rafId)
-      ws.onopen = null
-      ws.onmessage = null
-      ws.onerror = null
-      ws.onclose = null
-      ro.disconnect()
-      d.dispose()
-      if (wsRef.current === ws) wsRef.current = null
-      if (termRef.current === term) termRef.current = null
-      ws.close()
-      try {
-        term.dispose()
-      } catch {}
-      // @xterm/xterm@5.5.0 Viewport schedules an untracked setTimeout(() => this.syncScrollArea())
-      // in its constructor; silence it after dispose so React StrictMode remounts do not throw.
-      const core = (term as unknown as { _core?: { viewport?: { syncScrollArea?: () => void } } })._core
-      if (core?.viewport) core.viewport.syncScrollArea = () => {}
+      if (ws) {
+        ws.onopen = null
+        ws.onmessage = null
+        ws.onerror = null
+        ws.onclose = null
+        if (wsRef.current === ws) wsRef.current = null
+        ws.close()
+      }
+      ro?.disconnect()
+      onDataSub?.dispose()
+      if (term) {
+        if (termRef.current === term) termRef.current = null
+        try {
+          term.dispose()
+        } catch {}
+        // @xterm/xterm@5.5.0 Viewport schedules an untracked setTimeout(() => this.syncScrollArea())
+        // in its constructor; silence it after dispose so React StrictMode remounts do not throw.
+        const core = (term as unknown as { _core?: { viewport?: { syncScrollArea?: () => void } } })._core
+        if (core?.viewport) core.viewport.syncScrollArea = () => {}
+      }
     }
   }, [id, session]) // eslint-disable-line react-hooks/exhaustive-deps
   return (

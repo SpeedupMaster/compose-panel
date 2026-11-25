@@ -94,6 +94,7 @@ function Storage() {
 function StorageModal({ t, onClose, onSaved }: { t: Target; onClose: () => void; onSaved: () => void }) {
   const toast = useToast()
   const [f, setF] = useState<Target>(t)
+  const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<unknown>()
   const [test, setTest] = useState<any>(null)
   const [authBusy, setAuthBusy] = useState(false)
@@ -102,6 +103,21 @@ function StorageModal({ t, onClose, onSaved }: { t: Target; onClose: () => void;
   const c = f.config
   const setC = (patch: any) => setF((prev) => ({ ...prev, config: { ...prev.config, ...patch } }))
   const redirectUri = `${window.location.origin}/api/storage/gdrive/callback`
+
+  const submit = async () => {
+    if (busy) return
+    setBusy(true)
+    setErr(undefined)
+    try {
+      if (t.id) await put(`/storage/${t.id}`, f)
+      else await post('/storage', f)
+      onSaved()
+    } catch (e) {
+      setErr(e)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   useEffect(() => () => { authCleanupRef.current?.() }, [])
 
@@ -213,7 +229,7 @@ function StorageModal({ t, onClose, onSaved }: { t: Target; onClose: () => void;
           <button className="btn" onClick={async () => { try { setTest(await post('/storage/test', t.id ? { ...f, id: t.id } : f)) } catch (e) { setTest({ ok: false, message: (e as Error).message }) } }}>测试连接</button>
           <span className="spacer" />
           <button className="btn" onClick={onClose}>取消</button>
-          <button className="btn btn-primary" onClick={async () => { try { t.id ? await put(`/storage/${t.id}`, f) : await post('/storage', f); onSaved() } catch (e) { setErr(e) } }}>保存</button>
+          <button className="btn btn-primary" disabled={busy} onClick={submit}>{busy ? '保存中…' : '保存'}</button>
         </>
       }
     >
@@ -464,12 +480,27 @@ function Notify() {
 
 function ChannelModal({ c, onClose, onSaved }: { c: Channel; onClose: () => void; onSaved: () => void }) {
   const [f, setF] = useState<Channel>(c)
+  const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<unknown>()
   const cf = f.config
   const setC = (patch: any) => setF({ ...f, config: { ...cf, ...patch } })
   const keep = c.id ? '留空保持不变' : undefined
+  const submit = async () => {
+    if (busy) return
+    setBusy(true)
+    setErr(undefined)
+    try {
+      if (c.id) await put(`/notify/channels/${c.id}`, f)
+      else await post('/notify/channels', f)
+      onSaved()
+    } catch (e) {
+      setErr(e)
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
-    <Modal title={c.id ? '编辑通知渠道' : '添加通知渠道'} onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" onClick={async () => { try { c.id ? await put(`/notify/channels/${c.id}`, f) : await post('/notify/channels', f); onSaved() } catch (e) { setErr(e) } }}>保存</button></>}>
+    <Modal title={c.id ? '编辑通知渠道' : '添加通知渠道'} onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" disabled={busy} onClick={submit}>{busy ? '保存中…' : '保存'}</button></>}>
       <Field label="名称"><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
       <Field label="类型">
         <Select value={f.kind} disabled={!!c.id} onChange={(v) => setF({ ...f, kind: v as Channel['kind'], config: {} })}>

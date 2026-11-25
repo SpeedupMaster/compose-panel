@@ -5,8 +5,7 @@ import { useCan } from '../auth'
 import { CodeArea, EnvEditor, EnvVar, langForPath, validateCompose, Validation, ValidationResult } from '../components/editors'
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, JobStatus, Loading, Modal, Page, SecretBox, Status, Tabs, useAction, useJobLog, useLoad, useToast } from '../components/ui'
 import { MobileCard, ResponsiveTable, joinInline } from '../components/ResponsiveList'
-import { triggerName } from './Overview'
-import { sourceName } from './Projects'
+import { portsText, sourceName, triggerName } from '../components/shared'
 import { CronTasks, ImagesTab, SaveTemplateModal } from './ProjectExtras'
 import { ProjectMetrics } from '../components/charts'
 
@@ -208,13 +207,6 @@ function OverviewTab({ data, onAction, onRecreate }: { data: any; onAction: (a: 
       </Card>
     </>
   )
-}
-
-export function portsText(ports: any[] | null) {
-  if (!ports?.length) return '—'
-  const seen = new Set<string>()
-  for (const p of ports) seen.add(p.PublicPort ? `${p.PublicPort}→${p.PrivatePort}` : `${p.PrivatePort}/${p.Type}`)
-  return [...seen].join(' ')
 }
 
 function DeploymentsTab({ id }: { id: string }) {

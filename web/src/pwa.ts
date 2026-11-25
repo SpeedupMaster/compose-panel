@@ -13,19 +13,40 @@ function markUpdated() {
   listeners.forEach((l) => l())
 }
 
+const PRELOAD_RELOAD_KEY = 'panel:preload-reload'
+
+function registerPreloadRecovery() {
+  if (import.meta.env.DEV) return
+  // If an open tab navigates to an unvisited lazy route after the server was upgraded and
+  // removed old hashed chunks, reload once to pick up the new index.html and asset manifest.
+  window.addEventListener('vite:preloadError', (event) => {
+    try {
+      if (sessionStorage.getItem(PRELOAD_RELOAD_KEY) === __BUILD_ID__) return
+      sessionStorage.setItem(PRELOAD_RELOAD_KEY, __BUILD_ID__)
+    } catch {
+      return
+    }
+    event.preventDefault()
+    window.location.reload()
+  })
+}
+
 export function registerServiceWorker() {
+  registerPreloadRecovery()
   if (import.meta.env.DEV || !('serviceWorker' in navigator)) return
-  // The first install also fires controllerchange (clientsClaim); only a replacement counts.
-  const hadController = !!navigator.serviceWorker.controller
+  // The first install also fires controllerchange (clientsClaim); flip hadController to true
+  // once claimed so long-lived first-install sessions still detect subsequent updates.
+  let hadController = !!navigator.serviceWorker.controller
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (!hadController) return
-    // Page loads are network-first, so this page may already be the new build. The worker's
-    // precache manifest lists the hashed bundles of its build: if this page's bundle is among
-    // them, the page is current and there is nothing to reload.
-    const bundle = new URL(import.meta.url).pathname.slice(1)
+    if (!hadController) {
+      hadController = true
+      return
+    }
+    // Page loads are network-first, so this page may already be the new build. Compare the
+    // running bundle's __BUILD_ID__ against /sw.js to see whether a reload is actually needed.
     fetch('/sw.js', { cache: 'no-store' })
       .then((r) => r.text())
-      .then((sw) => !sw.includes(bundle) && markUpdated())
+      .then((sw) => !sw.includes(__BUILD_ID__) && markUpdated())
       .catch(markUpdated)
   })
   const start = () => {

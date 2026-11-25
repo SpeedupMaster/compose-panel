@@ -5,7 +5,7 @@ import { useCan } from '../auth'
 import { Diff } from '../components/editors'
 import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
 import { Card, Confirm, ErrorBox, JobStatus, Loading, LogView, Page, Tabs, useJobLog, useLoad } from '../components/ui'
-import { triggerName } from './Overview'
+import { triggerName } from '../components/shared'
 
 export default function DeploymentDetail() {
   const { id } = useParams()
@@ -23,10 +23,27 @@ export default function DeploymentDetail() {
     const buf: string[] = []
     let raf = 0
     setLines([])
-    return streamLines(`/jobs/${d.jobId}/log`, (l) => {
-      buf.push(l)
-      if (!raf) raf = requestAnimationFrame(() => { raf = 0; setLines([...buf]) })
-    }, () => reload())
+    const reset = () => {
+      buf.length = 0
+      if (raf) {
+        cancelAnimationFrame(raf)
+        raf = 0
+      }
+      setLines([])
+    }
+    const close = streamLines(
+      `/jobs/${d.jobId}/log`,
+      (l) => {
+        buf.push(l)
+        if (!raf) raf = requestAnimationFrame(() => { raf = 0; setLines([...buf]) })
+      },
+      () => reload(),
+      reset,
+    )
+    return () => {
+      close()
+      if (raf) cancelAnimationFrame(raf)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [d?.jobId])
 

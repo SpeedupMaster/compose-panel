@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ago, dateTime, del, get, post, put } from '../api'
 import { roleName, useAuth, useCan } from '../auth'
-import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Pager, SecretBox, Select, Tabs, useLoad, useToast } from '../components/ui'
+import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Pager, SecretBox, Select, Tabs, useDebouncedValue, useLoad, useToast } from '../components/ui'
 import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
 
 export default function Access() {
@@ -99,10 +99,23 @@ function Users() {
 function UserModal({ u, onClose, onSaved }: { u: UserForm; onClose: () => void; onSaved: (r: any) => void }) {
   const { data: projects } = useLoad(() => get<any[]>('/projects'), [])
   const [f, setF] = useState<UserForm>(u)
+  const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<unknown>()
   const all = f.projects === null
+  const submit = async () => {
+    if (busy) return
+    setBusy(true)
+    setErr(undefined)
+    try {
+      onSaved(u.id ? await put(`/users/${u.id}`, f) : await post('/users', f))
+    } catch (e) {
+      setErr(e)
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
-    <Modal title={u.id ? '编辑用户' : '添加用户'} onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" onClick={async () => { try { onSaved(u.id ? await put(`/users/${u.id}`, f) : await post('/users', f)) } catch (e) { setErr(e) } }}>保存</button></>}>
+    <Modal title={u.id ? '编辑用户' : '添加用户'} onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" disabled={busy} onClick={submit}>{busy ? '保存中…' : '保存'}</button></>}>
       <div className="form-grid">
         <Field label="用户名"><input className="input" value={f.username} readOnly={!!u.id} onChange={(e) => setF({ ...f, username: e.target.value })} /></Field>
         <Field label="邮箱"><input className="input" type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
@@ -139,9 +152,25 @@ function Tokens() {
   const { data, error, reload } = useLoad(() => get<any[]>('/tokens'), [])
   const can = useCan()
   const [create, setCreate] = useState<{ name: string; scope: string; days: number } | null>(null)
+  const [creating, setCreating] = useState(false)
   const [tok, setTok] = useState<string | null>(null)
   const [rm, setRm] = useState<any>(null)
   const [err, setErr] = useState<unknown>()
+  const submitToken = async () => {
+    if (!create || creating) return
+    setCreating(true)
+    setErr(undefined)
+    try {
+      const r = await post('/tokens', create)
+      setCreate(null)
+      setTok(r.token)
+      reload()
+    } catch (e) {
+      setErr(e)
+    } finally {
+      setCreating(false)
+    }
+  }
   if (!data) return error ? <ErrorBox error={error} /> : <Loading />
   return (
     <Card title="API 令牌" actions={<button className="btn btn-sm btn-primary" onClick={() => setCreate({ name: '', scope: 'deploy', days: 90 })}><Icon name="plus" size={16} />创建令牌</button>} pad={false}>
@@ -190,7 +219,7 @@ function Tokens() {
         />
       )}
       {create && (
-        <Modal title="创建 API 令牌" onClose={() => setCreate(null)} footer={<><button className="btn" onClick={() => setCreate(null)}>取消</button><button className="btn btn-primary" onClick={async () => { try { const r = await post('/tokens', create); setCreate(null); setTok(r.token); reload() } catch (e) { setErr(e) } }}>创建</button></>}>
+        <Modal title="创建 API 令牌" onClose={() => setCreate(null)} footer={<><button className="btn" onClick={() => setCreate(null)}>取消</button><button className="btn btn-primary" disabled={creating} onClick={submitToken}>{creating ? '创建中…' : '创建'}</button></>}>
           <Field label="名称"><input className="input" value={create.name} onChange={(e) => setCreate({ ...create, name: e.target.value })} placeholder="GitHub Actions" /></Field>
           <Field label="权限" hint="令牌权限不会超过你自己的角色">
             <Select value={create.scope} onChange={(v) => setCreate({ ...create, scope: v })}>
@@ -225,7 +254,12 @@ function Audit() {
   const [f, setF] = useState({ actor: '', action: '', q: '', result: '' })
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
-  const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString()
+  const dActor = useDebouncedValue(f.actor, 250)
+  const dAction = useDebouncedValue(f.action, 250)
+  const dQ = useDebouncedValue(f.q, 250)
+  const qs = new URLSearchParams(
+    Object.entries({ actor: dActor, action: dAction, q: dQ, result: f.result }).filter(([, v]) => v),
+  ).toString()
   const { data, error } = useLoad(() => get<any>(`/audit?limit=${pageSize}&offset=${(page - 1) * pageSize}&${qs}`), [qs, page, pageSize])
   const toast = useToast()
   return (

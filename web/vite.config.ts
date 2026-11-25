@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
@@ -8,6 +9,10 @@ import { VitePWA } from 'vite-plugin-pwa'
 // In development, API calls go to a running panel (PANEL_URL, default http://localhost:7800).
 const target = process.env.PANEL_URL || 'http://localhost:7800'
 
+// Unique per-build stamp injected into both the app bundle and sw.ts so pwa.ts can reliably
+// detect whether a newly activated worker belongs to a different build even with code splitting.
+const buildId = process.env.PANEL_BUILD_ID || `${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`
+
 // Modern browsers all support woff2; drop redundant .woff fallbacks emitted by @fontsource (~94 KiB).
 function dropLegacyWoff(): Plugin {
   return {
@@ -17,6 +22,26 @@ function dropLegacyWoff(): Plugin {
       if (!id.includes('@fontsource') || !id.endsWith('.css')) return null
       const next = code.replace(/,\s*url\([^)]+\.woff\)\s*format\(['"]woff['"]\)/g, '')
       return next === code ? null : { code: next, map: null }
+    },
+  }
+}
+
+// Recreates empty dist/.keep after emptyOutDir so go:embed and git status stay clean.
+function preserveDistKeep(): Plugin {
+  let outDir = 'dist'
+  return {
+    name: 'preserve-dist-keep',
+    apply: 'build',
+    configResolved(cfg) {
+      outDir = path.resolve(cfg.root, cfg.build.outDir)
+    },
+    closeBundle: {
+      order: 'post',
+      sequential: true,
+      handler() {
+        fs.mkdirSync(outDir, { recursive: true })
+        fs.writeFileSync(path.join(outDir, '.keep'), '')
+      },
     },
   }
 }
@@ -59,19 +84,31 @@ function precompressEmbeddedDist(): Plugin {
 }
 
 export default defineConfig({
+  define: {
+    __BUILD_ID__: JSON.stringify(buildId),
+  },
   plugins: [
     dropLegacyWoff(),
     react(),
     VitePWA({
-      // Custom worker (src/sw.ts): network-first page loads, precached assets, no API caching.
+      // Custom worker (src/sw.ts): network-first page loads, core-shell precache, runtime asset cache, no API caching.
       strategies: 'injectManifest',
       srcDir: 'src',
       filename: 'sw.ts',
       // Registered by src/pwa.ts so update handling stays in our hands.
       injectRegister: false,
       injectManifest: {
-        // .woff duplicates the .woff2 fonts; every browser that runs a service worker takes woff2.
-        globPatterns: ['**/*.{js,css,html,woff2,png,svg,ico}'],
+        // Precache only the core shell, vendor-react, fonts, manifest and icons; lazy route chunks,
+        // CodeMirror and xterm are cached lazily at runtime in sw.ts instead of eagerly on /login.
+        // manifest.webmanifest and manifest icons are already injected by VitePWA automatically.
+        globPatterns: [
+          'index.html',
+          'favicon.{svg,ico}',
+          'apple-touch-icon.png',
+          'assets/index-*.{js,css}',
+          'assets/vendor-react-*.js',
+          'assets/*.woff2',
+        ],
       },
       manifest: {
         id: '/',
@@ -94,8 +131,19 @@ export default defineConfig({
       devOptions: { enabled: false },
     }),
     precompressEmbeddedDist(),
+    preserveDistKeep(),
   ],
-  build: { outDir: 'dist', emptyOutDir: true, chunkSizeWarningLimit: 1200 },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+        },
+      },
+    },
+  },
   server: {
     proxy: {
       '/api': { target, ws: true, changeOrigin: true },

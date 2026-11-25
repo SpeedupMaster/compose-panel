@@ -4,6 +4,7 @@ import { ago, get } from '../api'
 import { useCan } from '../auth'
 import { Empty, ErrorBox, Icon, JobStatus, Loading, Page, Status, useLoad } from '../components/ui'
 import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
+import { sourceName } from '../components/shared'
 
 export default function Projects() {
   const { data, error } = useLoad(() => get<any[]>('/projects'), [], 10000)
@@ -125,8 +126,4 @@ export default function Projects() {
       </section>
     </Page>
   )
-}
-
-export function sourceName(s: string) {
-  return ({ inline: '面板编辑', git: 'Git 仓库', imported: '导入', database: '数据库' } as Record<string, string>)[s] || s
 }

@@ -6,7 +6,7 @@ import { BackupNowModal, BackupSource, BackupTable, RestoreModal, SourcePicker, 
 import { ImportUploadModal, ScanStorageModal } from '../components/BackupImportModals'
 import { Drills } from './Drills'
 import { MobileCard, ResponsiveTable, joinInline } from '../components/ResponsiveList'
-import { Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Select, Status, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
+import { Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Select, Status, Tabs, useDebouncedValue, useJobLog, useLoad, useToast } from '../components/ui'
 
 type Policy = {
   id?: number
@@ -33,7 +33,8 @@ export default function Backups() {
   const { data: sources } = useLoad(() => get<any>('/backup-sources'), [])
   const [status, setStatus] = useState('')
   const [q, setQ] = useState('')
-  const { data: records, reload: reloadRecords } = useLoad(() => get<any[]>(`/backups?limit=300${status ? '&status=' + status : ''}${q ? '&q=' + encodeURIComponent(q) : ''}`), [status, q], 15000)
+  const dq = useDebouncedValue(q, 250)
+  const { data: records, reload: reloadRecords } = useLoad(() => get<any[]>(`/backups?limit=300${status ? '&status=' + status : ''}${dq ? '&q=' + encodeURIComponent(dq) : ''}`), [status, dq], 15000)
   const [edit, setEdit] = useState<Policy | null>(null)
   const [now, setNow] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
@@ -199,9 +200,12 @@ function blankPolicy(source: BackupSource): Policy {
 function PolicyModal({ p, sources, onClose, onSaved }: { p: Policy; sources: any; onClose: () => void; onSaved: () => void }) {
   const { data: storages } = useStorages()
   const [f, setF] = useState<Policy>(p)
+  const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<unknown>()
   const sid = f.storageId || storages?.[0]?.id || 0
   const submit = async () => {
+    if (busy) return
+    setBusy(true)
     setErr(undefined)
     try {
       const body = { ...f, storageId: sid, name: f.name || autoName(f.source, sources) }
@@ -210,10 +214,12 @@ function PolicyModal({ p, sources, onClose, onSaved }: { p: Policy; sources: any
       onSaved()
     } catch (e) {
       setErr(e)
+    } finally {
+      setBusy(false)
     }
   }
   return (
-    <Modal title={f.id ? '编辑备份策略' : '新建备份策略'} wide onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" onClick={submit}>保存</button></>}>
+    <Modal title={f.id ? '编辑备份策略' : '新建备份策略'} wide onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" disabled={busy} onClick={submit}>{busy ? '保存中…' : '保存'}</button></>}>
       {f.id ? <div>备份对象：<b>{sourceText(f.source)}</b></div> : <SourcePicker value={f.source} onChange={(source) => setF({ ...f, source })} sources={sources} />}
       <div className="form-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(300px, 100%), 1fr))' }}>
         <Field label="名称" hint="留空自动生成"><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>

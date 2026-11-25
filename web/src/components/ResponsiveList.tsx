@@ -1,4 +1,5 @@
 import { CSSProperties, Fragment, ReactNode } from 'react'
+import { useMediaQuery } from './ui/hooks'
 
 export type CardMeta = {
   label?: ReactNode
@@ -7,14 +8,13 @@ export type CardMeta = {
   full?: boolean
 }
 
-/** Desktop table + mobile card list switcher driven by CSS at max-width 860px. */
+/** Single-branch desktop table / mobile card list switcher driven by matchMedia('(max-width: 860px)'). */
 export function ResponsiveTable({ table, cards, cardsStyle }: { table: ReactNode; cards: ReactNode; cardsStyle?: CSSProperties }) {
-  return (
-    <>
-      <div className="desktop-only">{table}</div>
-      <div className="mobile-only m-cards" style={cardsStyle}>{cards}</div>
-    </>
-  )
+  const isMobile = useMediaQuery('(max-width: 860px)')
+  if (isMobile) {
+    return <div className="m-cards" style={cardsStyle}>{cards}</div>
+  }
+  return <>{table}</>
 }
 
 /** Stacked mobile list item matching panel card and hairline typography. */
@@ -39,7 +39,23 @@ export function MobileCard({
 }) {
   const fields = (meta || []).filter((m): m is CardMeta => Boolean(m))
   return (
-    <article className={'m-card' + (tight ? ' m-card-tight' : '') + (onClick ? ' clickable' : '')} onClick={onClick}>
+    <article
+      className={'m-card' + (tight ? ' m-card-tight' : '') + (onClick ? ' clickable' : '')}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.target !== e.currentTarget) return
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onClick()
+              }
+            }
+          : undefined
+      }
+    >
       <div className="m-card-head">
         <div className="m-card-main">
           <div className="m-card-title">{title}</div>

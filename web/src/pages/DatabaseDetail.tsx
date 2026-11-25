@@ -5,7 +5,7 @@ import { useCan } from '../auth'
 import { BackupNowModal, BackupTable } from '../components/backup'
 import { MobileCard, ResponsiveTable, joinInline } from '../components/ResponsiveList'
 import { Card, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, SecretBox, Select, Status, Tabs, useJobLog, useLoad, useToast } from '../components/ui'
-import { defaultImage, engineLabel, exposureName, ImageField } from './Databases'
+import { defaultImage, engineLabel, exposureName, ImageField } from '../components/shared'
 import { ImportExport, SlowQueries, SqlConsole, TableBrowser } from './DatabaseTools'
 
 type Tab = 'overview' | 'dbs' | 'users' | 'sessions' | 'sql' | 'tables' | 'slow' | 'io' | 'backups' | 'settings'
