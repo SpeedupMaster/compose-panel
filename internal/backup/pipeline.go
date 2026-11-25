@@ -143,6 +143,8 @@ func Verify(ctx context.Context, st Storage, key, wantSHA string, wantSize int64
 	return nil
 }
 
+const zstdDecoderMaxWindow = 32 << 20 // 32 MiB cap prevents untrusted .zst OOM under GOMEMLIMIT=192MiB
+
 // OpenStream decrypts (when encrypted or matching age magic header) and auto-decompresses
 // (zstd, gzip, or plain) rc using the supplied age identities.
 func OpenStream(rc io.ReadCloser, encrypted bool, identities []string) (io.ReadCloser, error) {
@@ -179,6 +181,7 @@ func OpenStream(rc io.ReadCloser, encrypted bool, identities []string) (io.ReadC
 		zr, err := zstd.NewReader(br,
 			zstd.WithDecoderConcurrency(1),
 			zstd.WithDecoderLowmem(true),
+			zstd.WithDecoderMaxWindow(zstdDecoderMaxWindow),
 		)
 		if err != nil {
 			rc.Close()

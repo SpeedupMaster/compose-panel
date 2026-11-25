@@ -126,4 +126,37 @@ func TestStorageTransportReuseAndChunkLimits(t *testing.T) {
 	if s3PartSize > 8<<20 {
 		t.Fatalf("s3PartSize = %d, want <= %d (8 MiB)", s3PartSize, 8<<20)
 	}
+	opts := s3PutOptions()
+	if opts.NumThreads != 1 {
+		t.Fatalf("s3PutOptions().NumThreads = %d, want 1 (to bound streaming upload memory)", opts.NumThreads)
+	}
+	if opts.PartSize != s3PartSize {
+		t.Fatalf("s3PutOptions().PartSize = %d, want %d", opts.PartSize, s3PartSize)
+	}
+}
+
+func TestOpenStreamRejectsOversizedZstdWindow(t *testing.T) {
+	// Craft a minimal valid zstd frame declaring a 64 MiB window (> 32 MiB cap):
+	// Magic: 0xFD2FB528 (LE: 28 B5 2F FD)
+	// Frame_Header_Descriptor: 0x00 (Single_Segment_Flag=0 -> Window_Descriptor follows, no dict/checksum/FCS)
+	// Window_Descriptor: exponent=16, mantissa=0 -> (1 << (10 + 16)) = 64 MiB -> byte = (16 << 3) | 0 = 0x80
+	// Final empty raw block header (3 bytes LE): Last_Block=1, Block_Type=0, Block_Size=0 -> 01 00 00
+	frame64MiB := []byte{0x28, 0xB5, 0x2F, 0xFD, 0x00, 0x80, 0x01, 0x00, 0x00}
+
+	var hdr zstd.Header
+	if err := hdr.Decode(frame64MiB); err != nil {
+		t.Fatalf("crafted header invalid: %v", err)
+	}
+	if hdr.WindowSize != 64<<20 {
+		t.Fatalf("crafted WindowSize = %d, want %d", hdr.WindowSize, 64<<20)
+	}
+
+	rc, err := OpenStream(io.NopCloser(bytes.NewReader(frame64MiB)), false, nil)
+	if err == nil {
+		_, err = io.ReadAll(rc)
+		rc.Close()
+	}
+	if err == nil {
+		t.Fatalf("OpenStream accepted 64 MiB zstd window, want rejection above %d bytes", zstdDecoderMaxWindow)
+	}
 }

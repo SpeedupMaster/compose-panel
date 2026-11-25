@@ -104,7 +104,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	h("GET /api/databases/{id}/sessions", V, s.handleDBSessions)
 	h("DELETE /api/databases/{id}/sessions/{pid}", O, s.handleDBKill)
 	h("GET /api/databases/{id}/tables", V, s.handleDBTables)
-	h("POST /api/databases/{id}/query", V, s.handleDBQuery)
+	h("POST /api/databases/{id}/query", O, s.handleDBQuery)
 	h("GET /api/databases/{id}/tables/{table}", V, s.handleDBTableInfo)
 	h("GET /api/databases/{id}/tables/{table}/rows", V, s.handleDBTableRows)
 	h("GET /api/databases/{id}/slow-queries", V, s.handleDBSlowQueries)

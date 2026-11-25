@@ -229,9 +229,14 @@ type Result struct {
 func (c Client) Query(ctx context.Context, database, sql string, readOnly bool) (*Result, error) {
 	switch c.Engine {
 	case "postgres":
+		if readOnly {
+			if err := validateConsoleSQL(c.Engine, sql, true); err != nil {
+				return nil, err
+			}
+		}
 		input := sql
 		if readOnly {
-			input = "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;\n" + sql
+			input = "SET standard_conforming_strings = on;\nSET default_transaction_read_only = on;\nSET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;\n" + sql
 		}
 		out, err := c.exec().Output(ctx, input, "psql", "-U", "postgres", "-d", database, "-X", "-q", "--csv", "-v", "ON_ERROR_STOP=1", "-P", "pager=off")
 		if err != nil {
@@ -239,6 +244,11 @@ func (c Client) Query(ctx context.Context, database, sql string, readOnly bool) 
 		}
 		return parseCSV(out, ',')
 	case "mysql", "mariadb":
+		if readOnly {
+			if err := validateConsoleSQL(c.Engine, sql, true); err != nil {
+				return nil, err
+			}
+		}
 		input := sql
 		if readOnly {
 			input = "SET SESSION TRANSACTION READ ONLY;\nSTART TRANSACTION;\n" + strings.TrimRight(strings.TrimSpace(sql), ";") + ";\nROLLBACK;\n"

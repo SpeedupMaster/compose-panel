@@ -371,6 +371,41 @@ func (s *Server) goBackground(fn func(ctx context.Context)) {
 	}()
 }
 
+var (
+	caddyBootstrapBaseDelay = 5 * time.Second
+	caddyBootstrapMaxDelay  = 15 * time.Second
+)
+
+func (s *Server) bootstrapCaddy(ctx context.Context) {
+	// Keep retrying until Caddy is reachable or the server shuts down.
+	backoff := caddyBootstrapBaseDelay
+	for attempt := 0; ctx.Err() == nil; attempt++ {
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := s.syncCaddy(cctx)
+		cancel()
+		if err == nil {
+			slog.Info("caddy config loaded")
+			return
+		}
+		if attempt == 0 {
+			slog.Warn("caddy not ready", "err", err)
+		} else if attempt%12 == 0 {
+			slog.Warn("caddy still not ready, retrying", "attempt", attempt, "err", err)
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		backoff += caddyBootstrapBaseDelay
+		if backoff > caddyBootstrapMaxDelay {
+			backoff = caddyBootstrapMaxDelay
+		}
+	}
+}
+
 // Run serves HTTP and the background loops until ctx is canceled or a panel restore requests restart.
 func (s *Server) Run(ctx context.Context) error {
 	runCtx, runCancel := context.WithCancel(ctx)
@@ -393,30 +428,7 @@ func (s *Server) Run(ctx context.Context) error {
 	s.goBackground(s.monitorLoop)
 	s.goBackground(s.metricsLoop)
 	s.goBackground(s.eventsLoop)
-	s.goBackground(func(bgCtx context.Context) {
-		// Push proxy config once Caddy is reachable.
-		for i := 0; i < 30; i++ {
-			if bgCtx.Err() != nil {
-				return
-			}
-			cctx, cancel := context.WithTimeout(bgCtx, 10*time.Second)
-			err := s.syncCaddy(cctx)
-			cancel()
-			if err == nil {
-				slog.Info("caddy config loaded")
-				return
-			} else if i == 0 {
-				slog.Warn("caddy not ready", "err", err)
-			}
-			timer := time.NewTimer(5 * time.Second)
-			select {
-			case <-bgCtx.Done():
-				timer.Stop()
-				return
-			case <-timer.C:
-			}
-		}
-	})
+	s.goBackground(s.bootstrapCaddy)
 	errc := make(chan error, 1)
 	go func() {
 		slog.Info("compose-panel listening", "addr", s.cfg.Listen, "version", Version)

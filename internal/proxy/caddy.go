@@ -69,6 +69,41 @@ func (c *Caddy) Current(ctx context.Context) (json.RawMessage, error) {
 	return c.call(ctx, "GET", "/config/", nil)
 }
 
+// IsLoaded reports whether Caddy currently has an active HTTP server config
+// (as opposed to the empty bootstrap Caddyfile with persist_config off).
+func (c *Caddy) IsLoaded(ctx context.Context) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://caddy/config/apps/http", nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return false, err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode >= 400 {
+		return false, fmt.Errorf("caddy GET /config/apps/http: %s", strings.TrimSpace(string(data)))
+	}
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return false, nil
+	}
+	var app struct {
+		Servers map[string]json.RawMessage `json:"servers"`
+	}
+	if err := json.Unmarshal(trimmed, &app); err != nil {
+		return false, err
+	}
+	return len(app.Servers) > 0, nil
+}
+
 // Site is one host block.
 type Site struct {
 	ID        int64
