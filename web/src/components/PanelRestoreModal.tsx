@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { ago, bytes, get, post, uploadForm } from '../api'
+import { useEffect, useRef, useState } from 'react'
+import { ago, bytes, get, isAbortError, post, uploadForm } from '../api'
 import { ErrorBox, Field, FilePicker, Icon, Loading, Modal, Select, useLoad } from './ui'
 
 export type PanelRestoreSummary = {
@@ -79,7 +79,7 @@ export function RestartWaitOverlay({ title = '正在恢复面板并重启…', p
   }, [prevBootId])
 
   return (
-    <Modal title={title} onClose={() => {}}>
+    <Modal title={title} closable={false} onClose={() => {}}>
       <div className="col" style={{ gap: 12 }}>
         {!timedOut ? (
           <>
@@ -114,6 +114,14 @@ export function PanelRestoreModal({ backup, initialSnapshot, onClose }: { backup
   const [err, setErr] = useState<unknown>()
   const [restarting, setRestarting] = useState(false)
   const [prevBootId, setPrevBootId] = useState<string | undefined>()
+  const abortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => () => { abortRef.current?.abort() }, [])
+
+  const handleClose = () => {
+    abortRef.current?.abort()
+    onClose()
+  }
 
   useEffect(() => {
     if (!fromRecord && !snapshot && snaps && snaps.length > 0) {
@@ -157,7 +165,13 @@ export function PanelRestoreModal({ backup, initialSnapshot, onClose }: { backup
         if (dryRun) fd.append('dryRun', '1')
         else fd.append('confirm', confirm.trim())
         setProgress(0)
-        res = await uploadForm('/system/panel-restore', fd, setProgress)
+        const ac = new AbortController()
+        abortRef.current = ac
+        try {
+          res = await uploadForm('/system/panel-restore', fd, setProgress, undefined, ac.signal)
+        } finally {
+          if (abortRef.current === ac) abortRef.current = null
+        }
       }
       if (dryRun) {
         setSummary(res.summary)
@@ -166,7 +180,7 @@ export function PanelRestoreModal({ backup, initialSnapshot, onClose }: { backup
         setRestarting(true)
       }
     } catch (e) {
-      setErr(e)
+      if (!isAbortError(e)) setErr(e)
     } finally {
       setBusy(false)
       setProgress(null)
@@ -184,10 +198,10 @@ export function PanelRestoreModal({ backup, initialSnapshot, onClose }: { backup
     <Modal
       title="恢复面板数据（panel.db）"
       wide
-      onClose={onClose}
+      onClose={handleClose}
       footer={
         <>
-          <button className="btn" disabled={busy} onClick={onClose}>取消</button>
+          <button className="btn" disabled={busy && progress == null} onClick={handleClose}>{progress != null ? '取消上传' : '取消'}</button>
           <span className="spacer" />
           <button className="btn" disabled={busy || !canCheck} onClick={() => runRequest(true)}>
             {busy && !summary?.keyMatched ? '检查中…' : summary ? '重新检查' : '检查备份'}

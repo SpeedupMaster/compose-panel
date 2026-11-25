@@ -196,11 +196,14 @@ function SiteModal({ s, onClose, onSaved }: { s: Site; onClose: () => void; onSa
   const [domains, setDomains] = useState(s.domains.join('\n'))
   const [mode, setMode] = useState<'project' | 'upstream' | 'redirect'>(s.kind === 'redirect' ? 'redirect' : s.projectId || !s.id ? 'project' : 'upstream')
   const [check, setCheck] = useState<any>(null)
+  const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<unknown>()
   const [adv, setAdv] = useState(!!(s.ipAllow || s.maxBody || s.headers || s.basicUser))
   const { data: proj } = useLoad(() => (f.projectId ? get<any>(`/projects/${f.projectId}`) : Promise.resolve(null)), [f.projectId])
   const services = [...new Set<string>((proj?.containers || []).map((c: any) => c.service).filter(Boolean))]
   const submit = async () => {
+    if (busy) return
+    setBusy(true)
     setErr(undefined)
     const body = { ...f, domains: domains.split(/[\s,]+/).filter(Boolean), kind: mode === 'redirect' ? 'redirect' : 'proxy', projectId: mode === 'project' ? f.projectId : 0, service: mode === 'project' ? f.service || services[0] || '' : '' }
     try {
@@ -210,6 +213,8 @@ function SiteModal({ s, onClose, onSaved }: { s: Site; onClose: () => void; onSa
       onSaved()
     } catch (e) {
       setErr(e)
+    } finally {
+      setBusy(false)
     }
   }
   const precheck = async () => {
@@ -222,7 +227,7 @@ function SiteModal({ s, onClose, onSaved }: { s: Site; onClose: () => void; onSa
     }
   }
   return (
-    <Modal title={s.id ? '编辑站点' : '添加站点'} wide onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" onClick={submit}>保存</button></>}>
+    <Modal title={s.id ? '编辑站点' : '添加站点'} wide onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" disabled={busy} onClick={submit}>{busy ? '保存中…' : '保存'}</button></>}>
       <Field label="域名" hint="每行一个；第一个域名用于检查 DNS">
         <textarea className="textarea mono" rows={2} value={domains} onChange={(e) => { setDomains(e.target.value); setCheck(null) }} placeholder="app.example.com" />
       </Field>

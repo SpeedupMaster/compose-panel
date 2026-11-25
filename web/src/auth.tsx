@@ -21,7 +21,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setMe(await get<Me>('/auth/me'))
       setUnreachable(false)
     } catch (e) {
-      if (e instanceof ApiError && e.status < 500) {
+      if (e instanceof ApiError && e.status > 0 && e.status < 500) {
         setMe(null)
         setUnreachable(false)
       } else {

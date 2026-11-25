@@ -62,13 +62,29 @@ export default function Certificates() {
 function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const toast = useToast()
   const [f, setF] = useState({ name: '', cert: '', key: '' })
+  const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<unknown>()
   const readFile = (k: 'cert' | 'key') => (file: File) => file.text().then((t) => setF((x) => ({ ...x, [k]: t })))
   const fieldHead = (title: string, accept: string, k: 'cert' | 'key') => (
     <span className="row wrap" style={{ justifyContent: 'space-between' }}>{title}<FileButton accept={accept} onFile={readFile(k)}>从文件读取</FileButton></span>
   )
+  const submit = async () => {
+    if (busy) return
+    setBusy(true)
+    setErr(undefined)
+    try {
+      const r = await post('/certificates', f)
+      toast.ok('已上传：' + (r.domains || []).join(', '))
+      if (r.warning) toast.err(r.warning)
+      onDone()
+    } catch (e) {
+      setErr(e)
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
-    <Modal title="上传证书" wide onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" onClick={async () => { try { const r = await post('/certificates', f); toast.ok('已上传：' + (r.domains || []).join(', ')); if (r.warning) toast.err(r.warning); onDone() } catch (e) { setErr(e) } }}>上传</button></>}>
+    <Modal title="上传证书" wide onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" disabled={busy} onClick={submit}>{busy ? '上传中…' : '上传'}</button></>}>
       <Field label="名称"><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="example.com 通配符" /></Field>
       <Field div label={fieldHead('证书链（PEM，fullchain）', '.pem,.crt,.cer', 'cert')}>
         <textarea className="textarea mono" rows={6} value={f.cert} onChange={(e) => setF({ ...f, cert: e.target.value })} placeholder="-----BEGIN CERTIFICATE-----" />

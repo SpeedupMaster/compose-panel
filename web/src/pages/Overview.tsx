@@ -3,6 +3,7 @@ import { ago, bytes, duration, get, pct } from '../api'
 import { MetricsPanel } from '../components/charts'
 import { Card, Empty, ErrorBox, JobStatus, Loading, Meter, Page, Status, useJobLog, useLoad } from '../components/ui'
 import { MobileCard, ResponsiveTable, joinInline } from '../components/ResponsiveList'
+import { triggerName } from '../components/shared'
 
 // Rows shown per list card; the API returns at most 8 deployments and jobs.
 const ROWS = 8
@@ -235,8 +236,4 @@ export default function Overview() {
       </div>
     </Page>
   )
-}
-
-export function triggerName(t: string) {
-  return ({ manual: '手动', webhook: 'Webhook', rollback: '回滚', create: '创建', api: 'API', import: '导入', image_update: '镜像自动更新' } as Record<string, string>)[t] || t
 }

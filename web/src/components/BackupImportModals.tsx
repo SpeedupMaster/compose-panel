@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { ago, bytes, post, qs, upload } from '../api'
+import { useEffect, useRef, useState } from 'react'
+import { ago, bytes, isAbortError, post, qs, upload } from '../api'
 import { BackupKind, formatLabels, inferUploadMeta, kindLabels } from './backupMeta'
 import { useStorages } from './backup'
 import { MobileCard, ResponsiveTable } from './ResponsiveList'
@@ -18,6 +18,14 @@ export function ImportUploadModal({ onClose, onImported }: { onClose: () => void
   const [openRestore, setOpenRestore] = useState(true)
   const [progress, setProgress] = useState<number | null>(null)
   const [err, setErr] = useState<unknown>()
+  const abortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => () => { abortRef.current?.abort() }, [])
+
+  const handleClose = () => {
+    abortRef.current?.abort()
+    onClose()
+  }
 
   const sid = storageId || storages?.[0]?.id || 0
 
@@ -39,22 +47,26 @@ export function ImportUploadModal({ onClose, onImported }: { onClose: () => void
   }
 
   const submit = async () => {
-    if (!file || !sid) return
+    if (!file || !sid || progress != null) return
     setErr(undefined)
     setProgress(0)
+    const ac = new AbortController()
+    abortRef.current = ac
     try {
       const res = await upload<{ backup: any }>(
         'POST',
         '/backups/import/upload' + qs({ name: file.name, storageId: sid, kind, format, label: label.trim() || undefined }),
         file,
         setProgress,
+        ac.signal,
       )
       toast.ok('备份文件已导入')
       onImported(res.backup, openRestore)
       onClose()
     } catch (e) {
-      setErr(e)
+      if (!isAbortError(e)) setErr(e)
     } finally {
+      if (abortRef.current === ac) abortRef.current = null
       setProgress(null)
     }
   }
@@ -63,10 +75,10 @@ export function ImportUploadModal({ onClose, onImported }: { onClose: () => void
     <Modal
       title="上传外部备份文件"
       wide
-      onClose={onClose}
+      onClose={handleClose}
       footer={
         <>
-          <button className="btn" disabled={progress != null} onClick={onClose}>取消</button>
+          <button className="btn" onClick={handleClose}>{progress != null ? '取消上传' : '取消'}</button>
           <button className="btn btn-primary" disabled={!file || !sid || !format || progress != null} onClick={submit}>
             <Icon name="upload" size={16} />{progress != null ? `上传中 ${progress}%` : openRestore ? '上传并恢复' : '开始上传'}
           </button>

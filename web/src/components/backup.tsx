@@ -36,9 +36,13 @@ export function BackupNowModal({ source, onClose, onDone }: { source?: BackupSou
   const [src, setSrc] = useState<BackupSource>(source || { kind: 'database' })
   const [storageId, setStorageId] = useState(0)
   const [encrypt, setEncrypt] = useState(true)
+  const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<unknown>()
   const sid = storageId || storages?.[0]?.id
   const submit = async () => {
+    if (busy || !sid) return
+    setBusy(true)
+    setErr(undefined)
     try {
       const r = await post('/backups/run', { source: src, storageId: sid, encrypt })
       openJob(r.jobId, '立即备份')
@@ -46,10 +50,12 @@ export function BackupNowModal({ source, onClose, onDone }: { source?: BackupSou
       onClose()
     } catch (e) {
       setErr(e)
+    } finally {
+      setBusy(false)
     }
   }
   return (
-    <Modal title="立即备份" onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" disabled={!sid} onClick={submit}>开始备份</button></>}>
+    <Modal title="立即备份" onClose={onClose} footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" disabled={busy || !sid} onClick={submit}>{busy ? '提交中…' : '开始备份'}</button></>}>
       {source ? <div>备份对象：<b>{sourceText(source)}</b></div> : <SourcePicker value={src} onChange={setSrc} sources={sources} />}
       <Field label="存储位置">
         <Select value={sid || ''} onChange={(v) => setStorageId(Number(v))}>

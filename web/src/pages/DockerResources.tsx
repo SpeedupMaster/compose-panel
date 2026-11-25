@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ago, bytes, del, get, post } from '../api'
 import { useCan } from '../auth'
 import { Card, Combobox, ComboOption, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Status, Tabs, useLoad, useToast } from '../components/ui'
-import { portsText } from './ProjectDetail'
+import { portsText } from '../components/shared'
 import { FileBrowser } from '../components/files'
 import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
 

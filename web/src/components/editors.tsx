@@ -16,19 +16,23 @@ export function CodeArea({ value, onChange, onSubmit, rows = 22, readOnly, place
 
   useEffect(() => {
     let dead = false
-    import('./codemirror').then(({ createEditor }) => {
-      if (dead || !host.current) return
-      ed.current = createEditor(host.current, {
-        value: latest.current.value,
-        lang,
-        readOnly: latest.current.readOnly,
-        placeholder,
-        label,
-        onChange: (v) => latest.current.onChange?.(v),
-        onSubmit: onSubmit ? () => latest.current.onSubmit?.() : undefined,
+    import('./codemirror')
+      .then(({ createEditor }) => {
+        if (dead || !host.current) return
+        ed.current = createEditor(host.current, {
+          value: latest.current.value,
+          lang,
+          readOnly: latest.current.readOnly,
+          placeholder,
+          label,
+          onChange: (v) => latest.current.onChange?.(v),
+          onSubmit: onSubmit ? () => latest.current.onSubmit?.() : undefined,
+        })
+        setReady(true)
       })
-      setReady(true)
-    })
+      .catch(() => {
+        // Keep the plain <textarea> fallback active if the CodeMirror chunk fails to load.
+      })
     return () => {
       dead = true
       ed.current?.destroy()

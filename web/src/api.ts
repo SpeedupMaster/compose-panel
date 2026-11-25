@@ -8,6 +8,31 @@ export class ApiError extends Error {
   }
 }
 
+export function isAbortError(err: unknown): boolean {
+  return (err instanceof DOMException || err instanceof Error) && err.name === 'AbortError'
+}
+
+// Sanitizes non-JSON error bodies (such as reverse-proxy 502 HTML pages) so raw markup is never
+// rendered directly into UI alerts or toasts.
+export function sanitizeErrorText(text: string, status: number, statusText?: string): string {
+  const trimmed = text.trimStart()
+  if (!trimmed) return statusText || `HTTP ${status}`
+  if (trimmed.startsWith('<')) return `HTTP ${status} ${statusText || '网关错误'}`.trim()
+  return text
+}
+
+export function parseResponseBody(text: string, status: number, statusText?: string): { data: any; errorMessage: string } {
+  if (!text) return { data: null, errorMessage: statusText || `HTTP ${status}` }
+  try {
+    const data = JSON.parse(text)
+    const msg = (data && typeof data.error === 'string' && data.error) || statusText || `HTTP ${status}`
+    return { data, errorMessage: msg }
+  } catch {
+    const msg = sanitizeErrorText(text, status, statusText)
+    return { data: { error: msg }, errorMessage: msg }
+  }
+}
+
 type Listener = () => void
 const unauthorized = new Set<Listener>()
 export function onUnauthorized(fn: Listener) {
@@ -15,25 +40,32 @@ export function onUnauthorized(fn: Listener) {
   return () => unauthorized.delete(fn)
 }
 
+function notifyUnauthorized(path: string) {
+  if (!path.startsWith('/auth/') && !path.startsWith('/setup')) {
+    unauthorized.forEach((f) => f())
+  }
+}
+
 export async function api<T = any>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = { 'X-Panel': '1' }
   if (body !== undefined) headers['Content-Type'] = 'application/json'
-  const res = await fetch('/api' + path, {
-    method,
-    headers,
-    credentials: 'same-origin',
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
-  const text = await res.text()
-  let data: any = null
+  let res: Response
   try {
-    data = text ? JSON.parse(text) : null
-  } catch {
-    data = { error: text }
+    res = await fetch('/api' + path, {
+      method,
+      headers,
+      credentials: 'same-origin',
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+  } catch (e) {
+    if (isAbortError(e)) throw e
+    throw new ApiError(0, '网络错误，无法连接面板')
   }
+  const text = await res.text()
+  const { data, errorMessage } = parseResponseBody(text, res.status, res.statusText)
   if (!res.ok) {
-    if (res.status === 401 && !path.startsWith('/auth/') && !path.startsWith('/setup')) unauthorized.forEach((f) => f())
-    throw new ApiError(res.status, (data && data.error) || res.statusText)
+    if (res.status === 401) notifyUnauthorized(path)
+    throw new ApiError(res.status, errorMessage)
   }
   return data as T
 }
@@ -44,8 +76,19 @@ export const put = <T = any>(p: string, b: unknown = {}) => api<T>('PUT', p, b)
 export const del = <T = any>(p: string) => api<T>('DELETE', p)
 
 // Server-Sent Events stream of text lines; returns a function that closes it.
-export function streamLines(path: string, onLine: (l: string) => void, onEnd?: (data: string) => void): () => void {
+// When EventSource reconnects after a network drop, onReset fires before replayed lines arrive
+// so callers can clear their buffer instead of duplicating the stream from byte 0.
+export function streamLines(
+  path: string,
+  onLine: (l: string) => void,
+  onEnd?: (data: string) => void,
+  onReset?: () => void,
+): () => void {
   const es = new EventSource('/api' + path, { withCredentials: true })
+  let opens = 0
+  es.onopen = () => {
+    if (opens++ > 0) onReset?.()
+  }
   es.onmessage = (e) => onLine(e.data)
   es.addEventListener('end', (e) => {
     es.close()
@@ -109,53 +152,99 @@ export function pct(a: number, b: number) {
   return Math.min(100, Math.round((a / b) * 100))
 }
 
-// Uploads a raw file body (PUT/POST) with progress; resolves with the JSON response.
-export function upload<T = any>(method: 'PUT' | 'POST', path: string, file: Blob, onProgress?: (pct: number) => void): Promise<T> {
+function xhrUpload<T = any>({
+  method,
+  path,
+  body,
+  headers,
+  onProgress,
+  signal,
+  networkError,
+}: {
+  method: 'PUT' | 'POST'
+  path: string
+  body: Blob | FormData
+  headers?: Record<string, string>
+  onProgress?: (pct: number) => void
+  signal?: AbortSignal
+  networkError: string
+}): Promise<T> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('请求已取消', 'AbortError'))
+      return
+    }
     const xhr = new XMLHttpRequest()
+    const onAbort = () => xhr.abort()
+    const cleanup = () => signal?.removeEventListener('abort', onAbort)
+    signal?.addEventListener('abort', onAbort, { once: true })
+
     xhr.open(method, '/api' + path)
     xhr.withCredentials = true
     xhr.setRequestHeader('X-Panel', '1')
-    xhr.setRequestHeader('Content-Type', 'application/octet-stream')
-    if (onProgress) xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 100))
-    xhr.onload = () => {
-      let data: any = null
-      try {
-        data = xhr.responseText ? JSON.parse(xhr.responseText) : null
-      } catch {
-        data = { error: xhr.responseText }
-      }
-      if (xhr.status >= 200 && xhr.status < 300) resolve(data as T)
-      else reject(new ApiError(xhr.status, (data && data.error) || xhr.statusText))
+    if (headers) {
+      for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v)
     }
-    xhr.onerror = () => reject(new ApiError(0, '网络错误，上传失败'))
-    xhr.send(file)
+    if (onProgress) {
+      xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 100))
+    }
+    xhr.onload = () => {
+      cleanup()
+      const { data, errorMessage } = parseResponseBody(xhr.responseText, xhr.status, xhr.statusText)
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data as T)
+      } else {
+        if (xhr.status === 401) notifyUnauthorized(path)
+        reject(new ApiError(xhr.status, errorMessage))
+      }
+    }
+    xhr.onerror = () => {
+      cleanup()
+      reject(new ApiError(0, networkError))
+    }
+    xhr.onabort = () => {
+      cleanup()
+      reject(new DOMException('请求已取消', 'AbortError'))
+    }
+    xhr.send(body)
+  })
+}
+
+// Uploads a raw file body (PUT/POST) with progress; resolves with the JSON response.
+export function upload<T = any>(
+  method: 'PUT' | 'POST',
+  path: string,
+  file: Blob,
+  onProgress?: (pct: number) => void,
+  signal?: AbortSignal,
+): Promise<T> {
+  return xhrUpload<T>({
+    method,
+    path,
+    body: file,
+    headers: { 'Content-Type': 'application/octet-stream' },
+    onProgress,
+    signal,
+    networkError: '网络错误，上传失败',
   })
 }
 
 // Uploads a multipart FormData payload with progress; resolves with the JSON response.
-export function uploadForm<T = any>(path: string, form: FormData, onProgress?: (pct: number) => void, extraHeaders?: Record<string, string>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest()
-    xhr.open('POST', '/api' + path)
-    xhr.withCredentials = true
-    xhr.setRequestHeader('X-Panel', '1')
-    if (extraHeaders) {
-      for (const [k, v] of Object.entries(extraHeaders)) xhr.setRequestHeader(k, v)
-    }
-    if (onProgress) xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 100))
-    xhr.onload = () => {
-      let data: any = null
-      try {
-        data = xhr.responseText ? JSON.parse(xhr.responseText) : null
-      } catch {
-        data = { error: xhr.responseText }
-      }
-      if (xhr.status >= 200 && xhr.status < 300) resolve(data as T)
-      else reject(new ApiError(xhr.status, (data && data.error) || xhr.statusText))
-    }
-    xhr.onerror = () => reject(new ApiError(0, '网络错误，请求失败'))
-    xhr.send(form)
+export function uploadForm<T = any>(
+  path: string,
+  form: FormData,
+  onProgress?: (pct: number) => void,
+  extraHeaders?: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<T> {
+  return xhrUpload<T>({
+    method: 'POST',
+    path,
+    body: form,
+    headers: extraHeaders,
+    onProgress,
+    signal,
+    networkError: '网络错误，请求失败',
   })
 }
 
