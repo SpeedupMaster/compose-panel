@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -18,6 +20,8 @@ const (
 	metricsRetention = 7 * 24 * time.Hour
 	jobsRetention    = 30 * 24 * time.Hour
 )
+
+var orphanTempMaxAge = 6 * time.Hour
 
 var caddyStartRetryDelays = []time.Duration{
 	time.Second,
@@ -87,6 +91,61 @@ func (s *Server) resyncCaddyAfterStart(ctx context.Context) {
 	}
 }
 
+func (s *Server) cleanupOrphans(ctx context.Context) {
+	now := time.Now()
+	// 1. Delete stale temp files/dirs in DataDir/tmp/* older than orphanTempMaxAge.
+	tmpDir := filepath.Join(s.cfg.DataDir, "tmp")
+	if entries, err := os.ReadDir(tmpDir); err == nil {
+		for _, entry := range entries {
+			if ctx.Err() != nil {
+				return
+			}
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			if now.Sub(info.ModTime()) > orphanTempMaxAge {
+				_ = os.RemoveAll(filepath.Join(tmpDir, entry.Name()))
+			}
+		}
+	}
+	// 2. Delete stale DataDir/panel-snapshot-*.db files older than orphanTempMaxAge.
+	if snaps, err := filepath.Glob(filepath.Join(s.cfg.DataDir, "panel-snapshot-*.db")); err == nil {
+		for _, p := range snaps {
+			if ctx.Err() != nil {
+				return
+			}
+			if fi, err := os.Stat(p); err == nil && now.Sub(fi.ModTime()) > orphanTempMaxAge {
+				_ = os.Remove(p)
+			}
+		}
+	}
+	// 3. Remove orphaned Docker containers & volumes with label panel.drill=1 when no drill job is live.
+	if s.dk == nil || (s.jobs != nil && s.jobs.HasLiveKind("backup.drill")) {
+		return
+	}
+	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if cs, err := s.dk.ListContainers(dctx, true, map[string][]string{"label": {"panel.drill=1"}}); err == nil {
+		for _, c := range cs {
+			if dctx.Err() != nil || (s.jobs != nil && s.jobs.HasLiveKind("backup.drill")) {
+				return
+			}
+			_ = s.dk.RemoveContainerWithVolumes(dctx, c.Id, true, true)
+		}
+	}
+	if vols, err := s.dk.ListVolumes(dctx); err == nil {
+		for _, v := range vols {
+			if dctx.Err() != nil || (s.jobs != nil && s.jobs.HasLiveKind("backup.drill")) {
+				return
+			}
+			if v.Labels["panel.drill"] == "1" {
+				_ = s.dk.RemoveVolume(dctx, v.Name)
+			}
+		}
+	}
+}
+
 func (s *Server) housekeep(ctx context.Context) {
 	now := time.Now()
 	_, _ = s.db.ExecContext(ctx, `DELETE FROM metrics WHERE ts < ?`, now.Add(-metricsRetention).Unix())
@@ -94,6 +153,7 @@ func (s *Server) housekeep(ctx context.Context) {
 	if s.jobs != nil {
 		s.jobs.Prune(jobsRetention)
 	}
+	s.cleanupOrphans(ctx)
 }
 
 // metricsLoop samples host and container resource usage once a minute.
@@ -137,47 +197,55 @@ func (s *Server) metricsLoop(ctx context.Context) {
 
 func (s *Server) sampleMetrics(ctx context.Context, ts int64) {
 	hs := hostStats(s.cfg.DataDir)
-	_, _ = s.db.Exec(`INSERT OR REPLACE INTO metrics(ts,name,project,cpu,mem,mem_limit,disk,net_rx,net_tx) VALUES(?,?,?,?,?,?,?,?,?)`,
-		ts, "host", "", hs.CPUPercent, hs.MemUsed, hs.MemTotal, hs.DiskUsed, hs.DiskTotal, 0)
 
-	lctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	cs, err := s.dk.ListContainers(lctx, false, nil)
-	cancel()
-	if err != nil {
-		return
-	}
 	type row struct {
 		name, project string
 		st            *docker.Stats
 	}
-	var mu sync.Mutex
 	var rows []row
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 8)
-	for _, c := range cs {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(c docker.Container) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			sctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			defer cancel()
-			st, err := s.dk.ContainerStats(sctx, c.Id)
-			if err != nil {
-				return
+	lctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	cs, err := s.dk.ListContainers(lctx, false, nil)
+	cancel()
+	if err == nil {
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, 8)
+	loop:
+		for _, c := range cs {
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				break loop
 			}
-			mu.Lock()
-			rows = append(rows, row{c.Name(), c.Labels["com.docker.compose.project"], st})
-			mu.Unlock()
-		}(c)
+			wg.Add(1)
+			go func(c docker.Container) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				sctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				defer cancel()
+				st, err := s.dk.ContainerStats(sctx, c.Id)
+				if err != nil {
+					return
+				}
+				mu.Lock()
+				rows = append(rows, row{c.Name(), c.Labels["com.docker.compose.project"], st})
+				mu.Unlock()
+			}(c)
+		}
+		wg.Wait()
 	}
-	wg.Wait()
-	tx, err := s.db.Begin()
+	if ctx.Err() != nil {
+		return
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return
 	}
+	defer tx.Rollback()
+	_, _ = tx.ExecContext(ctx, `INSERT OR REPLACE INTO metrics(ts,name,project,cpu,mem,mem_limit,disk,net_rx,net_tx) VALUES(?,?,?,?,?,?,?,?,?)`,
+		ts, "host", "", hs.CPUPercent, hs.MemUsed, hs.MemTotal, hs.DiskUsed, hs.DiskTotal, 0)
 	for _, r := range rows {
-		_, _ = tx.Exec(`INSERT OR REPLACE INTO metrics(ts,name,project,cpu,mem,mem_limit,net_rx,net_tx,blk_r,blk_w) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		_, _ = tx.ExecContext(ctx, `INSERT OR REPLACE INTO metrics(ts,name,project,cpu,mem,mem_limit,net_rx,net_tx,blk_r,blk_w) VALUES(?,?,?,?,?,?,?,?,?,?)`,
 			ts, r.name, r.project, r.st.CPUPercent, r.st.MemUsage, r.st.MemLimit, r.st.NetRx, r.st.NetTx, r.st.BlockRead, r.st.BlockWrite)
 	}
 	_ = tx.Commit()

@@ -48,6 +48,16 @@ var identRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
 
 func ValidIdent(s string) bool { return identRe.MatchString(s) }
 
+var hostRe = regexp.MustCompile(`^[a-zA-Z0-9._%:-]{1,255}$`)
+
+// ValidHost validates a MySQL/MariaDB user host pattern (e.g. %, localhost, 10.0.0.%, ::1).
+func ValidHost(s string) bool { return hostRe.MatchString(s) }
+
+func mysqlString(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `'`, `''`)
+	return "'" + r.Replace(s) + "'"
+}
+
 // DefaultImage is the official image for this engine at version.
 func (e Engine) DefaultImage(version string) string {
 	return strings.ReplaceAll(e.Image, "{v}", version)
@@ -208,6 +218,10 @@ func (c Client) exec() Exec {
 		return Exec{Docker: c.Docker, Container: c.Container, Env: []string{"MYSQL_PWD=" + c.Password}}
 	case "postgres":
 		return Exec{Docker: c.Docker, Container: c.Container, Env: []string{"PGPASSWORD=" + c.Password}}
+	case "redis":
+		if c.Password != "" {
+			return Exec{Docker: c.Docker, Container: c.Container, Env: []string{"REDISCLI_AUTH=" + c.Password}}
+		}
 	}
 	return Exec{Docker: c.Docker, Container: c.Container}
 }
@@ -253,7 +267,7 @@ func (c Client) Query(ctx context.Context, database, sql string, readOnly bool) 
 		if readOnly {
 			input = "SET SESSION TRANSACTION READ ONLY;\nSTART TRANSACTION;\n" + strings.TrimRight(strings.TrimSpace(sql), ";") + ";\nROLLBACK;\n"
 		}
-		out, err := c.exec().Output(ctx, input, c.mysqlBin(), "-uroot", "--batch", "--raw", "-D", database)
+		out, err := c.exec().Output(ctx, input, c.mysqlBin(), "-uroot", "--batch", "-D", database)
 		if err != nil {
 			return nil, err
 		}
@@ -279,15 +293,59 @@ func parseCSV(s string, sep rune) (*Result, error) {
 	return res, nil
 }
 
+func unescapeMySQLTSV(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			switch s[i+1] {
+			case 't':
+				b.WriteByte('\t')
+				i++
+				continue
+			case 'n':
+				b.WriteByte('\n')
+				i++
+				continue
+			case '\\':
+				b.WriteByte('\\')
+				i++
+				continue
+			case '0':
+				b.WriteByte(0)
+				i++
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
 func parseTSV(s string) *Result {
 	res := &Result{Columns: []string{}, Rows: [][]string{}}
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	trimmed := strings.TrimRight(s, "\n")
+	if trimmed == "" {
+		return res
+	}
+	lines := strings.Split(trimmed, "\n")
 	if len(lines) == 0 || lines[0] == "" {
 		return res
 	}
-	res.Columns = strings.Split(lines[0], "\t")
+	cols := strings.Split(strings.TrimSuffix(lines[0], "\r"), "\t")
+	for i, c := range cols {
+		cols[i] = unescapeMySQLTSV(c)
+	}
+	res.Columns = cols
 	for _, l := range lines[1:] {
-		res.Rows = append(res.Rows, strings.Split(l, "\t"))
+		fields := strings.Split(strings.TrimSuffix(l, "\r"), "\t")
+		for i, f := range fields {
+			fields[i] = unescapeMySQLTSV(f)
+		}
+		res.Rows = append(res.Rows, fields)
 	}
 	return res
 }
@@ -354,7 +412,7 @@ func (c Client) ListDatabases(ctx context.Context) ([]Database, error) {
 			out = append(out, Database{Name: d.Name, Size: int64(d.SizeOnDisk)})
 		}
 	case "redis":
-		s, err := c.exec().Output(ctx, "", "redis-cli", "-a", c.Password, "--no-auth-warning", "INFO", "keyspace")
+		s, err := c.exec().Output(ctx, "", "redis-cli", "INFO", "keyspace")
 		if err != nil {
 			return nil, err
 		}
@@ -374,10 +432,13 @@ func (c Client) CreateDatabase(ctx context.Context, name, user, password string)
 	if !ValidIdent(name) || (user != "" && !ValidIdent(user)) {
 		return fmt.Errorf("名称只能包含字母、数字和下划线，且不能以数字开头")
 	}
+	if strings.ContainsRune(password, 0) {
+		return fmt.Errorf("密码包含无效字符")
+	}
 	switch c.Engine {
 	case "postgres":
 		if user != "" {
-			if _, err := c.rows(ctx, "postgres", fmt.Sprintf(`CREATE ROLE "%s" LOGIN PASSWORD '%s'`, user, password)); err != nil && !strings.Contains(err.Error(), "already exists") {
+			if _, err := c.rows(ctx, "postgres", fmt.Sprintf(`CREATE ROLE "%s" LOGIN PASSWORD %s`, user, sqlString(password))); err != nil && !strings.Contains(err.Error(), "already exists") {
 				return err
 			}
 			_, err := c.rows(ctx, "postgres", fmt.Sprintf(`CREATE DATABASE "%s" OWNER "%s"`, name, user))
@@ -388,7 +449,7 @@ func (c Client) CreateDatabase(ctx context.Context, name, user, password string)
 	case "mysql", "mariadb":
 		sql := fmt.Sprintf("CREATE DATABASE `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;", name)
 		if user != "" {
-			sql += fmt.Sprintf("CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED BY '%s'; GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'%%'; FLUSH PRIVILEGES;", user, password, name, user)
+			sql += fmt.Sprintf("CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED BY %s; GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'%%'; FLUSH PRIVILEGES;", user, mysqlString(password), name, user)
 		}
 		_, err := c.rows(ctx, "mysql", sql)
 		return err
@@ -448,6 +509,9 @@ func (c Client) CreateUser(ctx context.Context, user, password string, databases
 	if !ValidIdent(user) {
 		return fmt.Errorf("用户名不合法")
 	}
+	if strings.ContainsRune(password, 0) {
+		return fmt.Errorf("密码包含无效字符")
+	}
 	for _, d := range databases {
 		if !ValidIdent(d) {
 			return fmt.Errorf("库名不合法")
@@ -455,7 +519,7 @@ func (c Client) CreateUser(ctx context.Context, user, password string, databases
 	}
 	switch c.Engine {
 	case "postgres":
-		if _, err := c.rows(ctx, "postgres", fmt.Sprintf(`CREATE ROLE "%s" LOGIN PASSWORD '%s'`, user, password)); err != nil {
+		if _, err := c.rows(ctx, "postgres", fmt.Sprintf(`CREATE ROLE "%s" LOGIN PASSWORD %s`, user, sqlString(password))); err != nil {
 			return err
 		}
 		for _, d := range databases {
@@ -471,7 +535,7 @@ func (c Client) CreateUser(ctx context.Context, user, password string, databases
 		}
 		return nil
 	case "mysql", "mariadb":
-		sql := fmt.Sprintf("CREATE USER '%s'@'%%' IDENTIFIED BY '%s';", user, password)
+		sql := fmt.Sprintf("CREATE USER '%s'@'%%' IDENTIFIED BY %s;", user, mysqlString(password))
 		priv := "ALL PRIVILEGES"
 		if readOnly {
 			priv = "SELECT, SHOW VIEW"
@@ -490,15 +554,21 @@ func (c Client) SetPassword(ctx context.Context, user, host, password string) er
 	if !ValidIdent(user) {
 		return fmt.Errorf("用户名不合法")
 	}
+	if strings.ContainsRune(password, 0) {
+		return fmt.Errorf("密码包含无效字符")
+	}
 	switch c.Engine {
 	case "postgres":
-		_, err := c.rows(ctx, "postgres", fmt.Sprintf(`ALTER ROLE "%s" PASSWORD '%s'`, user, password))
+		_, err := c.rows(ctx, "postgres", fmt.Sprintf(`ALTER ROLE "%s" PASSWORD %s`, user, sqlString(password)))
 		return err
 	case "mysql", "mariadb":
 		if host == "" {
 			host = "%"
 		}
-		_, err := c.rows(ctx, "mysql", fmt.Sprintf("ALTER USER '%s'@'%s' IDENTIFIED BY '%s'; FLUSH PRIVILEGES;", user, strings.ReplaceAll(host, "'", ""), password))
+		if !ValidHost(host) {
+			return fmt.Errorf("主机名不合法")
+		}
+		_, err := c.rows(ctx, "mysql", fmt.Sprintf("ALTER USER '%s'@'%s' IDENTIFIED BY %s; FLUSH PRIVILEGES;", user, host, mysqlString(password)))
 		return err
 	}
 	return fmt.Errorf("不支持")
@@ -516,7 +586,10 @@ func (c Client) DropUser(ctx context.Context, user, host string) error {
 		if host == "" {
 			host = "%"
 		}
-		_, err := c.rows(ctx, "mysql", fmt.Sprintf("DROP USER '%s'@'%s'", user, strings.ReplaceAll(host, "'", "")))
+		if !ValidHost(host) {
+			return fmt.Errorf("主机名不合法")
+		}
+		_, err := c.rows(ctx, "mysql", fmt.Sprintf("DROP USER '%s'@'%s'", user, host))
 		return err
 	}
 	return fmt.Errorf("不支持")
@@ -632,7 +705,7 @@ func (c Client) DumpCmd(database string) (ExecSpec, string, error) {
 	case "mongo":
 		return e.Spec(false, "mongodump", "--archive", "-u", "root", "-p", c.Password, "--authenticationDatabase", "admin", "--db", database), "archive", nil
 	case "redis":
-		return e.Spec(false, "sh", "-c", `redis-cli -a "$REDIS_PASSWORD" --no-auth-warning --rdb /tmp/panel-dump.rdb >/dev/null && cat /tmp/panel-dump.rdb && rm -f /tmp/panel-dump.rdb`), "rdb", nil
+		return e.Spec(false, "sh", "-c", `tmp="/tmp/panel-dump-$$.rdb"; trap 'rm -f "$tmp"' EXIT; redis-cli --rdb "$tmp" >/dev/null && cat "$tmp"`), "rdb", nil
 	}
 	return ExecSpec{}, "", fmt.Errorf("unknown engine")
 }

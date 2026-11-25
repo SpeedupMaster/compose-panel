@@ -445,12 +445,48 @@ func (g *GDrive) initiateResumable(ctx context.Context, parentID, fileName, exis
 	return loc, nil
 }
 
+var gdriveRetryBackoffs = []time.Duration{
+	500 * time.Millisecond,
+	1500 * time.Millisecond,
+	3000 * time.Millisecond,
+}
+
+func isRetryableDriveStatus(code int) bool {
+	switch code {
+	case http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
 func (g *GDrive) uploadChunk(ctx context.Context, sessionURL string, data []byte, contentRange string) (int, error) {
-	for attempt := 0; attempt < 2; attempt++ {
-		tok, err := g.accessToken(ctx, attempt > 0)
+	forceRefresh := false
+	refreshed := false
+	retries := 0
+	for {
+		tok, err := g.accessToken(ctx, forceRefresh)
 		if err != nil {
 			return 0, err
 		}
+		forceRefresh = false
 		var body io.Reader
 		if len(data) > 0 {
 			body = bytes.NewReader(data)
@@ -465,10 +501,20 @@ func (g *GDrive) uploadChunk(ctx context.Context, sessionURL string, data []byte
 		req.Header.Set("Content-Range", contentRange)
 		resp, err := g.hc.Do(req)
 		if err != nil {
-			return 0, err
+			if ctx.Err() != nil || retries >= len(gdriveRetryBackoffs) {
+				return 0, err
+			}
+			if serr := sleepWithContext(ctx, gdriveRetryBackoffs[retries]); serr != nil {
+				return 0, serr
+			}
+			retries++
+			continue
 		}
-		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
+		if resp.StatusCode == http.StatusUnauthorized && !refreshed {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 			resp.Body.Close()
+			refreshed = true
+			forceRefresh = true
 			continue
 		}
 		if resp.StatusCode == 308 || (resp.StatusCode >= 200 && resp.StatusCode < 300) {
@@ -476,9 +522,17 @@ func (g *GDrive) uploadChunk(ctx context.Context, sessionURL string, data []byte
 			resp.Body.Close()
 			return resp.StatusCode, nil
 		}
+		if isRetryableDriveStatus(resp.StatusCode) && retries < len(gdriveRetryBackoffs) {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+			resp.Body.Close()
+			if serr := sleepWithContext(ctx, gdriveRetryBackoffs[retries]); serr != nil {
+				return resp.StatusCode, serr
+			}
+			retries++
+			continue
+		}
 		return resp.StatusCode, parseDriveError(resp)
 	}
-	return 0, fmt.Errorf("Google Drive 上传认证失败")
 }
 
 func (g *GDrive) Put(ctx context.Context, key string, r io.Reader) (int64, error) {

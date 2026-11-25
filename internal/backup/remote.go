@@ -72,33 +72,64 @@ func NewSFTP(c TargetConfig) (*SFTP, error) {
 }
 
 type sftpConn struct {
-	ssh *ssh.Client
+	ssh     *ssh.Client
 	*sftp.Client
+	stopCtx func() bool
 }
 
 func (s *sftpConn) Close() error {
+	if s.stopCtx != nil {
+		s.stopCtx()
+	}
 	s.Client.Close()
 	return s.ssh.Close()
 }
 
 func (s *SFTP) dial(ctx context.Context) (*sftpConn, error) {
-	d := net.Dialer{Timeout: 15 * time.Second}
+	d := net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
 	nc, err := d.DialContext(ctx, "tcp", s.addr)
 	if err != nil {
 		return nil, err
 	}
+	stop := context.AfterFunc(ctx, func() {
+		_ = nc.Close()
+	})
+	handshakeDeadline := time.Now().Add(15 * time.Second)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(handshakeDeadline) {
+		handshakeDeadline = dl
+	}
+	_ = nc.SetDeadline(handshakeDeadline)
 	c, chans, reqs, err := ssh.NewClientConn(nc, s.addr, s.cfg)
 	if err != nil {
-		nc.Close()
+		stop()
+		_ = nc.Close()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 	sc := ssh.NewClient(c, chans, reqs)
 	cl, err := sftp.NewClient(sc, sftp.UseConcurrentWrites(true))
 	if err != nil {
-		sc.Close()
+		stop()
+		_ = sc.Close()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
-	return &sftpConn{ssh: sc, Client: cl}, nil
+	if dl, ok := ctx.Deadline(); ok {
+		_ = nc.SetDeadline(dl)
+	} else {
+		_ = nc.SetDeadline(time.Time{})
+	}
+	if ctx.Err() != nil {
+		stop()
+		_ = cl.Close()
+		_ = sc.Close()
+		return nil, ctx.Err()
+	}
+	return &sftpConn{ssh: sc, Client: cl, stopCtx: stop}, nil
 }
 
 func (s *SFTP) path(key string) string { return path.Join(s.root, path.Clean("/"+key)) }

@@ -11,16 +11,20 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"compose-panel/internal/auth"
 )
 
+const maxPartialLine = 64 << 10
+
 type Manager struct {
 	db  *sql.DB
 	dir string
 	sem chan struct{}
+	wg  sync.WaitGroup
 
 	mu     sync.Mutex
 	locks  map[string]*sync.Mutex
@@ -40,10 +44,12 @@ func New(db *sql.DB, dir string, concurrency int) (*Manager, error) {
 // Run is the handle a job function uses to report progress and log output.
 type Run struct {
 	ID     string
+	kind   string
 	title  string
 	m      *Manager
 	ctx    context.Context
 	cancel context.CancelFunc
+	doneCh chan struct{}
 
 	mu     sync.Mutex
 	file   *os.File
@@ -62,19 +68,30 @@ func (r *Run) Write(p []byte) (int, error) {
 	r.buf = append(r.buf, p...)
 	for {
 		i := bytes.IndexByte(r.buf, '\n')
-		if i < 0 {
-			break
+		if i >= 0 {
+			line := r.buf[:i]
+			r.buf = r.buf[i+1:]
+			r.emitLocked(line)
+			continue
 		}
-		line := r.buf[:i]
-		r.buf = r.buf[i+1:]
-		r.emitLocked(line)
+		if len(r.buf) >= maxPartialLine {
+			line := r.buf[:maxPartialLine]
+			r.buf = r.buf[maxPartialLine:]
+			r.emitLocked(line)
+			continue
+		}
+		break
 	}
 	if len(r.buf) == 0 {
-		if cap(r.buf) > 64<<10 {
+		if cap(r.buf) > maxPartialLine {
 			r.buf = nil
 		} else {
 			r.buf = r.buf[:0]
 		}
+	} else if cap(r.buf) > maxPartialLine*2 && len(r.buf) < maxPartialLine {
+		cp := make([]byte, len(r.buf))
+		copy(cp, r.buf)
+		r.buf = cp
 	}
 	return len(p), nil
 }
@@ -147,11 +164,54 @@ func (m *Manager) Unfreeze() {
 	m.mu.Unlock()
 }
 
+// HasLiveKind reports whether any currently queued or running job has the given kind.
+func (m *Manager) HasLiveKind(kind string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, r := range m.live {
+		if r.kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// Close freezes new submissions, cancels all active jobs, and waits up to timeout
+// for running job goroutines to finish before shutting down the database.
+func (m *Manager) Close(timeout time.Duration) {
+	m.mu.Lock()
+	m.frozen = true
+	cancels := make([]context.CancelFunc, 0, len(m.live))
+	for _, r := range m.live {
+		cancels = append(cancels, r.cancel)
+	}
+	m.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+	done := make(chan struct{})
+	go func() {
+		m.wg.Wait()
+		close(done)
+	}()
+	if timeout <= 0 {
+		<-done
+		return
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		slog.Warn("jobs shutdown timed out with active jobs remaining")
+	}
+}
+
 // Submit queues fn and returns the job id immediately, or "" if the manager is frozen.
 func (m *Manager) Submit(spec Spec, fn Func) string {
 	id := "job_" + auth.RandomToken(6)
 	ctx, cancel := context.WithCancel(context.Background())
-	run := &Run{ID: id, title: spec.Title, m: m, ctx: ctx, cancel: cancel, subs: map[chan []byte]struct{}{}}
+	run := &Run{ID: id, kind: spec.Kind, title: spec.Title, m: m, ctx: ctx, cancel: cancel, doneCh: make(chan struct{}), subs: map[chan []byte]struct{}{}}
 	m.mu.Lock()
 	if m.frozen {
 		m.mu.Unlock()
@@ -159,6 +219,7 @@ func (m *Manager) Submit(spec Spec, fn Func) string {
 		return ""
 	}
 	m.live[id] = run
+	m.wg.Add(1)
 	m.mu.Unlock()
 
 	now := time.Now().Unix()
@@ -181,9 +242,11 @@ func (m *Manager) Do(spec Spec, fn Func) (string, error) {
 	if id == "" {
 		return "", fmt.Errorf("面板正在恢复，暂不接受新任务")
 	}
-	_, _, ch, cancel, _ := m.SubscribeStream(id)
-	defer cancel()
-	for range ch {
+	m.mu.Lock()
+	run := m.live[id]
+	m.mu.Unlock()
+	if run != nil {
+		<-run.doneCh
 	}
 	var status, errMsg string
 	_ = m.db.QueryRow(`SELECT status, error FROM jobs WHERE id=?`, id).Scan(&status, &errMsg)
@@ -205,19 +268,21 @@ func (m *Manager) lockFor(key string) *sync.Mutex {
 }
 
 func (m *Manager) execute(run *Run, spec Spec, fn Func) {
+	defer m.wg.Done()
 	if spec.LockKey != "" {
 		l := m.lockFor(spec.LockKey)
 		l.Lock()
 		defer l.Unlock()
 	}
+	acquired := false
 	select {
 	case m.sem <- struct{}{}:
+		acquired = true
 	case <-run.ctx.Done():
 	}
 	defer func() {
-		select {
-		case <-m.sem:
-		default:
+		if acquired {
+			<-m.sem
 		}
 	}()
 
@@ -260,6 +325,7 @@ func (m *Manager) execute(run *Run, spec Spec, fn Func) {
 	}
 	run.mu.Unlock()
 	run.cancel()
+	close(run.doneCh)
 
 	m.mu.Lock()
 	delete(m.live, run.ID)
@@ -357,12 +423,35 @@ func (m *Manager) Prune(maxAge time.Duration) int {
 		}
 	}
 	rows.Close()
-	removed := 0
-	for _, id := range ids {
-		if _, err := m.db.Exec(`DELETE FROM jobs WHERE id=? AND status NOT IN ('queued','running')`, id); err == nil {
-			_ = os.Remove(m.logPath(id))
-			removed++
-		}
+	if len(ids) == 0 {
+		return 0
 	}
-	return removed
+	tx, err := m.db.Begin()
+	if err != nil {
+		return 0
+	}
+	defer tx.Rollback()
+	const batchSize = 200
+	var deleted []string
+	for start := 0; start < len(ids); start += batchSize {
+		end := min(start+batchSize, len(ids))
+		batch := ids[start:end]
+		placeholders := strings.Repeat("?,", len(batch))
+		placeholders = placeholders[:len(placeholders)-1]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		if _, err := tx.Exec(`DELETE FROM jobs WHERE status NOT IN ('queued','running') AND id IN (`+placeholders+`)`, args...); err != nil {
+			return 0
+		}
+		deleted = append(deleted, batch...)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0
+	}
+	for _, id := range deleted {
+		_ = os.Remove(m.logPath(id))
+	}
+	return len(deleted)
 }

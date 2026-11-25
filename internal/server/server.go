@@ -105,6 +105,7 @@ func New(cfg config.Config, web fs.FS) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	reconcileInterrupted(db)
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	s := &Server{
 		cfg: cfg, db: db, box: box,
@@ -406,6 +407,25 @@ func (s *Server) bootstrapCaddy(ctx context.Context) {
 	}
 }
 
+// reconcileInterrupted marks domain records left in queued/running from a previous process as failed.
+func reconcileInterrupted(db *sql.DB) {
+	now := time.Now().Unix()
+	_, _ = db.Exec(`UPDATE deployments SET status='failed', error=CASE WHEN error='' THEN '面板重启，任务被中断' ELSE error END, finished_at=? WHERE status IN ('queued','running')`, now)
+	_, _ = db.Exec(`UPDATE backups SET status='failed', error='面板重启，任务被中断', finished_at=? WHERE status IN ('queued','running')`, now)
+	_, _ = db.Exec(`UPDATE drill_runs SET status='failed', report='面板重启，演练被中断', finished_at=? WHERE status IN ('queued','running')`, now)
+	_, _ = db.Exec(`UPDATE cron_tasks SET last_status='failed' WHERE last_status='running'`)
+}
+
+func (s *Server) stopScheduler() {
+	s.cronMu.Lock()
+	c := s.cron
+	s.cron = nil
+	s.cronMu.Unlock()
+	if c != nil {
+		<-c.Stop().Done()
+	}
+}
+
 // Run serves HTTP and the background loops until ctx is canceled or a panel restore requests restart.
 func (s *Server) Run(ctx context.Context) error {
 	runCtx, runCancel := context.WithCancel(ctx)
@@ -429,6 +449,7 @@ func (s *Server) Run(ctx context.Context) error {
 	s.goBackground(s.metricsLoop)
 	s.goBackground(s.eventsLoop)
 	s.goBackground(s.bootstrapCaddy)
+	s.goBackground(s.cleanupOrphans)
 	errc := make(chan error, 1)
 	go func() {
 		slog.Info("compose-panel listening", "addr", s.cfg.Listen, "version", Version)
@@ -437,14 +458,15 @@ func (s *Server) Run(ctx context.Context) error {
 	select {
 	case <-runCtx.Done():
 		s.bgCancel()
-		if s.cron != nil {
-			<-s.cron.Stop().Done()
-		}
-		s.notify.Close()
+		s.stopScheduler()
 		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(sctx)
 		s.bgWG.Wait()
+		if s.jobs != nil {
+			s.jobs.Close(10 * time.Second)
+		}
+		s.notify.Close()
 		_ = s.db.Close()
 		if s.RestartRequested() {
 			if _, err := ApplyPendingPanelRestore(s.cfg.DataDir); err != nil {
@@ -454,11 +476,12 @@ func (s *Server) Run(ctx context.Context) error {
 		return nil
 	case err := <-errc:
 		s.bgCancel()
-		if s.cron != nil {
-			<-s.cron.Stop().Done()
+		s.stopScheduler()
+		s.bgWG.Wait()
+		if s.jobs != nil {
+			s.jobs.Close(10 * time.Second)
 		}
 		s.notify.Close()
-		s.bgWG.Wait()
 		_ = s.db.Close()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil

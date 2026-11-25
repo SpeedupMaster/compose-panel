@@ -537,10 +537,11 @@ func (s *Server) drillVolume(run *jobRun, d *restoreDrill, rep *drillReport, ope
 	defer rc.Close()
 	t := time.Now()
 	err = s.dk.RunContainer(ctx, docker.RunOptions{
-		Image: s.cfg.HelperImage,
-		Binds: []string{tag + ":/v"},
-		Cmd:   []string{"tar", "-C", "/v", "-xf", "-"},
-		Stdin: rc,
+		Image:  s.cfg.HelperImage,
+		Labels: map[string]string{"panel.drill": "1", "panel.monitor": "false"},
+		Binds:  []string{tag + ":/v"},
+		Cmd:    []string{"tar", "-C", "/v", "-xf", "-"},
+		Stdin:  rc,
 	})
 	if err != nil {
 		return fmt.Errorf("解包失败：%w", err)
@@ -549,6 +550,7 @@ func (s *Server) drillVolume(run *jobRun, d *restoreDrill, rep *drillReport, ope
 	var out bytes.Buffer
 	err = s.dk.RunContainer(ctx, docker.RunOptions{
 		Image:  s.cfg.HelperImage,
+		Labels: map[string]string{"panel.drill": "1", "panel.monitor": "false"},
 		Binds:  []string{tag + ":/v:ro"},
 		Cmd:    []string{"sh", "-c", "find /v -type f | wc -l; du -sk /v | cut -f1"},
 		Stdout: &out,

@@ -427,3 +427,69 @@ func TestConsoleBlocksRCEAndReadOnlyBypass(t *testing.T) {
 		})
 	}
 }
+
+func TestRedisDumpCmdUsesEnvAuthAndUniqueTempFile(t *testing.T) {
+	cl := Client{Engine: "redis", Container: "redis-1", Password: "s3cr3t'pw"}
+	spec, format, err := cl.DumpCmd("all")
+	if err != nil {
+		t.Fatalf("DumpCmd: %v", err)
+	}
+	if format != "rdb" {
+		t.Fatalf("format = %q, want rdb", format)
+	}
+	joined := strings.Join(spec.Args, " ")
+	if strings.Contains(joined, "-a ") || strings.Contains(joined, cl.Password) {
+		t.Fatalf("redis DumpCmd leaked auth in CLI args: %s", joined)
+	}
+	if !strings.Contains(joined, "/tmp/panel-dump-$$.rdb") || !strings.Contains(joined, "trap ") {
+		t.Fatalf("redis DumpCmd missing unique PID temp file or trap cleanup: %s", joined)
+	}
+	hasEnv := false
+	for _, e := range spec.Env {
+		if e == "REDISCLI_AUTH="+cl.Password {
+			hasEnv = true
+		}
+	}
+	if !hasEnv {
+		t.Fatalf("redis DumpCmd missing REDISCLI_AUTH env, got %v", spec.Env)
+	}
+}
+
+func TestValidHostMySQLEscapingAndParseTSV(t *testing.T) {
+	for _, good := range []string{"%", "localhost", "127.0.0.1", "10.0.0.%", "%.example.com", "::1", "app-1_node"} {
+		if !ValidHost(good) {
+			t.Errorf("ValidHost(%q) = false, want true", good)
+		}
+	}
+	for _, bad := range []string{"", "' OR 1=1--", `host\`, "host;DROP", "a b", "host'a", "10.0.0.1/24"} {
+		if ValidHost(bad) {
+			t.Errorf("ValidHost(%q) = true, want false", bad)
+		}
+	}
+
+	cl := Client{Engine: "mysql"}
+	if err := cl.SetPassword(context.Background(), "appuser", `%\' OR 1=1`, "pw"); err == nil || strings.Contains(err.Error(), "docker client is nil") {
+		t.Fatalf("SetPassword with malicious host was not rejected: %v", err)
+	}
+	if err := cl.DropUser(context.Background(), "appuser", `localhost' OR '1'='1`); err == nil || strings.Contains(err.Error(), "docker client is nil") {
+		t.Fatalf("DropUser with malicious host was not rejected: %v", err)
+	}
+
+	if got := mysqlString(`p'w\123`); got != `'p''w\\123'` {
+		t.Fatalf("mysqlString = %q, want 'p''w\\\\123'", got)
+	}
+	if got := sqlString(`p'w\123`); got != `'p''w\123'` {
+		t.Fatalf("sqlString = %q, want 'p''w\\123'", got)
+	}
+
+	// MySQL --batch (without --raw) escapes \n, \t, \\ inside cells.
+	raw := "id\tquery\n1\tSELECT 'a\\\\nb'\\n\\tFROM t\n"
+	res := parseTSV(raw)
+	if len(res.Columns) != 2 || len(res.Rows) != 1 || len(res.Rows[0]) != 2 {
+		t.Fatalf("parseTSV corrupted shape: cols=%v rows=%v", res.Columns, res.Rows)
+	}
+	wantQuery := "SELECT 'a\\nb'\n\tFROM t"
+	if res.Rows[0][1] != wantQuery {
+		t.Fatalf("parseTSV cell = %q, want %q", res.Rows[0][1], wantQuery)
+	}
+}

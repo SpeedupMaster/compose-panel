@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -294,8 +296,68 @@ func writeSSE(w io.Writer, line string) {
 	fmt.Fprint(w, "\n")
 }
 
+var (
+	wsPingInterval = 30 * time.Second
+	wsIdleTimeout  = 30 * time.Minute
+)
+
+func normalizeHostPort(hostPort, scheme string) string {
+	h, p, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		return strings.ToLower(strings.TrimSpace(hostPort))
+	}
+	if (scheme == "http" && p == "80") || (scheme == "https" && p == "443") {
+		return strings.ToLower(h)
+	}
+	return strings.ToLower(net.JoinHostPort(h, p))
+}
+
+func validWSOrigin(r *http.Request) (originHost string, ok bool) {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return "", true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return "", false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", false
+	}
+	expectedScheme := "http"
+	if r.TLS != nil {
+		expectedScheme = "https"
+	} else if isTrustedProxyAddr(r.RemoteAddr) {
+		if xf := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))); xf == "https" || xf == "http" {
+			expectedScheme = xf
+		}
+	}
+	if scheme != expectedScheme {
+		return "", false
+	}
+	if normalizeHostPort(u.Host, scheme) != normalizeHostPort(r.Host, expectedScheme) {
+		return "", false
+	}
+	return u.Host, true
+}
+
+func clampTermSize(v int) int {
+	if v < 1 {
+		return 1
+	}
+	if v > 500 {
+		return 500
+	}
+	return v
+}
+
 // handleTerminal bridges a websocket to an interactive docker exec session.
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request, u *User) error {
+	originHost, originOK := validWSOrigin(r)
+	if !originOK {
+		return errForbidden
+	}
 	c, err := s.containerFor(r, u)
 	if err != nil {
 		return err
@@ -312,7 +374,11 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request, u *User)
 		cmd = []string{"bash"}
 	}
 	user := r.URL.Query().Get("user")
-	ws, err := websocket.Accept(w, r, nil)
+	acceptOpts := &websocket.AcceptOptions{}
+	if originHost != "" {
+		acceptOpts.OriginPatterns = []string{originHost}
+	}
+	ws, err := websocket.Accept(w, r, acceptOpts)
 	if err != nil {
 		return nil
 	}
@@ -328,10 +394,38 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request, u *User)
 	}
 	defer conn.Close()
 	name := strings.TrimPrefix(c.Name, "/")
-	s.audit(r, u, "container.terminal", name, "打开终端", nil)
+	shellLabel := shell
+	if shellLabel == "" {
+		shellLabel = "auto"
+	}
+	userLabel := user
+	if userLabel == "" {
+		userLabel = "default"
+	}
+	meta := fmt.Sprintf("shell=%s user=%s", shellLabel, userLabel)
+	s.audit(r, u, "container.terminal", name, "打开终端（"+meta+"）", nil)
 	start := time.Now()
 	defer func() {
-		s.audit(r, u, "container.terminal", name, fmt.Sprintf("关闭终端，时长 %s", time.Since(start).Round(time.Second)), nil)
+		s.audit(r, u, "container.terminal", name, fmt.Sprintf("关闭终端（%s），时长 %s", meta, time.Since(start).Round(time.Second)), nil)
+	}()
+
+	go func() {
+		t := time.NewTicker(wsPingInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				pctx, pcancel := context.WithTimeout(ctx, 10*time.Second)
+				err := ws.Ping(pctx)
+				pcancel()
+				if err != nil {
+					cancel()
+					return
+				}
+			}
+		}
 	}()
 
 	go func() {
@@ -350,7 +444,9 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request, u *User)
 		}
 	}()
 	for {
-		typ, data, err := ws.Read(ctx)
+		rctx, rcancel := context.WithTimeout(ctx, wsIdleTimeout)
+		typ, data, err := ws.Read(rctx)
+		rcancel()
 		if err != nil {
 			break
 		}
@@ -364,9 +460,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request, u *User)
 			if json.Unmarshal(data, &msg) == nil {
 				switch msg.Type {
 				case "resize":
-					if msg.Cols > 0 && msg.Rows > 0 {
-						_ = s.dk.ExecResize(ctx, execID, msg.Rows, msg.Cols)
-					}
+					_ = s.dk.ExecResize(ctx, execID, clampTermSize(msg.Rows), clampTermSize(msg.Cols))
 					continue
 				case "input":
 					data = []byte(msg.Data)
