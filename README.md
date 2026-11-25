@@ -128,7 +128,7 @@ Compose Panel 旨在替代 Dokploy、Coolify 等偏重的 PaaS 平台。它被�
   - 支持按事件类型灵活订阅：部署失败/成功、容器异常退出/不健康、容器 OOM、镜像有新版本、定时任务失败、备份失败、恢复演练失败、证书即将过期、磁盘空间不足（阈值可配）、安全登录事件。
 - **多用户 RBAC 与安全访问**：
   - 三级角色：**管理员 (`admin`)**、**运维 (`operator`)**、**只读 (`viewer`)**；非管理员账号可按项目勾选授权范围，实现多项目团队权限隔离。
-  - 支持 **TOTP 两步验证（2FA）** 与一次性恢复码、活跃登录会话查看与强制下线、细粒度 API 令牌（支持设置过期时间与 `read` / `deploy` / `admin` 权限范围）。
+  - 支持 **TOTP 两步验证（2FA）** 与一次性恢复码、活跃登录会话查看与强制下线、细粒度 API 令牌（支持设置过期时间与 `read` / `deploy` / `full` 权限范围）。
 - **移动端与 PWA 体验**：全站响应式布局，在手机端自动切换为抽屉导航、卡片视图与底部操作栏；支持 Web App Manifest 与 Service Worker，可作为 **PWA 应用**安装到手机主屏幕或桌面。
 
 ---
@@ -137,7 +137,7 @@ Compose Panel 旨在替代 Dokploy、Coolify 等偏重的 PaaS 平台。它被�
 
 ### 环境要求
 
-- **操作系统**：Linux（推荐 Ubuntu 22.04 / 24.04、Debian 12），`x86_64 (amd64)` 架构（ARM64 主机请使用下方「方式二：从源码构建」）
+- **操作系统**：Linux（推荐 Ubuntu 22.04 / 24.04、Debian 12），官方预构建镜像支持 `x86_64 (amd64)` 与 `ARM64 (aarch64)` 架构
 - **运行时**：Docker `24.0+` 及 `docker compose` v2 插件
 - **端口要求**：宿主机 `80`、`443` 端口未被占用（供内置 Caddy 监听），首次初始化时需临时访问 `7800` 端口
 
@@ -170,7 +170,7 @@ docker compose pull && docker compose up -d
 
 ### 方式二：从源码构建
 
-适用于二次开发、自定义修改或非 `amd64` 架构服务器（注意：首次编译前后端需要约 1.5 GB 可用内存，小内存机器建议配置 Swap 或使用方式一）：
+适用于二次开发、自定义修改或离线环境构建（注意：首次编译前后端需要约 1.5 GB 可用内存，小内存机器建议配置 Swap 或使用方式一）：
 
 ```bash
 git clone https://github.com/SpeedupMaster/compose-panel.git /opt/compose-panel/src
@@ -319,7 +319,7 @@ docker exec panel panel reset-password <用户名>
 
 ### 本地前后端联调
 
-需要本地安装 **Go 1.26+**、**Node.js 20+** 并可访问本地 Docker Daemon：
+需要本地安装 **Go 1.26+**、**Node.js 22+** 并可访问本地 Docker Daemon：
 
 ```bash
 # 1. 启动后端（自动将前端请求代理至 Vite 的 :5173 端口）

@@ -35,7 +35,7 @@ import (
 	"compose-panel/internal/store"
 )
 
-const Version = "0.1.0"
+var Version = "0.1.0"
 
 type Server struct {
 	cfg    config.Config

@@ -9,6 +9,7 @@
 set -eu
 BASE=${1:-http://127.0.0.1:7800}
 JAR=$(mktemp)
+trap 'rm -f "$JAR"' EXIT
 PASS=e2e-test-pass-123
 step() { printf '\n== %s\n' "$*"; }
 die() { echo "FAIL: $*" >&2; exit 1; }
@@ -102,5 +103,4 @@ call GET "/api/containers/$CID" >/dev/null && echo "container $CID ok"
 call GET /api/audit/verify | j 'd'
 call GET /api/overview | j '"containers=%s" % d["containers"]'
 
-rm -f "$JAR"
 printf '\nALL E2E STEPS PASSED\n'

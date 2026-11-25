@@ -7,6 +7,11 @@ set -eu
 BASE=${1:-http://127.0.0.1:7800}
 JAR=$(mktemp)
 TMP=$(mktemp -d)
+cleanup() {
+  docker rm -f e2e-sftp e2e-dav >/dev/null 2>&1 || true
+  rm -rf "$JAR" "$TMP"
+}
+trap cleanup EXIT
 PASS=e2e-test-pass-123
 step() { printf '\n== %s\n' "$*"; }
 die() { echo "FAIL: $*" >&2; exit 1; }
@@ -230,7 +235,6 @@ call GET /api/notify | j '[("%s %s %s" % (c["name"], c["kind"], c["config"].get(
 call GET /api/notify | j '"events: " + ", ".join(e["id"] for e in d["events"])'
 
 step "cleanup"
-docker rm -f e2e-sftp e2e-dav >/dev/null
+docker rm -f e2e-sftp e2e-dav >/dev/null 2>&1 || true
 call GET /api/audit/verify | j 'd'
-rm -rf "$JAR" "$TMP"
 printf '\nALL PHASE-2 E2E STEPS PASSED\n'

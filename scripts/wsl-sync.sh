@@ -5,7 +5,7 @@ set -eu
 SRC=${1:-/mnt/f/代码/compose-panel}
 DST=/opt/src/compose-panel
 mkdir -p "$DST"
-for d in cmd internal deploy scripts web/src web/public; do
+for d in cmd internal deploy scripts web/src web/public web/test; do
   [ -e "$SRC/$d" ] || continue
   rm -rf "$DST/$d"; mkdir -p "$(dirname "$DST/$d")"; cp -r "$SRC/$d" "$DST/$d"
 done

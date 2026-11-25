@@ -1,21 +1,23 @@
 #!/bin/sh
 # Smoke test against a running panel: first-run setup, login, then every
 # read-only GET endpoint. Usage: smoke.sh <base-url> <setup-token>
-# Needs curl. Prints one line per request; exits 1 if any returns 5xx.
+# Needs curl. Prints one line per request; exits 1 if any returns non-2xx.
 set -u
 BASE=${1:-http://127.0.0.1:7800}
 TOKEN=${2:-}
 JAR=$(mktemp)
+TMP=$(mktemp)
+trap 'rm -f "$JAR" "$TMP"' EXIT
 FAIL=0
 
 req() { # method path [json]
   if [ -n "${3:-}" ]; then
-    code=$(curl -s -o /tmp/smoke.body -w '%{http_code}' -b "$JAR" -c "$JAR" -X "$1" -H 'X-Panel: 1' -H 'Content-Type: application/json' -d "$3" "$BASE$2")
+    code=$(curl -s -o "$TMP" -w '%{http_code}' -b "$JAR" -c "$JAR" -X "$1" -H 'X-Panel: 1' -H 'Content-Type: application/json' -d "$3" "$BASE$2")
   else
-    code=$(curl -s -o /tmp/smoke.body -w '%{http_code}' -b "$JAR" -c "$JAR" -X "$1" -H 'X-Panel: 1' "$BASE$2")
+    code=$(curl -s -o "$TMP" -w '%{http_code}' -b "$JAR" -c "$JAR" -X "$1" -H 'X-Panel: 1' "$BASE$2")
   fi
-  printf '%s %-6s %-40s %s\n' "$code" "$1" "$2" "$(head -c 160 /tmp/smoke.body | tr '\n' ' ')"
-  case $code in 5*|000) FAIL=1 ;; esac
+  printf '%s %-6s %-40s %s\n' "$code" "$1" "$2" "$(head -c 160 "$TMP" | tr '\n' ' ')"
+  case $code in 2*) ;; *) FAIL=1 ;; esac
 }
 
 req GET /api/setup/status
@@ -39,5 +41,4 @@ req POST /api/storage '{"name":"local-test","kind":"local","config":{"path":"/tm
 req POST /api/projects '{"name":"smoke-web","source":"inline","compose":"services:\n  web:\n    image: nginx:alpine\n","deploy":false}'
 req GET /api/projects
 
-rm -f "$JAR"
 exit $FAIL
