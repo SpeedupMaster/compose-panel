@@ -389,12 +389,8 @@ func (s *Server) drillDatabase(run *jobRun, d *restoreDrill, b *backupRow, rep *
 		return err
 	}
 	defer rc.Close()
-	spec, err := cl.RestoreCmd(db, db, false)
-	if err != nil {
-		return err
-	}
 	t := time.Now()
-	if err := dbmgr.RunWithInput(ctx, s.dk, spec, rc, io.Discard); err != nil {
+	if err := cl.RestoreStream(ctx, db, db, rc, false); err != nil {
 		return fmt.Errorf("恢复失败：%w", err)
 	}
 	rep.add("恢复完成（%s）", time.Since(t).Round(time.Second))
