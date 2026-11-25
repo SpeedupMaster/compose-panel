@@ -72,8 +72,19 @@ func TestOpenConfiguresLowMemoryPragmasAndPool(t *testing.T) {
 		}
 	}
 
-	// Verify new schema columns exist on fresh database.
+	// Verify every migrated schema column exists on a fresh database.
 	for _, tc := range []struct{ table, col string }{
+		{"sites", "maintenance"},
+		{"sites", "maintenance_msg"},
+		{"sites", "maintenance_deploy"},
+		{"sites", "access_log"},
+		{"sites", "load_balance"},
+		{"sites", "health_path"},
+		{"sites", "grpc"},
+		{"backups", "verified_at"},
+		{"backups", "origin"},
+		{"db_instances", "image"},
+		{"users", "all_projects"},
 		{"users", "last_totp_step"},
 		{"deployments", "files_json"},
 		{"image_checks", "last_auto_digest"},
@@ -82,6 +93,20 @@ func TestOpenConfiguresLowMemoryPragmasAndPool(t *testing.T) {
 		if err := db.QueryRow(`SELECT `+tc.col+` FROM `+tc.table+` LIMIT 0`).Scan(&dummy); err != nil && err != sql.ErrNoRows {
 			t.Errorf("column %s.%s check failed: %v", tc.table, tc.col, err)
 		}
+	}
+
+	// Verify all versioned migrations are recorded in schema_migrations.
+	var count, maxVer int
+	var minApplied int64
+	if err := db.QueryRow(`SELECT COUNT(*), COALESCE(MAX(version), 0), COALESCE(MIN(applied_at), 0) FROM schema_migrations`).Scan(&count, &maxVer, &minApplied); err != nil {
+		t.Fatalf("query schema_migrations: %v", err)
+	}
+	wantLatest := migrations[len(migrations)-1].version
+	if count != len(migrations) || maxVer != wantLatest {
+		t.Errorf("schema_migrations count=%d max=%d, want count=%d max=%d", count, maxVer, len(migrations), wantLatest)
+	}
+	if minApplied <= 0 {
+		t.Errorf("schema_migrations min applied_at = %d, want > 0", minApplied)
 	}
 }
 
@@ -178,4 +203,252 @@ INSERT INTO user_projects(user_id,project_id) VALUES(1,10),(2,10);
 	checkAllProjects(2, 0)
 	checkAllProjects(3, 1)
 	checkAllProjects(4, 0)
+}
+
+func TestOpenMigratesLegacyV010DBAndRunsBackfillOnce(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "v010.db")
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	// Simulate a legacy v0.1.0 database without schema_migrations and missing columns
+	// across sites, backups, db_instances, users, deployments, and image_checks.
+	// Include one already-added column (sites.maintenance) to verify duplicate-column
+	// tolerance when upgrading a pre-schema_migrations production database.
+	v010Schema := `
+CREATE TABLE users (
+  id INTEGER PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  email TEXT NOT NULL DEFAULT '',
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL,
+  totp_secret TEXT NOT NULL DEFAULT '',
+  totp_enabled INTEGER NOT NULL DEFAULT 0,
+  recovery_codes TEXT NOT NULL DEFAULT '',
+  disabled INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  last_login_at INTEGER NOT NULL DEFAULT 0,
+  last_login_ip TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE projects (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'app',
+  source TEXT NOT NULL DEFAULT 'inline',
+  workdir TEXT NOT NULL DEFAULT '',
+  git_url TEXT NOT NULL DEFAULT '',
+  git_branch TEXT NOT NULL DEFAULT 'main',
+  git_compose_path TEXT NOT NULL DEFAULT 'compose.yml',
+  git_key TEXT NOT NULL DEFAULT '',
+  webhook_token TEXT NOT NULL DEFAULT '',
+  webhook_secret TEXT NOT NULL DEFAULT '',
+  auto_deploy INTEGER NOT NULL DEFAULT 0,
+  compose TEXT NOT NULL DEFAULT '',
+  env TEXT NOT NULL DEFAULT '',
+  options TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE user_projects (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, project_id)
+);
+CREATE TABLE deployments (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  number INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  trigger TEXT NOT NULL,
+  actor TEXT NOT NULL DEFAULT '',
+  commit_sha TEXT NOT NULL DEFAULT '',
+  commit_msg TEXT NOT NULL DEFAULT '',
+  compose TEXT NOT NULL DEFAULT '',
+  env TEXT NOT NULL DEFAULT '',
+  job_id TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  finished_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE db_instances (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL UNIQUE REFERENCES projects(id) ON DELETE CASCADE,
+  engine TEXT NOT NULL,
+  version TEXT NOT NULL,
+  root_user TEXT NOT NULL,
+  root_password TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  exposure TEXT NOT NULL DEFAULT 'internal',
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE backups (
+  id INTEGER PRIMARY KEY,
+  policy_id INTEGER,
+  source TEXT NOT NULL,
+  label TEXT NOT NULL,
+  storage_id INTEGER NOT NULL,
+  object_key TEXT NOT NULL DEFAULT '',
+  size INTEGER NOT NULL DEFAULT 0,
+  sha256 TEXT NOT NULL DEFAULT '',
+  encrypted INTEGER NOT NULL DEFAULT 0,
+  format TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL,
+  error TEXT NOT NULL DEFAULT '',
+  tiers TEXT NOT NULL DEFAULT '',
+  job_id TEXT NOT NULL DEFAULT '',
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE sites (
+  id INTEGER PRIMARY KEY,
+  domains TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'proxy',
+  project_id INTEGER,
+  service TEXT NOT NULL DEFAULT '',
+  port INTEGER NOT NULL DEFAULT 0,
+  upstream TEXT NOT NULL DEFAULT '',
+  hsts INTEGER NOT NULL DEFAULT 0,
+  compress INTEGER NOT NULL DEFAULT 1,
+  basic_user TEXT NOT NULL DEFAULT '',
+  basic_hash TEXT NOT NULL DEFAULT '',
+  ip_allow TEXT NOT NULL DEFAULT '',
+  max_body TEXT NOT NULL DEFAULT '',
+  headers TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  maintenance INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE image_checks (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  service TEXT NOT NULL,
+  image TEXT NOT NULL,
+  local_digest TEXT NOT NULL DEFAULT '',
+  remote_digest TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL,
+  error TEXT NOT NULL DEFAULT '',
+  checked_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, service)
+);
+INSERT INTO projects(id,name,created_at,updated_at) VALUES(1,'app1',1,1);
+INSERT INTO users(id,username,password_hash,role,created_at) VALUES(1,'admin','h','admin',1),(2,'op','h','operator',1);
+INSERT INTO user_projects(user_id,project_id) VALUES(2,1);
+INSERT INTO sites(id,domains,created_at,maintenance) VALUES(1,'example.com',1,1);
+INSERT INTO backups(id,source,label,storage_id,status,started_at) VALUES(1,'{}','b1',1,'success',1);
+`
+	if _, err := raw.Exec(v010Schema); err != nil {
+		t.Fatalf("seed v0.1.0 schema: %v", err)
+	}
+	raw.Close()
+
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open(v0.1.0): %v", err)
+	}
+
+	// Verify all migrated columns exist and preserve existing row data/defaults.
+	var maint int
+	var grpc int
+	if err := db.QueryRow(`SELECT maintenance, grpc FROM sites WHERE id=1`).Scan(&maint, &grpc); err != nil {
+		t.Fatalf("select migrated sites columns: %v", err)
+	}
+	if maint != 1 || grpc != 0 {
+		t.Errorf("sites row maintenance=%d grpc=%d, want 1 and 0", maint, grpc)
+	}
+
+	var origin string
+	var verifiedAt int64
+	if err := db.QueryRow(`SELECT origin, verified_at FROM backups WHERE id=1`).Scan(&origin, &verifiedAt); err != nil {
+		t.Fatalf("select migrated backups columns: %v", err)
+	}
+	if origin != "backup" || verifiedAt != 0 {
+		t.Errorf("backups row origin=%q verified_at=%d, want 'backup' and 0", origin, verifiedAt)
+	}
+
+	for _, q := range []string{
+		`SELECT image FROM db_instances LIMIT 0`,
+		`SELECT last_totp_step, all_projects FROM users LIMIT 0`,
+		`SELECT files_json FROM deployments LIMIT 0`,
+		`SELECT last_auto_digest FROM image_checks LIMIT 0`,
+	} {
+		var dummy any
+		if err := db.QueryRow(q).Scan(&dummy); err != nil && err != sql.ErrNoRows {
+			t.Errorf("query %q failed: %v", q, err)
+		}
+	}
+
+	// Verify backfill ran on first upgrade.
+	var allProjects int
+	if err := db.QueryRow(`SELECT all_projects FROM users WHERE id=2`).Scan(&allProjects); err != nil {
+		t.Fatalf("query op all_projects: %v", err)
+	}
+	if allProjects != 0 {
+		t.Fatalf("op all_projects after upgrade = %d, want 0", allProjects)
+	}
+
+	// Manually flip op back to all_projects=1 while keeping user_projects row,
+	// then re-open DB: versioned migration 21 must NOT re-run on subsequent boots.
+	if _, err := db.Exec(`UPDATE users SET all_projects=1 WHERE id=2`); err != nil {
+		t.Fatalf("update op all_projects: %v", err)
+	}
+	db.Close()
+
+	db, err = Open(dbPath)
+	if err != nil {
+		t.Fatalf("second Open(v0.1.0): %v", err)
+	}
+	defer db.Close()
+
+	if err := db.QueryRow(`SELECT all_projects FROM users WHERE id=2`).Scan(&allProjects); err != nil {
+		t.Fatalf("query op all_projects after reopen: %v", err)
+	}
+	if allProjects != 1 {
+		t.Errorf("op all_projects after reopen = %d, want 1 (backfill migration should only run once)", allProjects)
+	}
+}
+
+func TestOpenReadOnly(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "panel.db")
+	rw, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open() error: %v", err)
+	}
+	if _, err := rw.Exec(`INSERT INTO settings(key,value) VALUES('probe','ok')`); err != nil {
+		t.Fatalf("seed setting: %v", err)
+	}
+	defer rw.Close()
+
+	ro, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnly() error: %v", err)
+	}
+	defer ro.Close()
+
+	var queryOnly int
+	if err := ro.QueryRow(`PRAGMA query_only`).Scan(&queryOnly); err != nil {
+		t.Fatalf("PRAGMA query_only: %v", err)
+	}
+	if queryOnly != 1 {
+		t.Errorf("PRAGMA query_only = %d, want 1", queryOnly)
+	}
+
+	var busyTimeout int
+	if err := ro.QueryRow(`PRAGMA busy_timeout`).Scan(&busyTimeout); err != nil {
+		t.Fatalf("PRAGMA busy_timeout: %v", err)
+	}
+	if busyTimeout != 5000 {
+		t.Errorf("PRAGMA busy_timeout = %d, want 5000", busyTimeout)
+	}
+
+	var val string
+	if err := ro.QueryRow(`SELECT value FROM settings WHERE key='probe'`).Scan(&val); err != nil {
+		t.Fatalf("read via OpenReadOnly: %v", err)
+	}
+	if val != "ok" {
+		t.Errorf("got %q, want %q", val, "ok")
+	}
+
+	if _, err := ro.Exec(`INSERT INTO settings(key,value) VALUES('write','nope')`); err == nil {
+		t.Errorf("expected write via OpenReadOnly to fail, succeeded")
+	}
 }

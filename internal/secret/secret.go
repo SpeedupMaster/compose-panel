@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 )
@@ -90,6 +91,9 @@ func (b *Box) Open(s string) (string, error) {
 
 // MustOpen returns "" when decryption fails.
 func (b *Box) MustOpen(s string) string {
-	v, _ := b.Open(s)
+	v, err := b.Open(s)
+	if err != nil && strings.HasPrefix(s, prefix) {
+		slog.Warn("secret decrypt failed", "err", err)
+	}
 	return v
 }

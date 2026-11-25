@@ -51,17 +51,26 @@ func writeErr(w http.ResponseWriter, err error) {
 		writeJSON(w, ae.Status, map[string]any{"error": ae.Msg})
 		return
 	}
+	var mbe *http.MaxBytesError
+	if errors.As(err, &mbe) {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "上传内容超过大小限制"})
+		return
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		writeJSON(w, 404, map[string]any{"error": "未找到"})
 		return
 	}
-	slog.Warn("request failed", "err", err)
-	writeJSON(w, 500, map[string]any{"error": err.Error()})
+	slog.Error("api internal error", "err", err)
+	writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "服务器内部错误，请查看面板日志"})
 }
 
 func readJSON(r *http.Request, v any) error {
 	dec := json.NewDecoder(io.LimitReader(r.Body, 8<<20))
 	if err := dec.Decode(v); err != nil && err != io.EOF {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			return mbe
+		}
 		return bad("请求格式错误：%v", err)
 	}
 	return nil

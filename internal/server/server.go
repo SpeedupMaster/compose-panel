@@ -196,13 +196,39 @@ func (s *Server) location() *time.Location {
 	return loc
 }
 
+const contentSecurityPolicy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+
 // Handler builds the root HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	s.routes(mux)
 	mux.HandleFunc("POST /hooks/p/{token}", s.handleWebhook)
 	mux.Handle("/", s.staticHandler())
-	return securityHeaders(mux)
+	return securityHeaders(crossOriginMiddleware(mux))
+}
+
+func crossOriginMiddleware(next http.Handler) http.Handler {
+	cop := http.NewCrossOriginProtection()
+	cop.AddInsecureBypassPattern("/hooks/")
+	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "跨源请求被拒绝"})
+	}))
+	protected := cop.Handler(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hasBearerToken(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		protected.ServeHTTP(w, r)
+	})
+}
+
+func hasBearerToken(r *http.Request) bool {
+	authz := strings.TrimSpace(r.Header.Get("Authorization"))
+	if len(authz) <= len("Bearer ") {
+		return false
+	}
+	return strings.EqualFold(authz[:len("Bearer ")], "Bearer ") && strings.TrimSpace(authz[len("Bearer "):]) != ""
 }
 
 func securityHeaders(h http.Handler) http.Handler {
@@ -210,6 +236,7 @@ func securityHeaders(h http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "same-origin")
+		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
 		h.ServeHTTP(w, r)
 	})
 }
