@@ -110,7 +110,8 @@ func clientIP(r *http.Request) string {
 		// Caddy reverse_proxy appends the immediate peer IP to the rightmost
 		// position of X-Forwarded-For; scan right-to-left so client-forged
 		// leading entries cannot spoof the caller IP.
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if xffVals := r.Header.Values("X-Forwarded-For"); len(xffVals) > 0 {
+			xff := strings.Join(xffVals, ",")
 			parts := strings.Split(xff, ",")
 			var loopbackFallback string
 			for i := len(parts) - 1; i >= 0; i-- {

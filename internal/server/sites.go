@@ -306,9 +306,12 @@ func (s *Server) handleSaveSite(w http.ResponseWriter, r *http.Request, u *User)
 		if err != nil {
 			return err
 		}
-		if existingSite.ProjectID == 0 && !u.can(roleAdmin) {
+		if existingSite.ProjectID <= 0 && !u.can(roleAdmin) {
 			return errForbidden
 		}
+	}
+	if req.ProjectID < 0 {
+		return bad("项目 ID 无效")
 	}
 	if req.ProjectID == 0 {
 		if !u.can(roleAdmin) {

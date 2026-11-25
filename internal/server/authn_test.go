@@ -276,10 +276,14 @@ func TestSitesRBAC(t *testing.T) {
 		t.Fatalf("non-admin operator must NOT delete projectId=0 custom site")
 	}
 
-	// Non-admin cannot create or update projectId=0 custom upstream site.
+	// Non-admin cannot create or update projectId=0 or negative projectId custom upstream site.
 	saveCustom := httptest.NewRequest(http.MethodPost, "/api/sites", strings.NewReader(`{"domains":["evil.example.com"],"kind":"proxy","projectId":0,"upstream":"panel:7800","enabled":true}`))
 	if err := srv.handleSaveSite(httptest.NewRecorder(), saveCustom, opAll); err == nil {
 		t.Fatalf("non-admin operator must NOT create projectId=0 site")
+	}
+	saveNeg := httptest.NewRequest(http.MethodPost, "/api/sites", strings.NewReader(`{"domains":["evil-neg.example.com"],"kind":"proxy","projectId":-1,"upstream":"panel:7800","enabled":true}`))
+	if err := srv.handleSaveSite(httptest.NewRecorder(), saveNeg, opAll); err == nil {
+		t.Fatalf("non-admin operator must NOT create negative projectId custom site")
 	}
 
 	// Restricted operator cannot hijack p2's site via PUT /api/sites/{id}.
@@ -553,33 +557,39 @@ func TestClientIPAntiSpoofing(t *testing.T) {
 	tests := []struct {
 		name       string
 		remoteAddr string
-		xff        string
+		xff        []string
 		xri        string
 		want       string
 	}{
 		{
 			name:       "direct public port ignores spoofed XFF and X-Real-IP",
 			remoteAddr: "203.0.113.50:43210",
-			xff:        "1.2.3.4",
+			xff:        []string{"1.2.3.4"},
 			xri:        "5.6.7.8",
 			want:       "203.0.113.50",
 		},
 		{
 			name:       "behind Caddy Docker bridge uses rightmost real peer IP ignoring client spoofed prefix",
 			remoteAddr: "172.18.0.2:50000",
-			xff:        "1.2.3.4, 198.51.100.77",
+			xff:        []string{"1.2.3.4, 198.51.100.77"},
 			want:       "198.51.100.77",
+		},
+		{
+			name:       "behind proxy with multiple X-Forwarded-For headers uses last header rightmost IP",
+			remoteAddr: "172.18.0.2:50000",
+			xff:        []string{"1.2.3.4", "198.51.100.66"},
+			want:       "198.51.100.66",
 		},
 		{
 			name:       "behind loopback proxy skips trailing loopback and picks real client",
 			remoteAddr: "127.0.0.1:50000",
-			xff:        "9.9.9.9, 198.51.100.88, 127.0.0.1",
+			xff:        []string{"9.9.9.9, 198.51.100.88, 127.0.0.1"},
 			want:       "198.51.100.88",
 		},
 		{
 			name:       "behind loopback proxy with only loopback XFF returns loopback",
 			remoteAddr: "127.0.0.1:50000",
-			xff:        "127.0.0.1",
+			xff:        []string{"127.0.0.1"},
 			want:       "127.0.0.1",
 		},
 		{
@@ -591,7 +601,7 @@ func TestClientIPAntiSpoofing(t *testing.T) {
 		{
 			name:       "behind trusted proxy ignores garbage XFF and falls back to remote",
 			remoteAddr: "10.0.0.2:1234",
-			xff:        "not-an-ip",
+			xff:        []string{"not-an-ip"},
 			want:       "10.0.0.2",
 		},
 	}
@@ -599,8 +609,8 @@ func TestClientIPAntiSpoofing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.RemoteAddr = tc.remoteAddr
-			if tc.xff != "" {
-				req.Header.Set("X-Forwarded-For", tc.xff)
+			for _, h := range tc.xff {
+				req.Header.Add("X-Forwarded-For", h)
 			}
 			if tc.xri != "" {
 				req.Header.Set("X-Real-IP", tc.xri)

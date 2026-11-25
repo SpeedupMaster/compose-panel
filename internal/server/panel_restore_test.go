@@ -461,6 +461,21 @@ func TestSetupRestoreRejectsUnauthenticatedMultipartBeforeReadingFile(t *testing
 	if counter2.readBytes > 16<<10 {
 		t.Fatalf("bad token file part drained %d bytes (should stop immediately)", counter2.readBytes)
 	}
+
+	// Case 3: Excessive empty parts (> 16) before token -> reject with 403 immediately.
+	var sb strings.Builder
+	for i := 0; i < 20; i++ {
+		sb.WriteString("--" + boundary + "\r\nContent-Disposition: form-data; name=\"pad\"\r\n\r\n\r\n")
+	}
+	sb.WriteString("--" + boundary + "\r\nContent-Disposition: form-data; name=\"token\"\r\n\r\n" + srv.setupToken + "\r\n")
+	sb.WriteString(tail)
+	req3 := httptest.NewRequest(http.MethodPost, "/api/setup/restore", strings.NewReader(sb.String()))
+	req3.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
+	req3.RemoteAddr = "203.0.113.12:1234"
+	err3 := srv.handleSetupRestore(httptest.NewRecorder(), req3)
+	if ae, ok := err3.(*apiError); !ok || ae.Status != 403 {
+		t.Fatalf("excessive pre-auth empty parts: expected 403, got %v", err3)
+	}
 }
 
 func TestSetupStatusExposesUniqueBootIDAndMetricsCancelsPromptly(t *testing.T) {

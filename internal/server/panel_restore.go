@@ -509,9 +509,11 @@ func (s *Server) readSetupRestoreMultipart(r *http.Request) (tmpDB, sourceDesc, 
 	}
 	const maxMetaFieldBytes = 16 << 10
 	const maxPreAuthBytes = 64 << 10
+	const maxPreAuthParts = 16
 	var (
 		tokenVerified bool
 		preAuthRead   int64
+		preAuthParts  int
 		ageIdentity   string
 		rawUploadPath string
 	)
@@ -529,6 +531,14 @@ func (s *Server) readSetupRestoreMultipart(r *http.Request) (tmpDB, sourceDesc, 
 		if perr != nil {
 			err = bad("解析上传表单失败：%v", perr)
 			return
+		}
+		if !tokenVerified {
+			preAuthParts++
+			if preAuthParts > maxPreAuthParts {
+				s.recordFailure("setup:" + clientIP(r))
+				err = errStatus(http.StatusForbidden, "初始化令牌不正确（见面板容器日志）")
+				return
+			}
 		}
 		name := part.FormName()
 		if name == "file" {
