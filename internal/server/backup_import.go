@@ -37,31 +37,6 @@ type scannedBackupItem struct {
 	StartedAt   int64  `json:"startedAt"`
 }
 
-func validImportKind(k string) bool {
-	return k == "database" || k == "volume" || k == "dir" || k == "panel"
-}
-
-func validImportFormat(f string) bool {
-	switch f {
-	case "pgdump", "sql", "archive", "rdb", "tar", "sqlite":
-		return true
-	}
-	return false
-}
-
-func validKindFormat(kind, format string) bool {
-	switch kind {
-	case "database":
-		return format == "pgdump" || format == "sql" || format == "archive" || format == "rdb"
-	case "volume", "dir":
-		return format == "tar"
-	case "panel":
-		return format == "sqlite"
-	default:
-		return false
-	}
-}
-
 func sanitizeImportFilename(raw string) string {
 	base := filepath.Base(strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/"))
 	if base == "" || base == "." || base == "/" {
@@ -113,22 +88,17 @@ func (s *Server) handleImportUpload(w http.ResponseWriter, r *http.Request, u *U
 	if kind == "" {
 		kind = parsed.Kind
 	}
-	if !validImportKind(kind) {
+	if !backup.ValidBackupKind(kind) {
 		return bad("无法识别备份类型，请手动选择（数据库 / 数据卷 / 项目目录 / 面板数据）")
 	}
-	format := strings.TrimSpace(q.Get("format"))
+	format := backup.NormalizeBackupFormat(q.Get("format"))
 	if format == "" {
 		format = parsed.Format
 	}
 	if format == "" {
-		switch kind {
-		case "volume", "dir":
-			format = "tar"
-		case "panel":
-			format = "sqlite"
-		}
+		format = backup.DefaultFormatForKind(kind)
 	}
-	if !validImportFormat(format) || !validKindFormat(kind, format) {
+	if !backup.ValidBackupFormat(format) || !backup.ValidKindFormat(kind, format) {
 		return bad("备份格式 %s 与所选类型 %s 不匹配", format, kind)
 	}
 	label := strings.TrimSpace(q.Get("label"))
@@ -331,22 +301,17 @@ func (s *Server) handleImportStorage(w http.ResponseWriter, r *http.Request, u *
 		if kind == "" {
 			kind = parsed.Kind
 		}
-		if !validImportKind(kind) {
+		if !backup.ValidBackupKind(kind) {
 			return bad("备份 %s 的类型无效，请手动指定", cleanKey)
 		}
-		format := strings.TrimSpace(it.Format)
+		format := backup.NormalizeBackupFormat(it.Format)
 		if format == "" {
 			format = parsed.Format
 		}
 		if format == "" {
-			switch kind {
-			case "volume", "dir":
-				format = "tar"
-			case "panel":
-				format = "sqlite"
-			}
+			format = backup.DefaultFormatForKind(kind)
 		}
-		if !validImportFormat(format) || !validKindFormat(kind, format) {
+		if !backup.ValidBackupFormat(format) || !backup.ValidKindFormat(kind, format) {
 			return bad("备份 %s 的格式 %s 与类型 %s 不匹配", cleanKey, format, kind)
 		}
 		label := strings.TrimSpace(it.Label)

@@ -232,19 +232,19 @@ func (s *Server) runDBImport(run *jobRun, d *dbInstance, db, file string, gz boo
 		defer zr.Close()
 		rd = zr
 	}
+	if d.Engine != "postgres" && d.Engine != "mysql" && d.Engine != "mariadb" {
+		return fmt.Errorf("%s 不支持在线导入", d.Engine)
+	}
 	br := bufio.NewReaderSize(rd, 64<<10)
 	format := "sql"
 	if magic, _ := br.Peek(5); string(magic) == "PGDMP" {
 		format = "dump"
 	}
 	run.Logf("==> 文件大小 %s，格式：%s", humanBytes(size), map[string]string{"sql": "SQL 文本", "dump": "pg_dump 自定义格式"}[format])
-	spec, err := d.client().ImportCmd(db, format)
-	if err != nil {
-		return err
-	}
-	run.Logf("$ docker exec -i %s %s", d.Container, strings.Join(spec.Args, " "))
 	start := time.Now()
-	if err := dbmgr.RunWithInput(ctx, s.dk, spec, &progressReader{r: br, total: size, run: run, f: f}, run); err != nil {
+	cl := d.client()
+	cl.Log = run
+	if err := cl.RestoreStream(ctx, db, "", &progressReader{r: br, total: size, run: run, f: f}, false); err != nil {
 		return fmt.Errorf("导入失败：%w", err)
 	}
 	run.Logf("==> 导入完成，用时 %s", time.Since(start).Round(time.Second))

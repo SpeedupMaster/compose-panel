@@ -2,6 +2,7 @@
 package dbmgr
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/csv"
@@ -210,6 +211,7 @@ type Client struct {
 	Engine    string
 	Container string
 	Password  string
+	Log       io.Writer // optional output sink for streaming operations such as RestoreStream
 }
 
 func (c Client) exec() Exec {
@@ -781,6 +783,79 @@ func (c Client) ResetPostgresSchemas(ctx context.Context, database string) error
 		return fmt.Errorf("重置 PostgreSQL Schema 失败：%w", err)
 	}
 	return nil
+}
+
+// RestoreStream restores a database dump stream from r into targetDB across
+// PostgreSQL (auto-detecting PGDMP custom format vs plain SQL), MySQL/MariaDB,
+// and MongoDB. When overwrite is true, PostgreSQL plain-SQL streams reset user
+// schemas before piping into psql, pg_restore uses --clean --if-exists, and
+// MongoDB passes --drop.
+func (c Client) RestoreStream(ctx context.Context, targetDB, sourceDB string, r io.Reader, overwrite bool) error {
+	if r == nil {
+		return fmt.Errorf("恢复数据流为空")
+	}
+	if !ValidIdent(targetDB) {
+		return fmt.Errorf("库名无效")
+	}
+
+	switch c.Engine {
+	case "postgres":
+		br, ok := r.(*bufio.Reader)
+		if !ok {
+			br = bufio.NewReaderSize(r, 64<<10)
+		}
+		magic, peekErr := br.Peek(5)
+		if len(magic) == 0 && peekErr != nil && peekErr != io.EOF {
+			return fmt.Errorf("读取备份流失败：%w", peekErr)
+		}
+		var (
+			spec ExecSpec
+			err  error
+		)
+		if string(magic) == "PGDMP" {
+			spec, err = c.RestoreCmd(sourceDB, targetDB, overwrite)
+		} else {
+			if overwrite {
+				if err := c.ResetPostgresSchemas(ctx, targetDB); err != nil {
+					return err
+				}
+			}
+			spec, err = c.ImportCmd(targetDB, "sql")
+		}
+		if err != nil {
+			return err
+		}
+		return RunWithInput(ctx, c.Docker, spec, br, c.Log)
+
+	case "mysql", "mariadb":
+		br, ok := r.(*bufio.Reader)
+		if !ok {
+			br = bufio.NewReaderSize(r, 64<<10)
+		}
+		magic, peekErr := br.Peek(5)
+		if len(magic) == 0 && peekErr != nil && peekErr != io.EOF {
+			return fmt.Errorf("读取备份流失败：%w", peekErr)
+		}
+		if string(magic) == "PGDMP" {
+			return fmt.Errorf("MySQL 只能导入 .sql 文件")
+		}
+		spec, err := c.RestoreCmd("", targetDB, overwrite)
+		if err != nil {
+			return err
+		}
+		return RunWithInput(ctx, c.Docker, spec, br, c.Log)
+
+	case "mongo":
+		spec, err := c.RestoreCmd(sourceDB, targetDB, overwrite)
+		if err != nil {
+			return err
+		}
+		return RunWithInput(ctx, c.Docker, spec, r, c.Log)
+
+	default:
+		_, err := c.RestoreCmd(sourceDB, targetDB, overwrite)
+		return err
+	}
 }
 
 // RunWithInput runs spec via Docker Engine API with stdin from r, returning stderr text on failure.

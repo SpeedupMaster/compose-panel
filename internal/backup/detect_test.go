@@ -358,3 +358,112 @@ func TestUntarDirBlocksSymlinkTraversal(t *testing.T) {
 		t.Fatalf("safe internal symlink rejected: %v", err)
 	}
 }
+
+func TestFormatAndEngineCompatibilityMatrix(t *testing.T) {
+	normCases := map[string]string{
+		"PGDUMP":   "pgdump",
+		" .dump ":  "pgdump",
+		"backup":   "pgdump",
+		".SQL":     "sql",
+		"archive":  "archive",
+		"rdb":      "rdb",
+		"tgz":      "tar",
+		".db":      "sqlite",
+		"sqlite3":  "sqlite",
+		" unknown": "unknown",
+	}
+	for in, want := range normCases {
+		if got := NormalizeBackupFormat(in); got != want {
+			t.Errorf("NormalizeBackupFormat(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	for _, k := range []string{"database", "volume", "dir", "panel"} {
+		if !ValidBackupKind(k) {
+			t.Errorf("ValidBackupKind(%q) = false, want true", k)
+		}
+	}
+	if ValidBackupKind("") || ValidBackupKind("other") {
+		t.Errorf("ValidBackupKind accepted invalid kind")
+	}
+
+	for _, f := range []string{"pgdump", "dump", "sql", "archive", "rdb", "tar", "tgz", "sqlite", "db"} {
+		if !ValidBackupFormat(f) {
+			t.Errorf("ValidBackupFormat(%q) = false, want true", f)
+		}
+	}
+	if ValidBackupFormat("") || ValidBackupFormat("zip") {
+		t.Errorf("ValidBackupFormat accepted invalid format")
+	}
+
+	if DefaultFormatForKind("volume") != "tar" || DefaultFormatForKind("dir") != "tar" || DefaultFormatForKind("panel") != "sqlite" || DefaultFormatForKind("database") != "" {
+		t.Errorf("unexpected DefaultFormatForKind results")
+	}
+
+	kindFmtCases := []struct {
+		kind, format string
+		want         bool
+	}{
+		{"database", "pgdump", true},
+		{"database", "dump", true},
+		{"database", "sql", true},
+		{"database", "archive", true},
+		{"database", "rdb", true},
+		{"database", "tar", false},
+		{"volume", "tar", true},
+		{"volume", "tgz", true},
+		{"volume", "sql", false},
+		{"dir", "tar", true},
+		{"dir", "sqlite", false},
+		{"panel", "sqlite", true},
+		{"panel", "db", true},
+		{"panel", "tar", false},
+		{"unknown", "tar", false},
+	}
+	for _, tc := range kindFmtCases {
+		if got := ValidKindFormat(tc.kind, tc.format); got != tc.want {
+			t.Errorf("ValidKindFormat(%q, %q) = %v, want %v", tc.kind, tc.format, got, tc.want)
+		}
+	}
+
+	if got := CompatibleEngines("sql"); strings.Join(got, ",") != "postgres,mysql,mariadb" {
+		t.Errorf("CompatibleEngines(sql) = %v, want [postgres mysql mariadb]", got)
+	}
+	if got := CompatibleEngines("pgdump"); strings.Join(got, ",") != "postgres" {
+		t.Errorf("CompatibleEngines(pgdump) = %v, want [postgres]", got)
+	}
+	if got := CompatibleEngines("archive"); strings.Join(got, ",") != "mongo" {
+		t.Errorf("CompatibleEngines(archive) = %v, want [mongo]", got)
+	}
+	if got := CompatibleEngines("rdb"); strings.Join(got, ",") != "redis" {
+		t.Errorf("CompatibleEngines(rdb) = %v, want [redis]", got)
+	}
+	if got := CompatibleEngines("tar"); len(got) != 0 {
+		t.Errorf("CompatibleEngines(tar) = %v, want empty", got)
+	}
+
+	engCases := []struct {
+		format, engine string
+		want           bool
+	}{
+		{"", "postgres", true},
+		{"any", "mysql", true},
+		{"pgdump", "postgres", true},
+		{"dump", "postgres", true},
+		{"pgdump", "mysql", false},
+		{"sql", "postgres", true},
+		{"sql", "mysql", true},
+		{"sql", "mariadb", true},
+		{"sql", "mongo", false},
+		{"archive", "mongo", true},
+		{"archive", "postgres", false},
+		{"rdb", "redis", true},
+		{"rdb", "mongo", false},
+		{"tar", "postgres", false},
+	}
+	for _, tc := range engCases {
+		if got := FormatCompatibleWithEngine(tc.format, tc.engine); got != tc.want {
+			t.Errorf("FormatCompatibleWithEngine(%q, %q) = %v, want %v", tc.format, tc.engine, got, tc.want)
+		}
+	}
+}

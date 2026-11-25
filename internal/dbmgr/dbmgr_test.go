@@ -1,9 +1,19 @@
 package dbmgr
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+
+	"compose-panel/internal/docker"
 )
 
 func TestPostgresMajorFromImage(t *testing.T) {
@@ -492,4 +502,269 @@ func TestValidHostMySQLEscapingAndParseTSV(t *testing.T) {
 	if res.Rows[0][1] != wantQuery {
 		t.Fatalf("parseTSV cell = %q, want %q", res.Rows[0][1], wantQuery)
 	}
+}
+
+type recordedExec struct {
+	Container   string
+	Cmd         []string
+	Env         []string
+	AttachStdin bool
+	Stdin       []byte
+}
+
+func fakeDockerExecServer(t *testing.T, respond func(cmd []string, stdin []byte) (stdout string, exitCode int)) (*docker.Client, func() []recordedExec) {
+	t.Helper()
+	var (
+		mu      sync.Mutex
+		nextID  int
+		execMap = map[string]*recordedExec{}
+		exitMap = map[string]int{}
+		history []*recordedExec
+	)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		switch {
+		case r.Method == http.MethodPost && strings.HasPrefix(p, "/containers/") && strings.HasSuffix(p, "/exec"):
+			container := strings.TrimSuffix(strings.TrimPrefix(p, "/containers/"), "/exec")
+			var body struct {
+				Cmd         []string `json:"Cmd"`
+				Env         []string `json:"Env"`
+				AttachStdin bool     `json:"AttachStdin"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			nextID++
+			id := fmt.Sprintf("exec-%d", nextID)
+			rec := &recordedExec{Container: container, Cmd: body.Cmd, Env: body.Env, AttachStdin: body.AttachStdin}
+			execMap[id] = rec
+			history = append(history, rec)
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]string{"Id": id})
+
+		case r.Method == http.MethodPost && strings.HasPrefix(p, "/exec/") && strings.HasSuffix(p, "/start"):
+			id := strings.TrimSuffix(strings.TrimPrefix(p, "/exec/"), "/start")
+			_, _ = io.ReadAll(r.Body)
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				http.Error(w, "no hijack", 500)
+				return
+			}
+			conn, rw, err := hj.Hijack()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			_, _ = rw.WriteString("HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
+			_ = rw.Flush()
+
+			mu.Lock()
+			rec := execMap[id]
+			mu.Unlock()
+
+			var stdinData []byte
+			if rec != nil && rec.AttachStdin {
+				stdinData, _ = io.ReadAll(rw)
+				mu.Lock()
+				rec.Stdin = stdinData
+				mu.Unlock()
+			}
+			stdout, code := "", 0
+			if respond != nil && rec != nil {
+				stdout, code = respond(rec.Cmd, stdinData)
+			}
+			mu.Lock()
+			exitMap[id] = code
+			mu.Unlock()
+			if len(stdout) > 0 {
+				var hdr [8]byte
+				hdr[0] = 1 // stdout
+				binary.BigEndian.PutUint32(hdr[4:], uint32(len(stdout)))
+				_, _ = conn.Write(hdr[:])
+				_, _ = conn.Write([]byte(stdout))
+			}
+
+		case r.Method == http.MethodGet && strings.HasPrefix(p, "/exec/") && strings.HasSuffix(p, "/json"):
+			id := strings.TrimSuffix(strings.TrimPrefix(p, "/exec/"), "/json")
+			mu.Lock()
+			code := exitMap[id]
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"Running": false, "ExitCode": code})
+
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dk := docker.New("tcp://" + srv.Listener.Addr().String())
+	return dk, func() []recordedExec {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make([]recordedExec, len(history))
+		for i, h := range history {
+			out[i] = *h
+		}
+		return out
+	}
+}
+
+func TestRestoreStreamDispatch(t *testing.T) {
+	t.Run("postgres PGDMP dispatches to pg_restore", func(t *testing.T) {
+		dk, calls := fakeDockerExecServer(t, nil)
+		cl := &Client{Docker: dk, Engine: "postgres", Container: "pg-1", Password: "pw"}
+		payload := []byte("PGDMP\x01\x02\x03custom-binary-payload")
+		if err := cl.RestoreStream(context.Background(), "appdb", "srcdb", bytes.NewReader(payload), false); err != nil {
+			t.Fatalf("RestoreStream(PGDMP, overwrite=false): %v", err)
+		}
+		got := calls()
+		if len(got) != 1 {
+			t.Fatalf("expected 1 exec call, got %d", len(got))
+		}
+		joined := strings.Join(got[0].Cmd, " ")
+		if !strings.HasPrefix(joined, "pg_restore -U postgres -d appdb") || strings.Contains(joined, "--clean") {
+			t.Fatalf("unexpected pg_restore cmd: %s", joined)
+		}
+		if !bytes.Equal(got[0].Stdin, payload) {
+			t.Fatalf("stdin mismatch: got %q, want %q", got[0].Stdin, payload)
+		}
+	})
+
+	t.Run("postgres PGDMP overwrite passes --clean --if-exists", func(t *testing.T) {
+		dk, calls := fakeDockerExecServer(t, nil)
+		cl := &Client{Docker: dk, Engine: "postgres", Container: "pg-1", Password: "pw"}
+		payload := []byte("PGDMP\x00overwrite")
+		if err := cl.RestoreStream(context.Background(), "appdb", "", bytes.NewReader(payload), true); err != nil {
+			t.Fatalf("RestoreStream(PGDMP, overwrite=true): %v", err)
+		}
+		got := calls()
+		if len(got) != 1 {
+			t.Fatalf("expected 1 exec call, got %d", len(got))
+		}
+		joined := strings.Join(got[0].Cmd, " ")
+		if !strings.Contains(joined, "pg_restore") || !strings.Contains(joined, "--clean") || !strings.Contains(joined, "--if-exists") {
+			t.Fatalf("expected pg_restore --clean --if-exists, got: %s", joined)
+		}
+		if !bytes.Equal(got[0].Stdin, payload) {
+			t.Fatalf("stdin mismatch: got %q, want %q", got[0].Stdin, payload)
+		}
+	})
+
+	t.Run("postgres plain SQL overwrite=false pipes to psql without schema reset", func(t *testing.T) {
+		dk, calls := fakeDockerExecServer(t, nil)
+		cl := &Client{Docker: dk, Engine: "postgres", Container: "pg-1", Password: "pw"}
+		sqlPayload := []byte("-- PostgreSQL database dump\nCREATE TABLE items(id int);\n")
+		if err := cl.RestoreStream(context.Background(), "appdb", "appdb", bytes.NewReader(sqlPayload), false); err != nil {
+			t.Fatalf("RestoreStream(plain SQL, overwrite=false): %v", err)
+		}
+		got := calls()
+		if len(got) != 1 {
+			t.Fatalf("expected 1 exec call, got %d", len(got))
+		}
+		joined := strings.Join(got[0].Cmd, " ")
+		if !strings.HasPrefix(joined, "psql -U postgres -d appdb") || !strings.Contains(joined, "ON_ERROR_STOP=1") {
+			t.Fatalf("expected psql ON_ERROR_STOP=1, got: %s", joined)
+		}
+		if !bytes.Equal(got[0].Stdin, sqlPayload) {
+			t.Fatalf("stdin mismatch: got %q, want %q", got[0].Stdin, sqlPayload)
+		}
+	})
+
+	t.Run("postgres plain SQL overwrite=true resets schemas then pipes to psql", func(t *testing.T) {
+		dk, calls := fakeDockerExecServer(t, func(cmd []string, stdin []byte) (string, int) {
+			s := string(stdin)
+			if strings.Contains(s, "pg_namespace") {
+				return "nspname\npublic\ncustom\n", 0
+			}
+			if strings.Contains(s, "pg_database") {
+				return "rolname\nappowner\n", 0
+			}
+			return "", 0
+		})
+		cl := &Client{Docker: dk, Engine: "postgres", Container: "pg-1", Password: "pw"}
+		sqlPayload := []byte("CREATE TABLE t(id int);\nINSERT INTO t VALUES (1);\n")
+		if err := cl.RestoreStream(context.Background(), "appdb", "", bytes.NewReader(sqlPayload), true); err != nil {
+			t.Fatalf("RestoreStream(plain SQL, overwrite=true): %v", err)
+		}
+		got := calls()
+		if len(got) != 5 {
+			t.Fatalf("expected 4 ResetPostgresSchemas queries + 1 psql restore = 5 calls, got %d", len(got))
+		}
+		resetSQL := string(got[3].Stdin)
+		if !strings.Contains(resetSQL, `DROP SCHEMA IF EXISTS "public" CASCADE;`) ||
+			!strings.Contains(resetSQL, `DROP SCHEMA IF EXISTS "custom" CASCADE;`) ||
+			!strings.Contains(resetSQL, `ALTER SCHEMA public OWNER TO "appowner";`) {
+			t.Fatalf("unexpected ResetPostgresSchemas SQL: %s", resetSQL)
+		}
+		last := got[4]
+		joined := strings.Join(last.Cmd, " ")
+		if !strings.HasPrefix(joined, "psql -U postgres -d appdb") || !strings.Contains(joined, "ON_ERROR_STOP=1") {
+			t.Fatalf("expected final psql restore call, got: %s", joined)
+		}
+		if !bytes.Equal(last.Stdin, sqlPayload) {
+			t.Fatalf("final stdin mismatch: got %q, want %q", last.Stdin, sqlPayload)
+		}
+	})
+
+	t.Run("mysql and mariadb stream into client binary and reject PGDMP", func(t *testing.T) {
+		for _, eng := range []string{"mysql", "mariadb"} {
+			dk, calls := fakeDockerExecServer(t, nil)
+			cl := &Client{Docker: dk, Engine: eng, Container: eng + "-1", Password: "pw"}
+			sqlPayload := []byte("CREATE TABLE t (id INT);")
+			if err := cl.RestoreStream(context.Background(), "shop", "", bytes.NewReader(sqlPayload), true); err != nil {
+				t.Fatalf("%s RestoreStream: %v", eng, err)
+			}
+			got := calls()
+			if len(got) != 1 || got[0].Cmd[0] != eng || got[0].Cmd[len(got[0].Cmd)-1] != "shop" {
+				t.Fatalf("%s unexpected cmd: %+v", eng, got)
+			}
+			if !bytes.Equal(got[0].Stdin, sqlPayload) {
+				t.Fatalf("%s stdin mismatch", eng)
+			}
+			if err := cl.RestoreStream(context.Background(), "shop", "", bytes.NewReader([]byte("PGDMP123")), false); err == nil {
+				t.Fatalf("%s accepted PGDMP binary stream", eng)
+			}
+		}
+	})
+
+	t.Run("mongo maps sourceDB or wildcard and honors overwrite", func(t *testing.T) {
+		dk, calls := fakeDockerExecServer(t, nil)
+		cl := &Client{Docker: dk, Engine: "mongo", Container: "mongo-1", Password: "pw"}
+		archive := []byte("mongo-archive-bytes")
+		if err := cl.RestoreStream(context.Background(), "target_db", "old_db", bytes.NewReader(archive), true); err != nil {
+			t.Fatalf("mongo RestoreStream(explicit): %v", err)
+		}
+		if err := cl.RestoreStream(context.Background(), "target_db", "", bytes.NewReader(archive), false); err != nil {
+			t.Fatalf("mongo RestoreStream(wildcard): %v", err)
+		}
+		got := calls()
+		if len(got) != 2 {
+			t.Fatalf("expected 2 mongo exec calls, got %d", len(got))
+		}
+		c1 := strings.Join(got[0].Cmd, " ")
+		if !strings.Contains(c1, "--nsFrom old_db.*") || !strings.Contains(c1, "--nsTo target_db.*") || !strings.Contains(c1, "--drop") {
+			t.Fatalf("unexpected explicit mongo cmd: %s", c1)
+		}
+		c2 := strings.Join(got[1].Cmd, " ")
+		if !strings.Contains(c2, "--nsFrom $db$.$coll$") || !strings.Contains(c2, "--nsTo target_db.$coll$") || strings.Contains(c2, "--drop") {
+			t.Fatalf("unexpected wildcard mongo cmd: %s", c2)
+		}
+		if !bytes.Equal(got[0].Stdin, archive) || !bytes.Equal(got[1].Stdin, archive) {
+			t.Fatalf("mongo stdin mismatch")
+		}
+	})
+
+	t.Run("validation rejects nil reader, bad db name, unsupported engine", func(t *testing.T) {
+		cl := &Client{Engine: "postgres"}
+		if err := cl.RestoreStream(context.Background(), "appdb", "", nil, false); err == nil {
+			t.Fatalf("expected nil reader error")
+		}
+		if err := cl.RestoreStream(context.Background(), "bad-db!", "", strings.NewReader("SELECT 1"), false); err == nil {
+			t.Fatalf("expected invalid db name error")
+		}
+		redisCl := &Client{Engine: "redis"}
+		if err := redisCl.RestoreStream(context.Background(), "all", "", strings.NewReader("REDIS0011"), false); err == nil {
+			t.Fatalf("expected redis unsupported error")
+		}
+	})
 }

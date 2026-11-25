@@ -152,3 +152,103 @@ func ParseBackupKeyInLocation(key string, loc *time.Location) ParsedBackup {
 	}
 	return out
 }
+
+// NormalizeBackupFormat canonicalizes a backup format string (trim, lowercase,
+// strip optional leading dot, and map common filename extensions to canonical formats).
+func NormalizeBackupFormat(format string) string {
+	f := strings.ToLower(strings.TrimSpace(format))
+	f = strings.TrimPrefix(f, ".")
+	switch f {
+	case "dump", "backup":
+		return "pgdump"
+	case "db", "sqlite3":
+		return "sqlite"
+	case "tgz":
+		return "tar"
+	default:
+		return f
+	}
+}
+
+// ValidBackupKind reports whether kind is a supported backup source kind.
+func ValidBackupKind(kind string) bool {
+	switch strings.TrimSpace(kind) {
+	case "database", "volume", "dir", "panel":
+		return true
+	default:
+		return false
+	}
+}
+
+// ValidBackupFormat reports whether format is a known backup payload format.
+func ValidBackupFormat(format string) bool {
+	switch NormalizeBackupFormat(format) {
+	case "pgdump", "sql", "archive", "rdb", "tar", "sqlite":
+		return true
+	default:
+		return false
+	}
+}
+
+// DefaultFormatForKind returns the canonical default format for backup kinds
+// that only have a single format (volume/dir -> tar, panel -> sqlite).
+func DefaultFormatForKind(kind string) string {
+	switch strings.TrimSpace(kind) {
+	case "volume", "dir":
+		return "tar"
+	case "panel":
+		return "sqlite"
+	default:
+		return ""
+	}
+}
+
+// ValidKindFormat reports whether format is valid for the given backup kind.
+func ValidKindFormat(kind, format string) bool {
+	f := NormalizeBackupFormat(format)
+	switch strings.TrimSpace(kind) {
+	case "database":
+		return f == "pgdump" || f == "sql" || f == "archive" || f == "rdb"
+	case "volume", "dir":
+		return f == "tar"
+	case "panel":
+		return f == "sqlite"
+	default:
+		return false
+	}
+}
+
+// CompatibleEngines returns the database engine IDs capable of restoring a
+// database backup in the given format. Empty or "any" format matches all engines.
+func CompatibleEngines(format string) []string {
+	switch NormalizeBackupFormat(format) {
+	case "", "any":
+		return []string{"postgres", "mysql", "mariadb", "mongo", "redis"}
+	case "pgdump":
+		return []string{"postgres"}
+	case "sql":
+		return []string{"postgres", "mysql", "mariadb"}
+	case "archive":
+		return []string{"mongo"}
+	case "rdb":
+		return []string{"redis"}
+	default:
+		return nil
+	}
+}
+
+// FormatCompatibleWithEngine reports whether a database backup format can be
+// restored into an instance running engine.
+func FormatCompatibleWithEngine(format, engine string) bool {
+	nf := NormalizeBackupFormat(format)
+	if nf == "" || nf == "any" {
+		return true
+	}
+	eng := strings.ToLower(strings.TrimSpace(engine))
+	for _, e := range CompatibleEngines(nf) {
+		if e == eng {
+			return true
+		}
+	}
+	return false
+}
