@@ -1,3 +1,8 @@
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version    INTEGER PRIMARY KEY,
+  applied_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -163,29 +168,38 @@ CREATE TABLE IF NOT EXISTS backups (
   tiers        TEXT NOT NULL DEFAULT '',
   job_id       TEXT NOT NULL DEFAULT '',
   started_at   INTEGER NOT NULL,
-  finished_at  INTEGER NOT NULL DEFAULT 0
+  finished_at  INTEGER NOT NULL DEFAULT 0,
+  verified_at  INTEGER NOT NULL DEFAULT 0,
+  origin       TEXT NOT NULL DEFAULT 'backup'
 );
 CREATE INDEX IF NOT EXISTS backups_policy ON backups(policy_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_backups_storage ON backups(storage_id);
 CREATE INDEX IF NOT EXISTS idx_backups_started ON backups(started_at);
 
 CREATE TABLE IF NOT EXISTS sites (
-  id          INTEGER PRIMARY KEY,
-  domains     TEXT NOT NULL,                 -- comma separated, first is primary
-  kind        TEXT NOT NULL DEFAULT 'proxy', -- proxy | redirect
-  project_id  INTEGER REFERENCES projects(id) ON DELETE SET NULL,
-  service     TEXT NOT NULL DEFAULT '',
-  port        INTEGER NOT NULL DEFAULT 0,
-  upstream    TEXT NOT NULL DEFAULT '',      -- for arbitrary upstream or redirect target
-  hsts        INTEGER NOT NULL DEFAULT 0,
-  compress    INTEGER NOT NULL DEFAULT 1,
-  basic_user  TEXT NOT NULL DEFAULT '',
-  basic_hash  TEXT NOT NULL DEFAULT '',
-  ip_allow    TEXT NOT NULL DEFAULT '',
-  max_body    TEXT NOT NULL DEFAULT '',
-  headers     TEXT NOT NULL DEFAULT '',      -- "Name: value" per line, added to upstream request
-  enabled     INTEGER NOT NULL DEFAULT 1,
-  created_at  INTEGER NOT NULL
+  id                 INTEGER PRIMARY KEY,
+  domains            TEXT NOT NULL,                 -- comma separated, first is primary
+  kind               TEXT NOT NULL DEFAULT 'proxy', -- proxy | redirect
+  project_id         INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  service            TEXT NOT NULL DEFAULT '',
+  port               INTEGER NOT NULL DEFAULT 0,
+  upstream           TEXT NOT NULL DEFAULT '',      -- for arbitrary upstream or redirect target
+  hsts               INTEGER NOT NULL DEFAULT 0,
+  compress           INTEGER NOT NULL DEFAULT 1,
+  basic_user         TEXT NOT NULL DEFAULT '',
+  basic_hash         TEXT NOT NULL DEFAULT '',
+  ip_allow           TEXT NOT NULL DEFAULT '',
+  max_body           TEXT NOT NULL DEFAULT '',
+  headers            TEXT NOT NULL DEFAULT '',      -- "Name: value" per line, added to upstream request
+  enabled            INTEGER NOT NULL DEFAULT 1,
+  created_at         INTEGER NOT NULL,
+  maintenance        INTEGER NOT NULL DEFAULT 0,
+  maintenance_msg    TEXT NOT NULL DEFAULT '',
+  maintenance_deploy INTEGER NOT NULL DEFAULT 0,
+  access_log         INTEGER NOT NULL DEFAULT 0,
+  load_balance       INTEGER NOT NULL DEFAULT 0,
+  health_path        TEXT NOT NULL DEFAULT '',
+  grpc               INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS certificates (
