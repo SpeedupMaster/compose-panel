@@ -82,19 +82,62 @@ func queryInt(r *http.Request, key string, def int) int {
 	return def
 }
 
+func isTrustedProxyAddr(remoteAddr string) bool {
+	remote := strings.TrimSpace(remoteAddr)
+	if remote == "" || remote == "@" {
+		return true
+	}
+	if host, _, err := net.SplitHostPort(remote); err == nil {
+		remote = host
+	}
+	if i := strings.IndexByte(remote, '%'); i >= 0 {
+		remote = remote[:i]
+	}
+	ip := net.ParseIP(remote)
+	if ip == nil {
+		// Unix domain socket path or non-IP local transport.
+		return true
+	}
+	return ip.IsLoopback() || ip.IsPrivate()
+}
+
 func clientIP(r *http.Request) string {
-	// The panel normally sits behind its own Caddy, which sets X-Forwarded-For.
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			xff = xff[:i]
+	remote := strings.TrimSpace(r.RemoteAddr)
+	if host, _, err := net.SplitHostPort(remote); err == nil {
+		remote = host
+	}
+	if isTrustedProxyAddr(r.RemoteAddr) {
+		// Caddy reverse_proxy appends the immediate peer IP to the rightmost
+		// position of X-Forwarded-For; scan right-to-left so client-forged
+		// leading entries cannot spoof the caller IP.
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			var loopbackFallback string
+			for i := len(parts) - 1; i >= 0; i-- {
+				cand := strings.TrimSpace(parts[i])
+				if cand == "" {
+					continue
+				}
+				if ip := net.ParseIP(cand); ip != nil {
+					if !ip.IsLoopback() {
+						return ip.String()
+					}
+					if loopbackFallback == "" {
+						loopbackFallback = ip.String()
+					}
+				}
+			}
+			if loopbackFallback != "" {
+				return loopbackFallback
+			}
 		}
-		return strings.TrimSpace(xff)
+		if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
+			if ip := net.ParseIP(xri); ip != nil {
+				return ip.String()
+			}
+		}
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+	return remote
 }
 
 func boolInt(b bool) int {

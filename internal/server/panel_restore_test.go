@@ -399,6 +399,70 @@ func TestSetupRestoreRejectsBadHeaderBeforeReadingBody(t *testing.T) {
 	}
 }
 
+type boundedReadCounter struct {
+	remaining int
+	readBytes int
+}
+
+func (c *boundedReadCounter) Read(p []byte) (int, error) {
+	if c.remaining <= 0 {
+		return 0, io.EOF
+	}
+	n := len(p)
+	if n > c.remaining {
+		n = c.remaining
+	}
+	for i := 0; i < n; i++ {
+		p[i] = 'A'
+	}
+	c.remaining -= n
+	c.readBytes += n
+	return n, nil
+}
+
+func TestSetupRestoreRejectsUnauthenticatedMultipartBeforeReadingFile(t *testing.T) {
+	srv := newTestServer(t)
+	boundary := "testboundary123"
+
+	// Case 1: Missing X-Setup-Token and a 10 MiB file part arrives before token -> must reject
+	// after reading only the small multipart header buffer, never draining or spooling the file.
+	prefix := "--" + boundary + "\r\n" +
+		"Content-Disposition: form-data; name=\"file\"; filename=\"huge.db\"\r\n" +
+		"Content-Type: application/octet-stream\r\n\r\n"
+	tail := "\r\n--" + boundary + "--\r\n"
+	counter1 := &boundedReadCounter{remaining: 10 << 20}
+	body := io.MultiReader(strings.NewReader(prefix), counter1, strings.NewReader(tail))
+	req := httptest.NewRequest(http.MethodPost, "/api/setup/restore", body)
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
+	req.RemoteAddr = "203.0.113.10:1234"
+	err := srv.handleSetupRestore(httptest.NewRecorder(), req)
+	if ae, ok := err.(*apiError); !ok || ae.Status != 403 {
+		t.Fatalf("file before token without header: expected 403, got %v", err)
+	}
+	if counter1.readBytes > 16<<10 {
+		t.Fatalf("unauthenticated file part drained %d bytes (should stop immediately after header buffer)", counter1.readBytes)
+	}
+
+	// Case 2: Wrong token field arrives before a 10 MiB file -> must reject before draining file.
+	prefixBadTok := "--" + boundary + "\r\n" +
+		"Content-Disposition: form-data; name=\"token\"\r\n\r\nwrong-token\r\n" +
+		"--" + boundary + "\r\n" +
+		"Content-Disposition: form-data; name=\"file\"; filename=\"huge.db\"\r\n" +
+		"Content-Type: application/octet-stream\r\n\r\n"
+	counter2 := &boundedReadCounter{remaining: 10 << 20}
+	body2 := io.MultiReader(strings.NewReader(prefixBadTok), counter2, strings.NewReader(tail))
+	req2 := httptest.NewRequest(http.MethodPost, "/api/setup/restore", body2)
+	req2.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
+	req2.RemoteAddr = "203.0.113.11:1234"
+	err2 := srv.handleSetupRestore(httptest.NewRecorder(), req2)
+	if ae, ok := err2.(*apiError); !ok || ae.Status != 403 {
+		t.Fatalf("bad token field before file: expected 403, got %v", err2)
+	}
+	if counter2.readBytes > 16<<10 {
+		t.Fatalf("bad token file part drained %d bytes (should stop immediately)", counter2.readBytes)
+	}
+}
+
 func TestSetupStatusExposesUniqueBootIDAndMetricsCancelsPromptly(t *testing.T) {
 	srv1 := newTestServer(t)
 	srv2 := newTestServer(t)

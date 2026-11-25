@@ -27,6 +27,7 @@ var migrations = []string{
 	`ALTER TABLE backups ADD COLUMN verified_at INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE backups ADD COLUMN origin TEXT NOT NULL DEFAULT 'backup'`,
 	`ALTER TABLE db_instances ADD COLUMN image TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE users ADD COLUMN all_projects INTEGER NOT NULL DEFAULT 1`,
 }
 
 // Open opens (and creates if needed) the panel database in WAL mode.
@@ -49,6 +50,10 @@ func Open(path string) (*sql.DB, error) {
 			db.Close()
 			return nil, fmt.Errorf("migrate %q: %w", m, err)
 		}
+	}
+	if _, err := db.Exec(`UPDATE users SET all_projects=0 WHERE role<>'admin' AND id IN (SELECT DISTINCT user_id FROM user_projects)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("backfill user all_projects: %w", err)
 	}
 	return db, nil
 }

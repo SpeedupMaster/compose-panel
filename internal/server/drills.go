@@ -57,7 +57,6 @@ func (s *Server) listDrills() []restoreDrill {
 	if err != nil {
 		return out
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var d restoreDrill
 		var src string
@@ -66,10 +65,13 @@ func (s *Server) listDrills() []restoreDrill {
 			continue
 		}
 		d.Enabled = en == 1
-		if p, err := s.getPolicy(d.PolicyID); err == nil {
-			d.Label, d.Kind = p.Label, p.Source.Kind
-		}
 		out = append(out, d)
+	}
+	rows.Close()
+	for i := range out {
+		if p, err := s.getPolicy(out[i].PolicyID); err == nil {
+			out[i].Label, out[i].Kind = p.Label, p.Source.Kind
+		}
 	}
 	return out
 }
@@ -112,6 +114,26 @@ func (s *Server) addDrillSchedules(add func(string, scheduleMeta, func())) {
 
 func (s *Server) handleListDrills(w http.ResponseWriter, r *http.Request, u *User) error {
 	ds := s.listDrills()
+	restricted := !u.can(roleAdmin) && u.Projects != nil
+	var allowedDrillIDs map[int64]bool
+	var allowedNames map[string]bool
+	var volProjects map[string]string
+	if restricted {
+		allowedNames = s.allowedProjectNames(u)
+		allowedDrillIDs = map[int64]bool{}
+		filtered := make([]restoreDrill, 0, len(ds))
+		for _, d := range ds {
+			p, err := s.getPolicy(d.PolicyID)
+			if err != nil {
+				continue
+			}
+			if s.canAccessBackupSource(r.Context(), u, p.Source, &volProjects, allowedNames) {
+				allowedDrillIDs[d.ID] = true
+				filtered = append(filtered, d)
+			}
+		}
+		ds = filtered
+	}
 	for i := range ds {
 		ds[i].Next = s.nextRun(fmt.Sprintf("drill:%d", ds[i].ID))
 		if runs := s.drillRuns(`WHERE drill_id=? ORDER BY started_at DESC LIMIT 1`, ds[i].ID); len(runs) > 0 {
@@ -119,10 +141,30 @@ func (s *Server) handleListDrills(w http.ResponseWriter, r *http.Request, u *Use
 		}
 	}
 	runs := s.drillRuns(`ORDER BY started_at DESC LIMIT 50`)
+	if restricted {
+		filteredRuns := make([]drillRun, 0, len(runs))
+		for _, run := range runs {
+			if run.DrillID > 0 {
+				if allowedDrillIDs[run.DrillID] {
+					filteredRuns = append(filteredRuns, run)
+				}
+				continue
+			}
+			if run.BackupID > 0 {
+				if bs := s.listBackups(`WHERE b.id=?`, run.BackupID); len(bs) > 0 && s.canAccessBackupSource(r.Context(), u, bs[0].Source, &volProjects, allowedNames) {
+					filteredRuns = append(filteredRuns, run)
+				}
+			}
+		}
+		runs = filteredRuns
+	}
 	return ok(w, map[string]any{"drills": ds, "runs": runs})
 }
 
 func (s *Server) handleSaveDrill(w http.ResponseWriter, r *http.Request, u *User) error {
+	if !u.can(roleAdmin) {
+		return errForbidden
+	}
 	var req restoreDrill
 	if err := readJSON(r, &req); err != nil {
 		return err
@@ -163,6 +205,9 @@ func (s *Server) handleSaveDrill(w http.ResponseWriter, r *http.Request, u *User
 }
 
 func (s *Server) handleDeleteDrill(w http.ResponseWriter, r *http.Request, u *User) error {
+	if !u.can(roleAdmin) {
+		return errForbidden
+	}
 	id, err := pathID(r, "id")
 	if err != nil {
 		return err
@@ -178,6 +223,9 @@ func (s *Server) handleDeleteDrill(w http.ResponseWriter, r *http.Request, u *Us
 }
 
 func (s *Server) handleRunDrill(w http.ResponseWriter, r *http.Request, u *User) error {
+	if !u.can(roleAdmin) {
+		return errForbidden
+	}
 	id, err := pathID(r, "id")
 	if err != nil {
 		return err

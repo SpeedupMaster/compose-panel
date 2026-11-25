@@ -128,6 +128,13 @@ func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request, u *User
 	all := append(s.customTemplates(), builtinTemplates()...)
 	for i := range all {
 		fillTemplate(&all[i])
+		if !u.can(roleOperator) {
+			for j := range all[i].Env {
+				if all[i].Env[j].Secret {
+					all[i].Env[j].Value = ""
+				}
+			}
+		}
 	}
 	return ok(w, all)
 }
@@ -180,6 +187,9 @@ func (s *Server) handleSaveAsTemplate(w http.ResponseWriter, r *http.Request, u 
 }
 
 func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request, u *User) error {
+	if !u.can(roleAdmin) {
+		return errForbidden
+	}
 	id, err := pathID(r, "id")
 	if err != nil {
 		return err
