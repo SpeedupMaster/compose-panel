@@ -130,12 +130,13 @@ jobs:
               ? 'DELETE /orgs/{org}/packages/container/{package_name}/versions/{package_version_id}'
               : 'DELETE /users/{username}/packages/container/{package_name}/versions/{package_version_id}'
             const baseParams = isOrg
-              ? { org: owner, package_name: pkg, per_page: 100 }
-              : { username: owner, package_name: pkg, per_page: 100 }
+              ? { org: owner, package_name: pkg }
+              : { username: owner, package_name: pkg }
 
-            const versions = await github.paginate(listRoute, baseParams)
+            const versions = await github.paginate(listRoute, { ...baseParams, per_page: 100 })
             let kept = 0
             let deleted = 0
+            let failed = 0
             for (const v of versions) {
               const tags = v.metadata?.container?.tags || []
               if (shouldKeep(v)) {
@@ -148,7 +149,11 @@ jobs:
                 deleted++
                 core.info(`DELETE id=${v.id} digest=${v.name} tags=${JSON.stringify(tags)}`)
               } catch (err) {
-                core.warning(`Failed to delete version ${v.id} (${v.name}, tags=${JSON.stringify(tags)}): ${err.message}`)
+                failed++
+                core.error(`Failed to delete version ${v.id} (${v.name}, tags=${JSON.stringify(tags)}): ${err.message}`)
               }
             }
-            core.info(`GHCR prune summary: total=${versions.length}, kept=${kept}, deleted=${deleted}`)
+            core.info(`GHCR prune summary: total=${versions.length}, kept=${kept}, deleted=${deleted}, failed=${failed}`)
+            if (failed > 0) {
+              core.setFailed(`Failed to delete ${failed} old GHCR image version(s)`)
+            }
