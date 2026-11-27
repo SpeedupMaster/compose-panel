@@ -64,6 +64,9 @@ func TestOpenConfiguresLowMemoryPragmasAndPool(t *testing.T) {
 		"idx_metrics_project_ts",
 		"idx_backups_storage",
 		"idx_backups_started",
+		"idx_cla_project_service",
+		"idx_cla_name",
+		"idx_cla_archived_at",
 	}
 	for _, idx := range wantIndexes {
 		var name string
@@ -88,6 +91,19 @@ func TestOpenConfiguresLowMemoryPragmasAndPool(t *testing.T) {
 		{"users", "last_totp_step"},
 		{"deployments", "files_json"},
 		{"image_checks", "last_auto_digest"},
+		{"container_log_archives", "id"},
+		{"container_log_archives", "project"},
+		{"container_log_archives", "service"},
+		{"container_log_archives", "container_id"},
+		{"container_log_archives", "container_name"},
+		{"container_log_archives", "image"},
+		{"container_log_archives", "reason"},
+		{"container_log_archives", "started_at"},
+		{"container_log_archives", "archived_at"},
+		{"container_log_archives", "size_bytes"},
+		{"container_log_archives", "raw_bytes"},
+		{"container_log_archives", "line_count"},
+		{"container_log_archives", "truncated"},
 	} {
 		var dummy any
 		if err := db.QueryRow(`SELECT `+tc.col+` FROM `+tc.table+` LIMIT 0`).Scan(&dummy); err != nil && err != sql.ErrNoRows {
@@ -450,5 +466,57 @@ func TestOpenReadOnly(t *testing.T) {
 
 	if _, err := ro.Exec(`INSERT INTO settings(key,value) VALUES('write','nope')`); err == nil {
 		t.Errorf("expected write via OpenReadOnly to fail, succeeded")
+	}
+}
+
+func TestOpenMigratesContainerLogArchives(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "v21.db")
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL); INSERT INTO schema_migrations(version, applied_at) VALUES(21, 1700000000);`); err != nil {
+		raw.Close()
+		t.Fatalf("seed v21 schema_migrations: %v", err)
+	}
+	// Apply migrations directly without re-running schema.sql so v22 itself must create the table & indexes.
+	if err := applyMigrations(raw); err != nil {
+		raw.Close()
+		t.Fatalf("applyMigrations(v21): %v", err)
+	}
+	var maxVer int
+	if err := raw.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&maxVer); err != nil {
+		raw.Close()
+		t.Fatalf("query max version: %v", err)
+	}
+	if maxVer < 22 {
+		raw.Close()
+		t.Fatalf("schema_migrations max version = %d, want >= 22", maxVer)
+	}
+	for _, idx := range []string{"idx_cla_project_service", "idx_cla_name", "idx_cla_archived_at"} {
+		var name string
+		if err := raw.QueryRow(`SELECT name FROM sqlite_master WHERE type='index' AND name=?`, idx).Scan(&name); err != nil {
+			raw.Close()
+			t.Fatalf("migration v22 missing index %s: %v", idx, err)
+		}
+	}
+	if _, err := raw.Exec(`INSERT INTO container_log_archives(id, project, service, container_id, container_name, image, reason, started_at, archived_at, size_bytes, raw_bytes, line_count, truncated) VALUES('cla_1','demo','web','cid1','demo-web-1','nginx:latest','deploy',100,200,50,120,3,0)`); err != nil {
+		raw.Close()
+		t.Fatalf("insert into migrated container_log_archives: %v", err)
+	}
+	raw.Close()
+
+	// Full Open on the upgraded DB must stay idempotent and preserve existing archive rows.
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open after v22 migration: %v", err)
+	}
+	defer db.Close()
+	var gotReason string
+	if err := db.QueryRow(`SELECT reason FROM container_log_archives WHERE id='cla_1'`).Scan(&gotReason); err != nil {
+		t.Fatalf("select preserved archive row: %v", err)
+	}
+	if gotReason != "deploy" {
+		t.Errorf("reason = %q, want %q", gotReason, "deploy")
 	}
 }

@@ -43,6 +43,24 @@ var migrations = []migration{
 	{19, `CREATE INDEX IF NOT EXISTS idx_backups_storage ON backups(storage_id)`},
 	{20, `CREATE INDEX IF NOT EXISTS idx_backups_started ON backups(started_at)`},
 	{21, `UPDATE users SET all_projects=0 WHERE role<>'admin' AND id IN (SELECT DISTINCT user_id FROM user_projects)`},
+	{22, `CREATE TABLE IF NOT EXISTS container_log_archives (
+  id             TEXT PRIMARY KEY,
+  project        TEXT NOT NULL DEFAULT '',
+  service        TEXT NOT NULL DEFAULT '',
+  container_id   TEXT NOT NULL,
+  container_name TEXT NOT NULL,
+  image          TEXT NOT NULL DEFAULT '',
+  reason         TEXT NOT NULL,
+  started_at     INTEGER NOT NULL DEFAULT 0,
+  archived_at    INTEGER NOT NULL,
+  size_bytes     INTEGER NOT NULL DEFAULT 0,
+  raw_bytes      INTEGER NOT NULL DEFAULT 0,
+  line_count     INTEGER NOT NULL DEFAULT 0,
+  truncated      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_cla_project_service ON container_log_archives(project, service, archived_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cla_name ON container_log_archives(container_name, archived_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cla_archived_at ON container_log_archives(archived_at);`},
 }
 
 // Open opens (and creates if needed) the panel database in WAL mode.

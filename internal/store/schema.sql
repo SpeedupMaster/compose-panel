@@ -344,3 +344,22 @@ CREATE TABLE IF NOT EXISTS drill_runs (
   finished_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS drill_runs_started ON drill_runs(started_at DESC);
+
+CREATE TABLE IF NOT EXISTS container_log_archives (
+  id             TEXT PRIMARY KEY,
+  project        TEXT NOT NULL DEFAULT '',
+  service        TEXT NOT NULL DEFAULT '',
+  container_id   TEXT NOT NULL,
+  container_name TEXT NOT NULL,
+  image          TEXT NOT NULL DEFAULT '',
+  reason         TEXT NOT NULL,
+  started_at     INTEGER NOT NULL DEFAULT 0,
+  archived_at    INTEGER NOT NULL,
+  size_bytes     INTEGER NOT NULL DEFAULT 0,
+  raw_bytes      INTEGER NOT NULL DEFAULT 0,
+  line_count     INTEGER NOT NULL DEFAULT 0,
+  truncated      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_cla_project_service ON container_log_archives(project, service, archived_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cla_name ON container_log_archives(container_name, archived_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cla_archived_at ON container_log_archives(archived_at);
