@@ -130,3 +130,56 @@ test('streamLines invokes onReset only on subsequent reconnects and closes on en
     globalThis.EventSource = origES
   }
 })
+
+test('streamLines skips onReset on reconnect when resetOnReconnect is false', () => {
+  const origES = globalThis.EventSource
+  const instances = []
+  class FakeEventSource {
+    static OPEN = 1
+    static CLOSED = 2
+    readyState = 1
+    closed = false
+    onopen = null
+    onmessage = null
+    onerror = null
+    listeners = new Map()
+    constructor(url, opts) {
+      this.url = url
+      this.opts = opts
+      instances.push(this)
+    }
+    addEventListener(type, fn) {
+      this.listeners.set(type, fn)
+    }
+    close() {
+      this.closed = true
+      this.readyState = FakeEventSource.CLOSED
+    }
+  }
+  globalThis.EventSource = FakeEventSource
+  try {
+    const lines = []
+    let resets = 0
+    const close = streamLines(
+      '/containers/c1/logs?tail=500&follow=1',
+      (l) => lines.push(l),
+      undefined,
+      () => {
+        resets++
+        lines.length = 0
+      },
+      { resetOnReconnect: false },
+    )
+    const es = instances[0]
+    es.onopen?.()
+    es.onmessage?.({ data: '2026-11-27T01:00:01Z first' })
+    // Reconnect should NOT reset buffer when resetOnReconnect is false.
+    es.onopen?.()
+    es.onmessage?.({ data: '2026-11-27T01:00:02Z second' })
+    assert.equal(resets, 0)
+    assert.deepEqual(lines, ['2026-11-27T01:00:01Z first', '2026-11-27T01:00:02Z second'])
+    close()
+  } finally {
+    globalThis.EventSource = origES
+  }
+})

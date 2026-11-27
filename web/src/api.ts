@@ -75,19 +75,25 @@ export const post = <T = any>(p: string, b: unknown = {}) => api<T>('POST', p, b
 export const put = <T = any>(p: string, b: unknown = {}) => api<T>('PUT', p, b)
 export const del = <T = any>(p: string) => api<T>('DELETE', p)
 
+export interface StreamLinesOptions {
+  resetOnReconnect?: boolean
+}
+
 // Server-Sent Events stream of text lines; returns a function that closes it.
 // When EventSource reconnects after a network drop, onReset fires before replayed lines arrive
-// so callers can clear their buffer instead of duplicating the stream from byte 0.
+// unless opts.resetOnReconnect is explicitly false (used for cursor-resumed streams via Last-Event-ID).
 export function streamLines(
   path: string,
   onLine: (l: string) => void,
   onEnd?: (data: string) => void,
   onReset?: () => void,
+  opts?: StreamLinesOptions,
 ): () => void {
   const es = new EventSource('/api' + path, { withCredentials: true })
+  const resetOnReconnect = opts?.resetOnReconnect ?? true
   let opens = 0
   es.onopen = () => {
-    if (opens++ > 0) onReset?.()
+    if (opens++ > 0 && resetOnReconnect) onReset?.()
   }
   es.onmessage = (e) => onLine(e.data)
   es.addEventListener('end', (e) => {

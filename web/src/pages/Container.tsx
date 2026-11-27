@@ -1,12 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import type { Terminal } from '@xterm/xterm'
-import { bytes, dateTime, get, post, streamLines } from '../api'
+import { bytes, dateTime, del, get, post, streamLines } from '../api'
 import { useCan } from '../auth'
 import { MetricsPanel } from '../components/charts'
 import { FileBrowser } from '../components/files'
+import {
+  advanceLogCursor,
+  archiveReasonLabel,
+  formatArchiveOption,
+  formatLogCursor,
+  LiveStreamSnapshot,
+  LogArchiveItem,
+  LogCursor,
+  shouldResumeLiveLogs,
+  stripDockerTimestamp,
+} from '../components/logStream'
 import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
-import { Card, Confirm, ErrorBox, Icon, Loading, LogView, Meter, Page, Select, Status, Tabs, useAction, useLoad } from '../components/ui'
+import { Card, Confirm, ErrorBox, Icon, Loading, LogView, Meter, Page, Select, Status, Tabs, useAction, useLoad, useToast } from '../components/ui'
 
 type Tab = 'logs' | 'terminal' | 'files' | 'metrics' | 'info'
 
@@ -51,7 +62,16 @@ export default function ContainerPage() {
         value={tab}
         onChange={(t) => setParams({ tab: t }, { replace: true })}
       />
-      {tab === 'logs' && <Logs id={id!} running={c.running} />}
+      {tab === 'logs' && (
+        <Logs
+          id={id!}
+          running={c.running}
+          startedAt={c.startedAt || ''}
+          restartCount={c.restartCount || 0}
+          canOperate={can.operator}
+          onStreamEnd={reload}
+        />
+      )}
       {tab === 'terminal' && (c.running ? <Term id={id!} /> : <div className="alert warn">容器未运行，无法打开终端。</div>)}
       {tab === 'files' && <FileBrowser base={`/containers/${id}/fs`} canWrite={can.operator} note="上传会覆盖同名文件；文件变更记录到审计日志。" />}
       {tab === 'metrics' && <MetricsPanel url={`/containers/${id}/metrics`} />}
@@ -65,7 +85,21 @@ export default function ContainerPage() {
   )
 }
 
-function Logs({ id, running }: { id: string; running: boolean }) {
+function Logs({
+  id,
+  running,
+  startedAt,
+  restartCount,
+  canOperate,
+  onStreamEnd,
+}: {
+  id: string
+  running: boolean
+  startedAt: string
+  restartCount: number
+  canOperate: boolean
+  onStreamEnd: () => void
+}) {
   const [lines, setLines] = useState<string[]>([])
   const [tail, setTail] = useState('500')
   const [follow, setFollow] = useState(true)
@@ -73,52 +107,239 @@ function Logs({ id, running }: { id: string; running: boolean }) {
   const [filter, setFilter] = useState('')
   const [ts, setTs] = useState(false)
   const [ended, setEnded] = useState(false)
+  const [source, setSource] = useState('live')
+  const [resumeEpoch, setResumeEpoch] = useState(0)
+  const [archiveMeta, setArchiveMeta] = useState<LogArchiveItem | null>(null)
+  const [archiveTotal, setArchiveTotal] = useState(0)
+  const [archiveLoading, setArchiveLoading] = useState(false)
+  const [archiveError, setArchiveError] = useState<unknown>(null)
+  const [deletingArchive, setDeletingArchive] = useState<LogArchiveItem | null>(null)
+  const toast = useToast()
+
+  const { data: archives, reload: reloadArchives } = useLoad(
+    () => get<LogArchiveItem[]>(`/containers/${id}/log-archives`),
+    [id],
+  )
+
+  const bufRef = useRef<string[]>([])
+  const cursorRef = useRef<LogCursor | null>(null)
+  const prevStreamKeyRef = useRef('')
+  const streamSnapRef = useRef<LiveStreamSnapshot | null>(null)
   const pausedRef = useRef(false)
   pausedRef.current = paused
+  const runningRef = useRef(running)
+  runningRef.current = running
+  const startedAtRef = useRef(startedAt)
+  startedAtRef.current = startedAt
+  const restartCountRef = useRef(restartCount)
+  restartCountRef.current = restartCount
+  const onStreamEndRef = useRef(onStreamEnd)
+  onStreamEndRef.current = onStreamEnd
+
+  // Reset selected source when navigating to a different container.
   useEffect(() => {
-    const buf: string[] = []
-    let raf = 0
-    setLines([])
-    setEnded(false)
-    const reset = () => {
-      buf.length = 0
-      if (raf) {
-        cancelAnimationFrame(raf)
-        raf = 0
-      }
-      if (!pausedRef.current) setLines([])
+    setSource('live')
+  }, [id])
+
+  // Live SSE streaming with cursor-based incremental reconnect and seamless restart resume.
+  useEffect(() => {
+    if (source !== 'live') return
+    const streamKey = `${id}|${tail}|${follow}`
+    const isResume = prevStreamKeyRef.current === streamKey && resumeEpoch > 0
+    prevStreamKeyRef.current = streamKey
+
+    if (!isResume) {
+      bufRef.current = []
+      cursorRef.current = null
+      setLines([])
     }
+    setEnded(false)
+    setArchiveMeta(null)
+    setArchiveError(null)
+    streamSnapRef.current = {
+      running: runningRef.current,
+      startedAt: startedAtRef.current,
+      restartCount: restartCountRef.current,
+    }
+
+    let raf = 0
+    const retryTimers: number[] = []
+    const after = isResume ? formatLogCursor(cursorRef.current) : ''
+    const path = after
+      ? `/containers/${id}/logs?tail=all&follow=${follow ? 1 : 0}&after=${encodeURIComponent(after)}`
+      : `/containers/${id}/logs?tail=${tail}&follow=${follow && runningRef.current ? 1 : 0}`
+
     const close = streamLines(
-      `/containers/${id}/logs?tail=${tail}&follow=${follow && running ? 1 : 0}`,
+      path,
       (l) => {
+        cursorRef.current = advanceLogCursor(cursorRef.current, l)
+        const buf = bufRef.current
         buf.push(l)
         if (buf.length > 20000) buf.splice(0, buf.length - 20000)
-        if (!raf && !pausedRef.current) raf = requestAnimationFrame(() => { raf = 0; setLines([...buf]) })
+        if (!raf && !pausedRef.current) {
+          raf = requestAnimationFrame(() => {
+            raf = 0
+            setLines([...bufRef.current])
+          })
+        }
       },
-      () => { setEnded(true); setLines([...buf]) },
-      reset,
+      () => {
+        setEnded(true)
+        if (!pausedRef.current) setLines([...bufRef.current])
+        if (follow) {
+          onStreamEndRef.current?.()
+          retryTimers.push(window.setTimeout(() => onStreamEndRef.current?.(), 1500))
+        }
+      },
+      undefined,
+      { resetOnReconnect: false },
     )
-    return () => { close(); if (raf) cancelAnimationFrame(raf) }
-  }, [id, tail, follow, running])
-  const shown = ts ? lines : lines.map((l) => l.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z\s/, ''))
+    return () => {
+      close()
+      if (raf) cancelAnimationFrame(raf)
+      retryTimers.forEach((t) => clearTimeout(t))
+    }
+  }, [id, tail, follow, source, resumeEpoch])
+
+  // Detect container start or fast in-place restart after stream EOF and resume without clearing.
+  useEffect(() => {
+    if (source !== 'live') return
+    if (shouldResumeLiveLogs(streamSnapRef.current, { running, startedAt, restartCount }, ended, follow)) {
+      setResumeEpoch((n) => n + 1)
+    }
+  }, [running, startedAt, restartCount, ended, follow, source])
+
+  // Immediately flush buffered lines when unpausing.
+  useEffect(() => {
+    if (source === 'live' && !paused) {
+      setLines([...bufRef.current])
+    }
+  }, [paused, source])
+
+  // Load selected historical log archive.
+  useEffect(() => {
+    if (source === 'live') return
+    prevStreamKeyRef.current = ''
+    let cancelled = false
+    setArchiveLoading(true)
+    setArchiveError(null)
+    setLines([])
+    setEnded(false)
+    get<{ archive: LogArchiveItem; lines: string[]; totalLines: number }>(
+      `/log-archives/${encodeURIComponent(source)}?tail=${encodeURIComponent(tail)}`,
+    )
+      .then((res) => {
+        if (cancelled) return
+        setArchiveMeta(res.archive)
+        setArchiveTotal(res.totalLines)
+        setLines(res.lines || [])
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setArchiveError(err)
+        setArchiveMeta(null)
+      })
+      .finally(() => {
+        if (!cancelled) setArchiveLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [source, tail])
+
+  const isLive = source === 'live'
+  const selectedArchive = isLive ? null : archiveMeta || archives?.find((a) => a.id === source) || null
+  const shown = ts ? lines : lines.map(stripDockerTimestamp)
+
   return (
     <section className="card" style={{ overflow: 'hidden' }}>
       <div className="card-head">
         <div className="row wrap">
+          {archives && archives.length > 0 && (
+            <Select
+              className="filter-select"
+              style={{ width: 240 }}
+              aria-label="日志来源"
+              value={source}
+              onChange={(v) => setSource(v)}
+            >
+              <option value="live">实时日志（当前容器）</option>
+              {archives.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {formatArchiveOption(a)}
+                </option>
+              ))}
+            </Select>
+          )}
           <input className="input filter-input" placeholder="筛选" aria-label="筛选日志" value={filter} onChange={(e) => setFilter(e.target.value)} />
           <Select className="filter-select" style={{ width: 130 }} aria-label="行数" value={tail} onChange={(v) => setTail(v)}>
             {['200', '500', '2000', '10000', 'all'].map((t) => <option key={t} value={t}>{t === 'all' ? '全部' : `最近 ${t} 行`}</option>)}
           </Select>
-          <label className="check"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />实时跟随</label>
+          {isLive && <label className="check"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />实时跟随</label>}
           <label className="check"><input type="checkbox" checked={ts} onChange={(e) => setTs(e.target.checked)} />时间戳</label>
         </div>
         <div className="row wrap">
-          {ended && <span className="label">流已结束</span>}
-          <button className="btn btn-sm" onClick={() => setPaused(!paused)}>{paused ? '继续' : '暂停'}</button>
-          <a className="btn btn-sm" href={`/api/containers/${id}/logs?download=1`}><Icon name="download" size={16} />下载</a>
+          {isLive && ended && <span className="label">流已结束</span>}
+          {isLive && <button className="btn btn-sm" onClick={() => setPaused(!paused)}>{paused ? '继续' : '暂停'}</button>}
+          {!isLive && canOperate && selectedArchive && (
+            <button className="btn btn-sm btn-danger" onClick={() => setDeletingArchive(selectedArchive)}>
+              <Icon name="trash" size={14} />删除归档
+            </button>
+          )}
+          <a
+            className="btn btn-sm"
+            href={isLive ? `/api/containers/${id}/logs?download=1` : `/api/log-archives/${encodeURIComponent(source)}?download=1`}
+          >
+            <Icon name="download" size={16} />下载
+          </a>
         </div>
       </div>
-      <LogView lines={shown} height={560} follow={!paused} filter={filter} />
+      {!isLive && selectedArchive && (
+        <div
+          className="row wrap"
+          style={{
+            padding: '8px 16px',
+            borderBottom: '1px solid var(--line)',
+            background: 'var(--bg)',
+            fontSize: 13,
+            gap: '6px 14px',
+          }}
+        >
+          <span className="badge off">{archiveReasonLabel(selectedArchive.reason)}</span>
+          <span className="muted">归档于 {dateTime(selectedArchive.archivedAt)}</span>
+          <span className="mono muted">容器 {selectedArchive.containerId.slice(0, 12)}</span>
+          {selectedArchive.image && <span className="mono muted">{selectedArchive.image}</span>}
+          <span className="muted">
+            共 {archiveTotal || selectedArchive.lineCount} 行 · {bytes(selectedArchive.sizeBytes)}
+          </span>
+          {selectedArchive.truncated && <span className="badge warn">已截断（仅保留最近 20,000 行）</span>}
+        </div>
+      )}
+      {!isLive && archiveError ? (
+        <div style={{ padding: 16 }}>
+          <ErrorBox error={archiveError} />
+        </div>
+      ) : !isLive && archiveLoading ? (
+        <Loading />
+      ) : (
+        <LogView lines={shown} height={560} follow={isLive && !paused} filter={filter} />
+      )}
+      {deletingArchive && (
+        <Confirm
+          title="删除历史日志归档"
+          danger
+          confirmText="删除"
+          onClose={() => setDeletingArchive(null)}
+          onConfirm={async () => {
+            await del(`/log-archives/${encodeURIComponent(deletingArchive.id)}`)
+            toast.ok('已删除历史日志归档')
+            setSource('live')
+            reloadArchives()
+          }}
+        >
+          确定删除 <code className="mono">{deletingArchive.containerName}</code> 在 {dateTime(deletingArchive.archivedAt)} 的历史日志归档？删除后无法恢复。
+        </Confirm>
+      )}
     </section>
   )
 }
