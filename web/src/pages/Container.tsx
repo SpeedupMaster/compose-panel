@@ -13,6 +13,7 @@ import {
   LiveStreamSnapshot,
   LogArchiveItem,
   LogCursor,
+  resolveActiveArchive,
   shouldResumeLiveLogs,
   stripDockerTimestamp,
 } from '../components/logStream'
@@ -223,6 +224,8 @@ function Logs({
     let cancelled = false
     setArchiveLoading(true)
     setArchiveError(null)
+    setArchiveMeta(null)
+    setArchiveTotal(0)
     setLines([])
     setEnded(false)
     get<{ archive: LogArchiveItem; lines: string[]; totalLines: number }>(
@@ -248,7 +251,7 @@ function Logs({
   }, [source, tail])
 
   const isLive = source === 'live'
-  const selectedArchive = isLive ? null : archiveMeta || archives?.find((a) => a.id === source) || null
+  const selectedArchive = isLive ? null : resolveActiveArchive(archiveMeta, archives || [], source)
   const shown = ts ? lines : lines.map(stripDockerTimestamp)
 
   return (

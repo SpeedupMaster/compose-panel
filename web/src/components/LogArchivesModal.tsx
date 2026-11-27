@@ -8,6 +8,8 @@ import {
   formatArchiveOption,
   LogArchiveItem,
   nextArchiveAfterDelete,
+  resolveActiveArchive,
+  resolveArchiveTarget,
   stripDockerTimestamp,
 } from './logStream'
 import { Confirm, Empty, ErrorBox, Icon, Loading, LogView, Modal, Select, useToast } from './ui'
@@ -29,7 +31,8 @@ export function LogArchivesModal({
   const toast = useToast()
   const targets = archiveTargets(archives, showProject)
   const [target, setTarget] = useState('')
-  const filtered = filterArchivesByTarget(archives, target, showProject)
+  const effectiveTarget = resolveArchiveTarget(targets, target)
+  const filtered = filterArchivesByTarget(archives, effectiveTarget, showProject)
   const [selectedId, setSelectedId] = useState(() => filtered[0]?.id || '')
   const [tail, setTail] = useState('500')
   const [filter, setFilter] = useState('')
@@ -40,6 +43,13 @@ export function LogArchivesModal({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<unknown>(null)
   const [deleting, setDeleting] = useState<LogArchiveItem | null>(null)
+
+  // Reset stale target filter if its last archive was deleted.
+  useEffect(() => {
+    if (target && effectiveTarget === '') {
+      setTarget('')
+    }
+  }, [target, effectiveTarget])
 
   // Keep selectedId valid when target filter or archive list changes.
   useEffect(() => {
@@ -56,12 +66,16 @@ export function LogArchivesModal({
     if (!selectedId) {
       setLines([])
       setMeta(null)
+      setTotalLines(0)
       setError(null)
       return
     }
     let cancelled = false
     setLoading(true)
     setError(null)
+    setMeta(null)
+    setTotalLines(0)
+    setLines([])
     get<{ archive: LogArchiveItem; lines: string[]; totalLines: number }>(
       `/log-archives/${encodeURIComponent(selectedId)}?tail=${encodeURIComponent(tail)}`,
     )
@@ -85,7 +99,7 @@ export function LogArchivesModal({
     }
   }, [selectedId, tail])
 
-  const active = meta || filtered.find((a) => a.id === selectedId) || null
+  const active = resolveActiveArchive(meta, filtered, selectedId)
   const shown = ts ? lines : lines.map(stripDockerTimestamp)
 
   return (
@@ -101,7 +115,7 @@ export function LogArchivesModal({
                   className="filter-select"
                   style={{ width: 170 }}
                   aria-label="筛选服务或容器"
-                  value={target}
+                  value={effectiveTarget}
                   onChange={(v) => setTarget(v)}
                 >
                   <option value="">全部容器（{archives.length}）</option>
@@ -121,7 +135,7 @@ export function LogArchivesModal({
               >
                 {filtered.map((a) => (
                   <option key={a.id} value={a.id}>
-                    {formatArchiveOption(a, target === '', showProject)}
+                    {formatArchiveOption(a, effectiveTarget === '', showProject)}
                   </option>
                 ))}
               </Select>

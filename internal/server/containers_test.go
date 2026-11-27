@@ -2,7 +2,9 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -262,5 +264,99 @@ func TestContainerLogsSSEEmitsCursorIDsAndResumesWithoutDuplicates(t *testing.T)
 		if !strings.Contains(q, wantSince) || !strings.Contains(q, "tail=all") {
 			t.Errorf("resume docker query #%d = %q, want integer Unix %s and tail=all", idx+1, q, wantSince)
 		}
+	}
+}
+
+func dockerMuxFrame(stream byte, payload string) []byte {
+	var buf bytes.Buffer
+	var hdr [8]byte
+	hdr[0] = stream
+	binary.BigEndian.PutUint32(hdr[4:], uint32(len(payload)))
+	buf.Write(hdr[:])
+	buf.WriteString(payload)
+	return buf.Bytes()
+}
+
+func TestContainerLogsTtyFalseMultiplexedFramesAndCR(t *testing.T) {
+	type timedFrame struct {
+		sec    int64
+		stream byte
+		line   string
+	}
+	baseSec := time.Date(2026, 11, 27, 3, 0, 10, 0, time.UTC).Unix()
+	tOld := "2026-11-27T03:00:09.500000000Z"
+	tCur := "2026-11-27T03:00:10.250000000Z"
+	tNew := "2026-11-27T03:00:11.000000000Z"
+
+	frames := []timedFrame{
+		{baseSec - 1, 1, tOld + " old-stdout\n"},
+		{baseSec, 1, tCur + " stdout-1\n"},
+		{baseSec, 2, tCur + " stderr-progress 50%\rstderr-progress 100%\n"},
+		{baseSec + 1, 2, tNew + " after-cr\n"},
+	}
+
+	mockDocker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"Id":   "cid-mux",
+				"Name": "/mux-web-1",
+				"State": map[string]any{
+					"Status":  "running",
+					"Running": true,
+				},
+				"Config": map[string]any{
+					"Tty":    false, // multiplexed stdout/stderr stream!
+					"Image":  "nginx:latest",
+					"Labels": map[string]string{},
+				},
+			})
+		case strings.HasSuffix(r.URL.Path, "/logs"):
+			sinceSec, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+			w.WriteHeader(http.StatusOK)
+			for _, f := range frames {
+				if sinceSec > 0 && f.sec < sinceSec {
+					continue
+				}
+				_, _ = w.Write(dockerMuxFrame(f.stream, f.line))
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockDocker.Close()
+
+	tmp := t.TempDir()
+	srv, err := New(config.Config{
+		DataDir:     tmp,
+		ProjectsDir: tmp,
+		BackupsDir:  tmp,
+		DockerHost:  "tcp://" + mockDocker.Listener.Addr().String(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("New(): %v", err)
+	}
+	t.Cleanup(func() { _ = srv.DB().Close() })
+
+	admin := &User{ID: 1, Username: "admin", Role: "admin", Level: roleAdmin}
+	req := httptest.NewRequest(http.MethodGet, "/api/containers/cid-mux/logs?tail=500&follow=0", nil)
+	req.SetPathValue("id", "cid-mux")
+	req.Header.Set("Last-Event-ID", tCur+"|1")
+	w := httptest.NewRecorder()
+	if err := srv.handleContainerLogs(w, req, admin); err != nil {
+		t.Fatalf("handleContainerLogs(mux resume): %v", err)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "old-stdout") || strings.Contains(body, "stdout-1") {
+		t.Errorf("resumed mux SSE repeated pre-cursor lines:\n%s", body)
+	}
+	wantCR := "id: " + tCur + "|2\ndata: " + tCur + " stderr-progress 50%\ndata: stderr-progress 100%\n\n"
+	if !strings.Contains(body, wantCR) {
+		t.Errorf("resumed mux SSE missing CR-split event %q\nbody:\n%s", wantCR, body)
+	}
+	wantNext := "id: " + tNew + "|1\ndata: " + tNew + " after-cr\n\n"
+	if !strings.Contains(body, wantNext) {
+		t.Errorf("resumed mux SSE missing next event %q\nbody:\n%s", wantNext, body)
 	}
 }

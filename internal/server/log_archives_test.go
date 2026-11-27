@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"compose-panel/internal/auth"
 	"compose-panel/internal/config"
 )
 
@@ -590,5 +591,151 @@ func TestLogArchiveHTTPAPIRBACReadDownloadAndDelete(t *testing.T) {
 	_ = srv.db.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='container.log_archive_delete' AND detail='cla_aa01'`).Scan(&auditCnt)
 	if auditCnt != 1 {
 		t.Errorf("audit count = %d, want 1", auditCnt)
+	}
+}
+
+func TestLogArchiveRawBytesCutoffAndTtyFalseDemux(t *testing.T) {
+	origMaxLines := logArchiveMaxLines
+	origMaxRaw := logArchiveMaxRawBytes
+	t.Cleanup(func() {
+		logArchiveMaxLines = origMaxLines
+		logArchiveMaxRawBytes = origMaxRaw
+	})
+
+	logArchiveMaxLines = 100
+	logArchiveMaxRawBytes = 60 // trigger byte cap well before 100 lines
+
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"Id":     "cid-bytecap",
+				"Name":   "/demo-mux-1",
+				"State":  map[string]any{"Status": "running", "Running": true},
+				"Config": map[string]any{"Tty": false, "Image": "app:v1", "Labels": map[string]string{}},
+			})
+		case strings.HasSuffix(r.URL.Path, "/logs"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(dockerMuxFrame(1, "2026-11-27T01:00:01Z line-one-30bytes\n"))
+			_, _ = w.Write(dockerMuxFrame(2, "2026-11-27T01:00:02Z line-two-exceeds-60-bytes-cap\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mock.Close()
+
+	srv := newTestServerWithDocker(t, mock.URL)
+	st := srv.stageContainerLog(context.Background(), logArchiveSource{
+		ContainerID:   "cid-bytecap",
+		ContainerName: "demo-mux-1",
+		Project:       "demo",
+		Service:       "mux",
+		Image:         "app:v1",
+	}, "deploy")
+	if st == nil {
+		t.Fatalf("expected staged archive")
+	}
+	defer srv.discardStagedLog(st)
+	if !st.truncated || st.lineCount != 1 || st.rawBytes > 60 {
+		t.Fatalf("got truncated=%v lineCount=%d rawBytes=%d, want truncated=true lineCount=1 rawBytes<=60", st.truncated, st.lineCount, st.rawBytes)
+	}
+}
+
+func TestLogArchiveHTTPHandlerRBACAnd404(t *testing.T) {
+	mock, _ := newMockDockerForArchives(t, nil)
+	srv := newTestServerWithDocker(t, mock.URL)
+	h := srv.Handler()
+
+	now := time.Now().Unix()
+	resA, _ := srv.db.Exec(`INSERT INTO projects(name,kind,source,compose,created_at,updated_at) VALUES('proj-a','app','inline','services: {}',?,?)`, now, now)
+	projAID, _ := resA.LastInsertId()
+	_, _ = srv.db.Exec(`INSERT INTO projects(name,kind,source,compose,created_at,updated_at) VALUES('proj-b','app','inline','services: {}',?,?)`, now, now)
+
+	seedUserSession := func(username, role string, allProjects int, projectIDs ...int64) string {
+		t.Helper()
+		res, err := srv.db.Exec(`INSERT INTO users(username,password_hash,role,all_projects,created_at) VALUES(?,?,?,?,?)`,
+			username, "hash", role, allProjects, now)
+		if err != nil {
+			t.Fatalf("insert user %s: %v", username, err)
+		}
+		uid, _ := res.LastInsertId()
+		for _, pid := range projectIDs {
+			_, _ = srv.db.Exec(`INSERT INTO user_projects(user_id,project_id) VALUES(?,?)`, uid, pid)
+		}
+		tok := "tok-" + username
+		_, err = srv.db.Exec(`INSERT INTO sessions(id,user_id,mfa_pending,created_at,expires_at,last_seen_at,ip,user_agent) VALUES(?,?,0,?,?,?,?,?)`,
+			auth.SHA256Hex(tok), uid, now, now+3600, now, "127.0.0.1", "test")
+		if err != nil {
+			t.Fatalf("insert session %s: %v", username, err)
+		}
+		return tok
+	}
+
+	adminTok := seedUserSession("admin1", "admin", 1)
+	viewerTok := seedUserSession("viewer1", "viewer", 0, projAID)
+	scopedOpTok := seedUserSession("op_scoped", "operator", 0, projAID)
+	globalOpTok := seedUserSession("op_global", "operator", 1)
+
+	seedRow := func(id, project, svc, name string, writeFile bool) {
+		t.Helper()
+		if writeFile {
+			f, _ := os.Create(srv.logArchivePath(id))
+			gw := gzip.NewWriter(f)
+			_, _ = io.WriteString(gw, "2026-11-27T01:00:01Z line\n")
+			_ = gw.Close()
+			_ = f.Close()
+		}
+		_, err := srv.db.Exec(`INSERT INTO container_log_archives(id,project,service,container_id,container_name,image,reason,started_at,archived_at,size_bytes,raw_bytes,line_count,truncated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+			id, project, svc, "cid-"+id, name, "img", "deploy", now-10, now, 30, 26, 1)
+		if err != nil {
+			t.Fatalf("seedRow %s: %v", id, err)
+		}
+	}
+
+	seedRow("cla_a001", "proj-a", "web", "proj-a-web-1", true)
+	seedRow("cla_b001", "proj-b", "api", "proj-b-api-1", true)
+	seedRow("cla_s001", "", "", "standalone-1", true)
+	seedRow("cla_m001", "proj-a", "web", "proj-a-web-1", false) // missing .log.gz on disk
+
+	doReq := func(method, target, tok string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, target, nil)
+		req.AddCookie(&http.Cookie{Name: cookieName, Value: tok})
+		if method != http.MethodGet {
+			req.Header.Set("X-Panel", "1")
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
+	}
+
+	// 1. roleViewer cannot DELETE -> 403.
+	if w := doReq(http.MethodDelete, "/api/log-archives/cla_a001", viewerTok); w.Code != http.StatusForbidden {
+		t.Errorf("viewer DELETE status = %d, want 403", w.Code)
+	}
+	// 2. Scoped operator cannot DELETE another project's or standalone archive -> 404.
+	if w := doReq(http.MethodDelete, "/api/log-archives/cla_b001", scopedOpTok); w.Code != http.StatusNotFound {
+		t.Errorf("scoped operator DELETE proj-b status = %d, want 404", w.Code)
+	}
+	if w := doReq(http.MethodDelete, "/api/log-archives/cla_s001", scopedOpTok); w.Code != http.StatusNotFound {
+		t.Errorf("scoped operator DELETE standalone status = %d, want 404", w.Code)
+	}
+	// 3. all_projects=1 non-admin operator sees all 4 archives (including standalone).
+	wGlobal := doReq(http.MethodGet, "/api/log-archives", globalOpTok)
+	if wGlobal.Code != http.StatusOK {
+		t.Fatalf("global operator GET /api/log-archives status = %d, want 200", wGlobal.Code)
+	}
+	var globalList []logArchiveDTO
+	_ = json.Unmarshal(wGlobal.Body.Bytes(), &globalList)
+	if len(globalList) != 4 {
+		t.Errorf("global operator archives len = %d, want 4", len(globalList))
+	}
+	// 4. Missing .log.gz file on disk returns HTTP 404.
+	if w := doReq(http.MethodGet, "/api/log-archives/cla_m001", adminTok); w.Code != http.StatusNotFound {
+		t.Errorf("missing file GET status = %d, want 404", w.Code)
+	}
+	// 5. Scoped operator CAN delete own project's archive -> 200.
+	if w := doReq(http.MethodDelete, "/api/log-archives/cla_a001", scopedOpTok); w.Code != http.StatusOK {
+		t.Errorf("scoped operator DELETE own project status = %d, want 200 (body=%s)", w.Code, w.Body.String())
 	}
 }

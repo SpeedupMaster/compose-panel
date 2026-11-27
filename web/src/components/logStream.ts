@@ -133,3 +133,18 @@ export function nextArchiveAfterDelete(archives: LogArchiveItem[], deletedId: st
   if (currentId !== deletedId) return currentId
   return remaining[0]?.id || ''
 }
+
+export function resolveArchiveTarget(targets: string[], currentTarget: string): string {
+  if (!currentTarget) return ''
+  return targets.includes(currentTarget) ? currentTarget : ''
+}
+
+export function resolveActiveArchive(
+  fetched: LogArchiveItem | null,
+  list: LogArchiveItem[],
+  selectedId: string,
+): LogArchiveItem | null {
+  if (!selectedId) return null
+  if (fetched && fetched.id === selectedId) return fetched
+  return list.find((a) => a.id === selectedId) || null
+}

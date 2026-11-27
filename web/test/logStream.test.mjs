@@ -10,6 +10,8 @@ import {
   formatArchiveOption,
   formatLogCursor,
   nextArchiveAfterDelete,
+  resolveActiveArchive,
+  resolveArchiveTarget,
   shouldResumeLiveLogs,
   stripDockerTimestamp,
 } from '../src/components/logStream.ts'
@@ -136,4 +138,15 @@ test('archiveTargetKey, archiveTargets, filterArchivesByTarget, and nextArchiveA
   assert.equal(nextArchiveAfterDelete(list, 'cla_1', 'cla_1'), 'cla_2')
   assert.equal(nextArchiveAfterDelete(list, 'cla_2', 'cla_1'), 'cla_1')
   assert.equal(nextArchiveAfterDelete([list[0]], 'cla_1', 'cla_1'), '')
+
+  // Deleting the last archive of a filtered target must reset effective target back to '' (all)
+  // so the modal cannot get deadlocked on an empty filtered list when targets.length drops to 1.
+  assert.equal(resolveArchiveTarget(['proj-a/web', 'proj-b/web'], 'proj-b/web'), 'proj-b/web')
+  assert.equal(resolveArchiveTarget(['proj-a/web'], 'proj-b/web'), '')
+  assert.equal(resolveArchiveTarget([], 'proj-b/web'), '')
+
+  // Switching to a different archive must never display stale fetched metadata from the previous archive.
+  assert.equal(resolveActiveArchive(list[0], list, 'cla_2')?.id, 'cla_2')
+  assert.equal(resolveActiveArchive(list[0], list, 'cla_1')?.id, 'cla_1')
+  assert.equal(resolveActiveArchive(list[0], [], 'cla_2'), null)
 })
