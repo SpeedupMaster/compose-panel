@@ -120,6 +120,8 @@ func (s *Server) cleanupOrphans(ctx context.Context) {
 			}
 		}
 	}
+	// 2b. Clean up stale staged temp files, orphan archive files, and dangling DB rows in container-logs.
+	s.cleanupLogArchiveOrphans(ctx)
 	// 3. Remove orphaned Docker containers & volumes with label panel.drill=1 when no drill job is live.
 	if s.dk == nil || (s.jobs != nil && s.jobs.HasLiveKind("backup.drill")) {
 		return
@@ -153,6 +155,7 @@ func (s *Server) housekeep(ctx context.Context) {
 	if s.jobs != nil {
 		s.jobs.Prune(jobsRetention)
 	}
+	s.pruneLogArchives()
 	s.cleanupOrphans(ctx)
 }
 

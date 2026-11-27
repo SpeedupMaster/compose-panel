@@ -56,6 +56,7 @@ type Server struct {
 	loginFail map[string][]time.Time
 
 	auditMu        sync.Mutex
+	logArchiveMu   sync.Mutex
 	caddyMu        sync.Mutex
 	maintMu        sync.Mutex
 	deployMaint    map[int64]bool // projects currently deploying behind a maintenance page
@@ -80,7 +81,7 @@ type scheduleMeta struct {
 
 // New opens the database and prepares all components.
 func New(cfg config.Config, web fs.FS) (*Server, error) {
-	for _, d := range []string{cfg.DataDir, cfg.ProjectsDir, cfg.BackupsDir} {
+	for _, d := range []string{cfg.DataDir, cfg.ProjectsDir, cfg.BackupsDir, filepath.Join(cfg.DataDir, "container-logs")} {
 		if err := os.MkdirAll(d, 0o750); err != nil {
 			return nil, err
 		}
