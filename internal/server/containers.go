@@ -213,17 +213,78 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request, u *
 		_, _ = io.Copy(w, rc)
 		return nil
 	}
+	var cursor *logCursor
+	rawCursor := strings.TrimSpace(r.Header.Get("Last-Event-ID"))
+	if rawCursor == "" {
+		rawCursor = strings.TrimSpace(q.Get("after"))
+	}
+	if rawCursor != "" {
+		if ts, seq, ok := parseLogCursor(rawCursor); ok {
+			cursor = &logCursor{ts: ts, seq: seq}
+			since = ts.Unix()
+			if since < 0 {
+				since = 0
+			}
+			tail = "all"
+		}
+	}
 	follow := q.Get("follow") != "0"
 	rc, err := s.dk.Logs(r.Context(), c.Id, tail, follow && c.State.Running, true, since)
 	if err != nil {
 		return err
 	}
 	defer rc.Close()
-	return streamLines(w, r, rc)
+	return streamContainerLogs(w, r, rc, cursor)
+}
+
+type logCursor struct {
+	ts  time.Time
+	seq int
+}
+
+// extractLogTimestamp parses a leading Docker RFC3339Nano timestamp token from a log line.
+func extractLogTimestamp(line string) (time.Time, string, bool) {
+	tok, _, _ := strings.Cut(line, " ")
+	if len(tok) < 20 {
+		return time.Time{}, "", false
+	}
+	ts, err := time.Parse(time.RFC3339Nano, tok)
+	if err != nil {
+		return time.Time{}, "", false
+	}
+	return ts, tok, true
+}
+
+// parseLogCursor parses an SSE resume cursor formatted as "<RFC3339Nano>|<seq>" (seq >= 1).
+func parseLogCursor(raw string) (time.Time, int, bool) {
+	raw = strings.TrimSpace(raw)
+	tsPart, seqPart, ok := strings.Cut(raw, "|")
+	if !ok || tsPart == "" || seqPart == "" {
+		return time.Time{}, 0, false
+	}
+	ts, err := time.Parse(time.RFC3339Nano, tsPart)
+	if err != nil {
+		return time.Time{}, 0, false
+	}
+	seq, err := strconv.Atoi(seqPart)
+	if err != nil || seq < 1 {
+		return time.Time{}, 0, false
+	}
+	return ts, seq, true
 }
 
 // streamLines sends each line of rc as an SSE "data:" event.
 func streamLines(w http.ResponseWriter, r *http.Request, rc io.Reader) error {
+	return streamSSELines(w, r, rc, false, nil)
+}
+
+// streamContainerLogs streams Docker timestamped container logs with SSE "id:" cursors
+// and optional nanosecond-accurate resume deduplication when cursor is non-nil.
+func streamContainerLogs(w http.ResponseWriter, r *http.Request, rc io.Reader, cursor *logCursor) error {
+	return streamSSELines(w, r, rc, true, cursor)
+}
+
+func streamSSELines(w http.ResponseWriter, r *http.Request, rc io.Reader, emitCursor bool, cursor *logCursor) error {
 	fl, _ := w.(http.Flusher)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
@@ -247,6 +308,14 @@ func streamLines(w http.ResponseWriter, r *http.Request, rc io.Reader) error {
 			}
 		}
 	}()
+	passedBoundary := cursor == nil
+	sameCursorSeen := 0
+	var lastTS time.Time
+	lastSeq := 0
+	if cursor != nil {
+		lastTS = cursor.ts
+		lastSeq = cursor.seq
+	}
 	tick := time.NewTicker(15 * time.Second)
 	defer tick.Stop()
 	pending := 0
@@ -264,7 +333,35 @@ func streamLines(w http.ResponseWriter, r *http.Request, rc io.Reader) error {
 				}
 				return nil
 			}
-			writeSSE(w, l)
+			eventID := ""
+			if emitCursor {
+				ts, tsStr, hasTS := extractLogTimestamp(l)
+				if !passedBoundary {
+					if !hasTS || ts.Before(cursor.ts) {
+						continue
+					}
+					if ts.Equal(cursor.ts) {
+						sameCursorSeen++
+						if sameCursorSeen == cursor.seq {
+							passedBoundary = true
+						}
+						continue
+					}
+					passedBoundary = true
+				}
+				if hasTS {
+					switch {
+					case lastTS.IsZero() || ts.After(lastTS):
+						lastTS = ts
+						lastSeq = 1
+						eventID = tsStr + "|1"
+					case ts.Equal(lastTS):
+						lastSeq++
+						eventID = tsStr + "|" + strconv.Itoa(lastSeq)
+					}
+				}
+			}
+			writeSSEWithID(w, eventID, l)
 			pending++
 			if pending > 200 {
 				if fl != nil {
@@ -286,6 +383,13 @@ func streamLines(w http.ResponseWriter, r *http.Request, rc io.Reader) error {
 			}
 		}
 	}
+}
+
+func writeSSEWithID(w io.Writer, id, line string) {
+	if id != "" {
+		fmt.Fprintf(w, "id: %s\n", id)
+	}
+	writeSSE(w, line)
 }
 
 func writeSSE(w io.Writer, line string) {
