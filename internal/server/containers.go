@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -416,8 +417,9 @@ func writeSSE(w io.Writer, line string) {
 }
 
 var (
-	wsPingInterval = 30 * time.Second
-	wsIdleTimeout  = 30 * time.Minute
+	wsPingInterval   = 30 * time.Second
+	wsIdleTimeout    = 30 * time.Minute
+	termProbeTimeout = 300 * time.Millisecond
 )
 
 func normalizeHostPort(hostPort, scheme string) string {
@@ -471,6 +473,108 @@ func clampTermSize(v int) int {
 	return v
 }
 
+type missingShellError struct {
+	shell string
+	raw   string
+	tried []string
+}
+
+func (e *missingShellError) Error() string { return e.raw }
+
+func terminalShellCandidates(shell string) [][]string {
+	switch shell {
+	case "sh":
+		return [][]string{{"/bin/sh"}}
+	case "bash":
+		return [][]string{{"bash"}}
+	default:
+		return [][]string{
+			{"/bin/sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi"},
+			{"/bin/bash"},
+			{"/busybox/sh"},
+			{"/bin/ash"},
+		}
+	}
+}
+
+func isMissingShellText(s string) bool {
+	low := strings.ToLower(s)
+	return strings.Contains(low, "no such file or directory") ||
+		strings.Contains(low, "executable file not found") ||
+		strings.Contains(low, "not found in $path")
+}
+
+func probeTerminalStart(conn *docker.HijackedConn) ([]byte, bool) {
+	buf := make([]byte, 4096)
+	_ = conn.SetReadDeadline(time.Now().Add(termProbeTimeout))
+	n, err := conn.Read(buf)
+	if n == 0 {
+		_ = conn.SetReadDeadline(time.Time{})
+		return nil, false
+	}
+	collected := append([]byte(nil), buf[:n]...)
+	if strings.Contains(string(collected), "OCI runtime exec failed") || isMissingShellText(string(collected)) {
+		if err == nil {
+			_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			for len(collected) < 4096 {
+				m, rerr := conn.Read(buf)
+				if m > 0 {
+					collected = append(collected, buf[:m]...)
+				}
+				if rerr != nil {
+					break
+				}
+			}
+		}
+		_ = conn.SetReadDeadline(time.Time{})
+		return collected, isMissingShellText(string(collected))
+	}
+	_ = conn.SetReadDeadline(time.Time{})
+	return collected, false
+}
+
+func (s *Server) openTerminalSession(ctx context.Context, containerID, shell, user string) (*docker.HijackedConn, string, []byte, string, error) {
+	candidates := terminalShellCandidates(shell)
+	var firstMissing string
+	tried := make([]string, 0, len(candidates))
+	for _, cmd := range candidates {
+		tried = append(tried, cmd[0])
+		conn, execID, err := s.dk.ExecTTY(ctx, containerID, cmd, user)
+		if err != nil {
+			if isMissingShellText(err.Error()) {
+				if firstMissing == "" {
+					firstMissing = strings.TrimSpace(err.Error())
+				}
+				continue
+			}
+			return nil, "", nil, "", err
+		}
+		initial, missing := probeTerminalStart(conn)
+		if missing {
+			_ = conn.Close()
+			if firstMissing == "" {
+				firstMissing = strings.TrimSpace(string(initial))
+			}
+			continue
+		}
+		return conn, execID, initial, cmd[0], nil
+	}
+	return nil, "", nil, "", &missingShellError{shell: shell, raw: firstMissing, tried: tried}
+}
+
+func formatMissingShellMessage(e *missingShellError) string {
+	var hint string
+	switch e.shell {
+	case "bash":
+		hint = "容器内未找到 bash，请切换为「自动（bash/sh）」或「sh」重试；若为 scratch / distroless 极简镜像，可通过「文件」标签页查看容器文件。"
+	case "sh":
+		hint = "容器内未找到 /bin/sh，请切换为「自动（bash/sh）」重试；若为 scratch / distroless 极简镜像，可通过「文件」标签页查看容器文件。"
+	default:
+		hint = fmt.Sprintf("容器内未找到可用的 Shell（已尝试 %s）。\r\n该镜像可能基于 scratch 或 distroless 极简镜像构建，不包含交互式终端；如需查看容器内文件，请切换到「文件」标签页。", strings.Join(e.tried, "、"))
+	}
+	return e.raw + "\r\n\r\n\x1b[33m" + hint + "\x1b[0m\r\n"
+}
+
 // handleTerminal bridges a websocket to an interactive docker exec session.
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request, u *User) error {
 	originHost, originOK := validWSOrigin(r)
@@ -485,13 +589,6 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request, u *User)
 		return bad("容器未运行")
 	}
 	shell := r.URL.Query().Get("shell")
-	cmd := []string{"/bin/sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi"}
-	switch shell {
-	case "sh":
-		cmd = []string{"/bin/sh"}
-	case "bash":
-		cmd = []string{"bash"}
-	}
 	user := r.URL.Query().Get("user")
 	acceptOpts := &websocket.AcceptOptions{}
 	if originHost != "" {
@@ -505,17 +602,32 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request, u *User)
 	ws.SetReadLimit(1 << 20)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	conn, execID, err := s.dk.ExecTTY(ctx, c.Id, cmd, user)
+	conn, execID, initial, usedShell, err := s.openTerminalSession(ctx, c.Id, shell, user)
 	if err != nil {
+		var mse *missingShellError
+		if errors.As(err, &mse) {
+			_ = ws.Write(ctx, websocket.MessageText, []byte(formatMissingShellMessage(mse)))
+			ws.Close(websocket.StatusNormalClosure, "no shell")
+			return nil
+		}
 		_ = ws.Write(ctx, websocket.MessageText, []byte("\r\n\x1b[31m无法启动终端："+err.Error()+"\x1b[0m\r\n"))
 		ws.Close(websocket.StatusInternalError, "exec failed")
 		return nil
 	}
 	defer conn.Close()
+	if len(initial) > 0 {
+		if werr := ws.Write(ctx, websocket.MessageBinary, initial); werr != nil {
+			return nil
+		}
+	}
 	name := strings.TrimPrefix(c.Name, "/")
 	shellLabel := shell
-	if shellLabel == "" {
-		shellLabel = "auto"
+	if shellLabel == "" || shellLabel == "auto" {
+		if usedShell != "" && usedShell != "/bin/sh" {
+			shellLabel = "auto(" + usedShell + ")"
+		} else {
+			shellLabel = "auto"
+		}
 	}
 	userLabel := user
 	if userLabel == "" {

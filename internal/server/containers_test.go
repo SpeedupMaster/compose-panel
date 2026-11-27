@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"compose-panel/internal/config"
 )
 
@@ -358,5 +360,231 @@ func TestContainerLogsTtyFalseMultiplexedFramesAndCR(t *testing.T) {
 	wantNext := "id: " + tNew + "|1\ndata: " + tNew + " after-cr\n\n"
 	if !strings.Contains(body, wantNext) {
 		t.Errorf("resumed mux SSE missing next event %q\nbody:\n%s", wantNext, body)
+	}
+}
+
+func startMockTerminalDocker(t *testing.T, onStart func(cmd []string, conn io.ReadWriteCloser)) (*httptest.Server, *[][]string) {
+	t.Helper()
+	var mu sync.Mutex
+	cmds := map[string][]string{}
+	var seen [][]string
+	seq := 0
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/cid-term/json":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"Id":     "cid-term",
+				"Name":   "/telegram-bridge",
+				"State":  map[string]any{"Status": "running", "Running": true},
+				"Config": map[string]any{"Tty": true, "Image": "distroless:latest", "Labels": map[string]string{}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/cid-term/exec":
+			var body struct {
+				Cmd []string `json:"Cmd"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			seq++
+			id := "exec-" + strconv.Itoa(seq)
+			cmds[id] = body.Cmd
+			seen = append(seen, body.Cmd)
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]string{"Id": id})
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/exec/") && strings.HasSuffix(r.URL.Path, "/start"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/exec/"), "/start")
+			mu.Lock()
+			cmd := cmds[id]
+			mu.Unlock()
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				http.Error(w, "no hijack", http.StatusInternalServerError)
+				return
+			}
+			conn, rw, err := hj.Hijack()
+			if err != nil {
+				return
+			}
+			_, _ = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
+			_ = rw.Flush()
+			go func() {
+				defer conn.Close()
+				onStart(cmd, conn)
+			}()
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	return ts, &seen
+}
+
+func dialTestTerminalWS(t *testing.T, srv *Server, query string) (*websocket.Conn, func()) {
+	t.Helper()
+	admin := &User{ID: 1, Username: "admin", Role: "admin", Level: roleAdmin}
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.SetPathValue("id", "cid-term")
+		_ = srv.handleTerminal(w, r, admin)
+	}))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/api/containers/cid-term/terminal" + query
+	ws, _, err := websocket.Dial(ctx, wsURL, nil)
+	cancel()
+	if err != nil {
+		httpSrv.Close()
+		t.Fatalf("websocket.Dial: %v", err)
+	}
+	return ws, func() {
+		_ = ws.CloseNow()
+		httpSrv.Close()
+	}
+}
+
+func readAllWSOutput(ws *websocket.Conn, timeout time.Duration) string {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var out strings.Builder
+	for {
+		_, data, err := ws.Read(ctx)
+		if len(data) > 0 {
+			out.Write(data)
+		}
+		if err != nil {
+			break
+		}
+	}
+	return out.String()
+}
+
+func TestTerminalAutoFallbackToBusyboxSh(t *testing.T) {
+	origProbe := termProbeTimeout
+	termProbeTimeout = 120 * time.Millisecond
+	t.Cleanup(func() { termProbeTimeout = origProbe })
+
+	mock, seen := startMockTerminalDocker(t, func(cmd []string, conn io.ReadWriteCloser) {
+		if len(cmd) > 0 && cmd[0] == "/busybox/sh" {
+			_, _ = io.WriteString(conn, "/ # ")
+			buf := make([]byte, 64)
+			if n, err := conn.Read(buf); err == nil && n > 0 {
+				_, _ = conn.Write([]byte("echo:" + string(buf[:n])))
+			}
+			return
+		}
+		bin := ""
+		if len(cmd) > 0 {
+			bin = cmd[0]
+		}
+		_, _ = io.WriteString(conn, "OCI runtime exec failed: exec failed: unable to start container process: exec: \""+bin+"\": stat "+bin+": no such file or directory\r\n")
+	})
+
+	srv := newTestServerWithDocker(t, mock.URL)
+	ws, cleanup := dialTestTerminalWS(t, srv, "")
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, first, err := ws.Read(ctx)
+	if err != nil {
+		t.Fatalf("read prompt: %v", err)
+	}
+	if string(first) != "/ # " {
+		t.Fatalf("first terminal output = %q, want %q", string(first), "/ # ")
+	}
+	if err := ws.Write(ctx, websocket.MessageText, []byte(`{"type":"input","data":"hi\n"}`)); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+	_, echoed, err := ws.Read(ctx)
+	if err != nil {
+		t.Fatalf("read echo: %v", err)
+	}
+	if string(echoed) != "echo:hi\n" {
+		t.Fatalf("echo = %q, want %q", string(echoed), "echo:hi\n")
+	}
+	if len(*seen) != 3 || (*seen)[0][0] != "/bin/sh" || (*seen)[1][0] != "/bin/bash" || (*seen)[2][0] != "/busybox/sh" {
+		t.Fatalf("probed cmds = %v, want /bin/sh -> /bin/bash -> /busybox/sh", *seen)
+	}
+}
+
+func TestTerminalNoShellShowsFriendlyChineseHint(t *testing.T) {
+	origProbe := termProbeTimeout
+	termProbeTimeout = 120 * time.Millisecond
+	t.Cleanup(func() { termProbeTimeout = origProbe })
+
+	mock, seen := startMockTerminalDocker(t, func(cmd []string, conn io.ReadWriteCloser) {
+		bin := ""
+		if len(cmd) > 0 {
+			bin = cmd[0]
+		}
+		_, _ = io.WriteString(conn, "OCI runtime exec failed: exec failed: unable to start container process: exec: \""+bin+"\": stat "+bin+": no such file or directory\r\n")
+	})
+
+	srv := newTestServerWithDocker(t, mock.URL)
+	ws, cleanup := dialTestTerminalWS(t, srv, "")
+	defer cleanup()
+
+	got := readAllWSOutput(ws, 3*time.Second)
+	if len(*seen) != 4 {
+		t.Fatalf("auto mode tried %d shells (%v), want 4 (/bin/sh, /bin/bash, /busybox/sh, /bin/ash)", len(*seen), *seen)
+	}
+	for _, want := range []string{`stat /bin/sh: no such file or directory`, "scratch", "distroless", "「文件」"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("terminal output missing %q\nfull output:\n%s", want, got)
+		}
+	}
+}
+
+func TestTerminalExplicitBashMissingSuggestsAutoOrSh(t *testing.T) {
+	origProbe := termProbeTimeout
+	termProbeTimeout = 120 * time.Millisecond
+	t.Cleanup(func() { termProbeTimeout = origProbe })
+
+	mock, seen := startMockTerminalDocker(t, func(cmd []string, conn io.ReadWriteCloser) {
+		_, _ = io.WriteString(conn, "OCI runtime exec failed: exec failed: unable to start container process: exec: \"bash\": executable file not found in $PATH: unknown\r\n")
+	})
+
+	srv := newTestServerWithDocker(t, mock.URL)
+	ws, cleanup := dialTestTerminalWS(t, srv, "?shell=bash")
+	defer cleanup()
+
+	got := readAllWSOutput(ws, 3*time.Second)
+	if len(*seen) != 1 || (*seen)[0][0] != "bash" {
+		t.Fatalf("explicit bash tried %v, want only [[bash]]", *seen)
+	}
+	if !strings.Contains(got, "bash") || !strings.Contains(got, "自动（bash/sh）") {
+		t.Errorf("explicit bash missing hint not found:\n%s", got)
+	}
+}
+
+func TestTerminalQuietShellStartsCleanlyAfterProbeDeadline(t *testing.T) {
+	origProbe := termProbeTimeout
+	termProbeTimeout = 60 * time.Millisecond
+	t.Cleanup(func() { termProbeTimeout = origProbe })
+
+	mock, _ := startMockTerminalDocker(t, func(cmd []string, conn io.ReadWriteCloser) {
+		// Silent shell: outputs nothing until client sends input.
+		buf := make([]byte, 64)
+		if n, err := conn.Read(buf); err == nil && n > 0 {
+			_, _ = conn.Write([]byte("quiet:" + string(buf[:n])))
+		}
+	})
+
+	srv := newTestServerWithDocker(t, mock.URL)
+	ws, cleanup := dialTestTerminalWS(t, srv, "")
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := ws.Write(ctx, websocket.MessageText, []byte(`{"type":"input","data":"ok\n"}`)); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+	_, reply, err := ws.Read(ctx)
+	if err != nil {
+		t.Fatalf("read reply: %v", err)
+	}
+	if string(reply) != "quiet:ok\n" {
+		t.Fatalf("reply = %q, want %q", string(reply), "quiet:ok\n")
 	}
 }

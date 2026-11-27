@@ -474,7 +474,7 @@ function Term({ id }: { id: string }) {
     <section className="card" style={{ overflow: 'hidden' }}>
       <div className="card-head">
         <div className="row wrap">
-          <Select className="filter-select" style={{ width: 140 }} aria-label="Shell" value={shell} onChange={(v) => setShell(v)}>
+          <Select className="filter-select" style={{ width: 176 }} aria-label="Shell" value={shell} onChange={(v) => setShell(v)}>
             <option value="auto">自动（bash/sh）</option>
             <option value="bash">bash</option>
             <option value="sh">sh</option>
