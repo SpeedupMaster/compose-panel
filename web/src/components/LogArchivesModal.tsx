@@ -29,10 +29,12 @@ export function LogArchivesModal({
 }) {
   const can = useCan()
   const toast = useToast()
-  const targets = archiveTargets(archives, showProject)
+  const [deletedIds, setDeletedIds] = useState<string[]>([])
+  const visibleArchives = deletedIds.length > 0 ? archives.filter((a) => !deletedIds.includes(a.id)) : archives
+  const targets = archiveTargets(visibleArchives, showProject)
   const [target, setTarget] = useState('')
   const effectiveTarget = resolveArchiveTarget(targets, target)
-  const filtered = filterArchivesByTarget(archives, effectiveTarget, showProject)
+  const filtered = filterArchivesByTarget(visibleArchives, effectiveTarget, showProject)
   const [selectedId, setSelectedId] = useState(() => filtered[0]?.id || '')
   const [tail, setTail] = useState('500')
   const [filter, setFilter] = useState('')
@@ -104,7 +106,7 @@ export function LogArchivesModal({
 
   return (
     <Modal title={title} wide onClose={onClose}>
-      {archives.length === 0 ? (
+      {visibleArchives.length === 0 ? (
         <Empty>暂无历史日志归档。</Empty>
       ) : (
         <div className="col" style={{ gap: 12 }}>
@@ -118,7 +120,7 @@ export function LogArchivesModal({
                   value={effectiveTarget}
                   onChange={(v) => setTarget(v)}
                 >
-                  <option value="">全部容器（{archives.length}）</option>
+                  <option value="">全部容器（{visibleArchives.length}）</option>
                   {targets.map((t) => (
                     <option key={t} value={t}>
                       {t}
@@ -146,7 +148,7 @@ export function LogArchivesModal({
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
               />
-              <Select className="filter-select" style={{ width: 120 }} aria-label="行数" value={tail} onChange={(v) => setTail(v)}>
+              <Select className="filter-select" style={{ width: 132 }} aria-label="行数" value={tail} onChange={(v) => setTail(v)}>
                 {['200', '500', '2000', '10000', 'all'].map((t) => (
                   <option key={t} value={t}>
                     {t === 'all' ? '全部' : `最近 ${t} 行`}
@@ -212,10 +214,16 @@ export function LogArchivesModal({
           confirmText="删除"
           onClose={() => setDeleting(null)}
           onConfirm={async () => {
-            const nextId = nextArchiveAfterDelete(filtered, deleting.id, selectedId)
-            await del(`/log-archives/${encodeURIComponent(deleting.id)}`)
+            const deletedId = deleting.id
+            await del(`/log-archives/${encodeURIComponent(deletedId)}`)
             toast.ok('已删除历史日志归档')
-            setSelectedId(nextId)
+            const remainingVisible = visibleArchives.filter((a) => a.id !== deletedId)
+            const nextTargets = archiveTargets(remainingVisible, showProject)
+            const nextTarget = resolveArchiveTarget(nextTargets, effectiveTarget)
+            const nextFiltered = filterArchivesByTarget(remainingVisible, nextTarget, showProject)
+            setDeletedIds((prev) => [...prev, deletedId])
+            setTarget(nextTarget)
+            setSelectedId(nextArchiveAfterDelete(nextFiltered, deletedId, selectedId) || nextFiltered[0]?.id || '')
             onChanged()
           }}
         >
