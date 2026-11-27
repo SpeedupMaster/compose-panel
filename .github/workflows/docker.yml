@@ -9,8 +9,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: docker-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref_type == 'branch' || github.event_name == 'pull_request' }}
+  group: ${{ github.event_name == 'pull_request' && format('docker-pr-{0}', github.ref) || 'docker-publish' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   REGISTRY: ghcr.io
@@ -55,9 +55,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        with:
+          fetch-depth: 0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -70,27 +69,86 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve build version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.0.0")
+            echo "value=${tag#v}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            latest=false
           tags: |
-            type=ref,event=branch
             type=semver,pattern={{version}}
-            type=sha,prefix=sha-
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')) }}
 
-      - name: Build and push image
+      - name: Build and push image (linux/amd64)
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ steps.meta.outputs.version || github.sha }}
+            VERSION=${{ steps.ver.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Prune old GHCR image versions (keep latest and formal releases)
+        if: github.event_name != 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner
+            const pkg = context.repo.repo
+            const isOrg = context.payload.repository?.owner?.type === 'Organization'
+            const currentDigest = '${{ steps.build.outputs.digest }}'
+            const releaseRe = /^v?\d+\.\d+\.\d+$/
+            const shouldKeep = (v) => {
+              if (currentDigest && v.name === currentDigest) return true
+              const tags = v.metadata?.container?.tags || []
+              return tags.some((t) => t === 'latest' || releaseRe.test(t))
+            }
+
+            const listRoute = isOrg
+              ? 'GET /orgs/{org}/packages/container/{package_name}/versions'
+              : 'GET /users/{username}/packages/container/{package_name}/versions'
+            const delRoute = isOrg
+              ? 'DELETE /orgs/{org}/packages/container/{package_name}/versions/{package_version_id}'
+              : 'DELETE /users/{username}/packages/container/{package_name}/versions/{package_version_id}'
+            const baseParams = isOrg
+              ? { org: owner, package_name: pkg, per_page: 100 }
+              : { username: owner, package_name: pkg, per_page: 100 }
+
+            const versions = await github.paginate(listRoute, baseParams)
+            let kept = 0
+            let deleted = 0
+            for (const v of versions) {
+              const tags = v.metadata?.container?.tags || []
+              if (shouldKeep(v)) {
+                kept++
+                core.info(`KEEP   id=${v.id} digest=${v.name} tags=${JSON.stringify(tags)}`)
+                continue
+              }
+              try {
+                await github.request(delRoute, { ...baseParams, package_version_id: v.id })
+                deleted++
+                core.info(`DELETE id=${v.id} digest=${v.name} tags=${JSON.stringify(tags)}`)
+              } catch (err) {
+                core.warning(`Failed to delete version ${v.id} (${v.name}, tags=${JSON.stringify(tags)}): ${err.message}`)
+              }
+            }
+            core.info(`GHCR prune summary: total=${versions.length}, kept=${kept}, deleted=${deleted}`)
