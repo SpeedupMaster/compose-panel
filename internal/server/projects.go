@@ -759,6 +759,7 @@ func (s *Server) deleteProjectJob(p *Project, actor string, removeVolumes, remov
 		if _, err := s.db.Exec(`DELETE FROM projects WHERE id=?`, p.ID); err != nil {
 			return err
 		}
+		s.deleteProjectLogArchives(p.Name)
 		if removeFiles && p.Source != "imported" {
 			_ = os.RemoveAll(s.projectDir(p))
 		}
@@ -884,6 +885,7 @@ type projectActionStep struct {
 	Args          []string
 	ProgressAfter int
 	DumpUnhealthy bool
+	ArchiveReason string
 }
 
 type projectActionPlan struct {
@@ -925,7 +927,7 @@ func buildProjectAction(p *Project, action, service string) (projectActionPlan, 
 		}
 		return projectActionPlan{
 			Title: titleFor("下线"),
-			Steps: []projectActionStep{{Args: []string{"down", "--remove-orphans"}}},
+			Steps: []projectActionStep{{Args: []string{"down", "--remove-orphans"}, ArchiveReason: "down"}},
 		}, nil
 	case "recreate":
 		if p.Kind == "database" {
@@ -948,7 +950,7 @@ func buildProjectAction(p *Project, action, service string) (projectActionPlan, 
 			SyncCaddy: true,
 			Steps: []projectActionStep{
 				{Log: "==> 强制拉取镜像", Args: pullArgs, ProgressAfter: 50},
-				{Log: "==> 重建并启动容器", Args: upArgs, ProgressAfter: 100, DumpUnhealthy: true},
+				{Log: "==> 重建并启动容器", Args: upArgs, ProgressAfter: 100, DumpUnhealthy: true, ArchiveReason: "recreate"},
 			},
 		}, nil
 	default:
@@ -991,11 +993,19 @@ func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request, u *
 			if step.Log != "" {
 				run.Logf("%s", step.Log)
 			}
-			if err := cp.Run(ctx, run, step.Args...); err != nil {
+			var staged []*stagedLogArchive
+			if step.ArchiveReason != "" {
+				staged = s.stageProjectLogs(ctx, p.Name, service, step.ArchiveReason)
+			}
+			stepErr := cp.Run(ctx, run, step.Args...)
+			if len(staged) > 0 {
+				s.finalizeProjectLogs(context.Background(), p.Name, staged, run)
+			}
+			if stepErr != nil {
 				if step.DumpUnhealthy {
 					s.dumpUnhealthy(run, p)
 				}
-				return err
+				return stepErr
 			}
 			if step.ProgressAfter > 0 {
 				run.SetProgress(step.ProgressAfter)

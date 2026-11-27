@@ -44,7 +44,7 @@ func (s *Server) startDeploy(p *Project, trigger, actor string, fromDeployment i
 		title = fmt.Sprintf("回滚 %s #%d", p.Name, num)
 	}
 	jobID := s.jobs.Submit(jobSpec("deploy", title, p.Name, actor, "project:"+p.Name), func(run *jobRun) error {
-		return s.runDeploy(run, p.ID, depID, fromDeployment)
+		return s.runDeploy(run, p.ID, depID, trigger, fromDeployment)
 	})
 	_, _ = s.db.Exec(`UPDATE deployments SET job_id=? WHERE id=?`, jobID, depID)
 	return jobID, depID
@@ -92,7 +92,17 @@ func removeStaleInlineFiles(dir string, oldFiles, newFiles []projectFile) {
 	}
 }
 
-func (s *Server) runDeploy(run *jobRun, projectID, depID, fromDeployment int64) (err error) {
+func deployArchiveReason(trigger string, fromDeployment int64) string {
+	if fromDeployment > 0 || trigger == "rollback" {
+		return "rollback"
+	}
+	if trigger == "image_update" {
+		return "auto_update"
+	}
+	return "deploy"
+}
+
+func (s *Server) runDeploy(run *jobRun, projectID, depID int64, trigger string, fromDeployment int64) (err error) {
 	ctx := run.Context()
 	p, err := s.getProject(projectID)
 	if err != nil {
@@ -166,7 +176,7 @@ func (s *Server) runDeploy(run *jobRun, projectID, depID, fromDeployment int64) 
 			run.Logf("==> 已关闭部署维护页")
 		}()
 	}
-	if err := s.composeUp(run, p); err != nil {
+	if err := s.composeUp(run, p, deployArchiveReason(trigger, fromDeployment)); err != nil {
 		run.Logf("==> 部署失败：%v", err)
 		if !boolOr(p.Options.AutoRollback, true) || fromDeployment > 0 {
 			return err
@@ -182,7 +192,7 @@ func (s *Server) runDeploy(run *jobRun, projectID, depID, fromDeployment int64) 
 			return fmt.Errorf("%v；回滚失败：%v", err, rerr)
 		}
 		if _, rerr = s.prepareDeploy(run, p, st); rerr == nil {
-			rerr = s.composeUp(run, p)
+			rerr = s.composeUp(run, p, "rollback")
 		}
 		if rerr != nil {
 			return fmt.Errorf("%v；自动回滚也失败：%v", err, rerr)
@@ -383,7 +393,7 @@ func (s *Server) projectFiles(id int64) []projectFile {
 	return out
 }
 
-func (s *Server) composeUp(run *jobRun, p *Project) error {
+func (s *Server) composeUp(run *jobRun, p *Project, archiveReason string) error {
 	ctx := run.Context()
 	cp := s.composeProject(p, true)
 	cleanup := s.registryConfig(&cp)
@@ -396,6 +406,13 @@ func (s *Server) composeUp(run *jobRun, p *Project) error {
 	}
 	run.SetProgress(50)
 	run.Logf("==> 启动服务")
+	var staged []*stagedLogArchive
+	if archiveReason != "" {
+		staged = s.stageProjectLogs(ctx, p.Name, "", archiveReason)
+		defer func() {
+			s.finalizeProjectLogs(context.Background(), p.Name, staged, run)
+		}()
+	}
 	args := []string{"up", "-d", "--remove-orphans", "--build"}
 	args = append(args, composeWaitArgs(p.Options)...)
 	if err := cp.Run(ctx, run, args...); err != nil {

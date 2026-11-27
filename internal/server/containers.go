@@ -182,7 +182,22 @@ func (s *Server) handleContainerAction(w http.ResponseWriter, r *http.Request, u
 	case "start", "stop", "restart", "kill", "pause", "unpause":
 		err = s.dk.ContainerAction(r.Context(), c.Id, action)
 	case "remove":
+		staged := s.stageContainerLog(r.Context(), logArchiveSource{
+			Project:       c.Config.Labels["com.docker.compose.project"],
+			Service:       c.Config.Labels["com.docker.compose.service"],
+			ContainerID:   c.Id,
+			ContainerName: strings.TrimPrefix(c.Name, "/"),
+			Image:         c.Config.Image,
+			StartedAt:     parseDockerStartedAt(c.State.StartedAt),
+		}, "remove")
 		err = s.dk.RemoveContainer(r.Context(), c.Id, true)
+		if err == nil {
+			if cerr := s.commitStagedLog(staged); cerr == nil && staged != nil {
+				s.pruneLogArchives()
+			}
+		} else {
+			s.discardStagedLog(staged)
+		}
 	default:
 		return bad("未知操作")
 	}

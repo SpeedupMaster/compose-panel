@@ -77,6 +77,7 @@ func TestBuildProjectAction(t *testing.T) {
 						Args:          []string{"up", "-d", "--force-recreate", "--remove-orphans", "--wait", "--wait-timeout", "180"},
 						ProgressAfter: 100,
 						DumpUnhealthy: true,
+						ArchiveReason: "recreate",
 					},
 				},
 			},
@@ -100,6 +101,7 @@ func TestBuildProjectAction(t *testing.T) {
 						Args:          []string{"up", "-d", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "60", "web"},
 						ProgressAfter: 100,
 						DumpUnhealthy: true,
+						ArchiveReason: "recreate",
 					},
 				},
 			},
@@ -123,6 +125,7 @@ func TestBuildProjectAction(t *testing.T) {
 						Args:          []string{"up", "-d", "--force-recreate", "--no-deps", "worker"},
 						ProgressAfter: 100,
 						DumpUnhealthy: true,
+						ArchiveReason: "recreate",
 					},
 				},
 			},
@@ -159,7 +162,7 @@ func TestBuildProjectAction(t *testing.T) {
 			want: projectActionPlan{
 				Title: "下线 e2e-web",
 				Steps: []projectActionStep{
-					{Args: []string{"down", "--remove-orphans"}},
+					{Args: []string{"down", "--remove-orphans"}, ArchiveReason: "down"},
 				},
 			},
 		},
