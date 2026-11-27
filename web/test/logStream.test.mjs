@@ -3,9 +3,13 @@ import assert from 'node:assert/strict'
 import {
   advanceLogCursor,
   archiveReasonLabel,
+  archiveTargetKey,
+  archiveTargets,
   extractLogTimestamp,
+  filterArchivesByTarget,
   formatArchiveOption,
   formatLogCursor,
+  nextArchiveAfterDelete,
   shouldResumeLiveLogs,
   stripDockerTimestamp,
 } from '../src/components/logStream.ts'
@@ -96,4 +100,40 @@ test('archiveReasonLabel, formatArchiveOption, and stripDockerTimestamp', () => 
 
   assert.equal(stripDockerTimestamp('2026-11-27T02:51:13.123456789Z hello'), 'hello')
   assert.equal(stripDockerTimestamp('no-timestamp line'), 'no-timestamp line')
+})
+
+test('archiveTargetKey, archiveTargets, filterArchivesByTarget, and nextArchiveAfterDelete', () => {
+  const mk = (id, project, service, containerName) => ({
+    id,
+    project,
+    service,
+    containerId: 'cid-' + id,
+    containerName,
+    image: 'img:1',
+    reason: 'deploy',
+    startedAt: 100,
+    archivedAt: 200,
+    sizeBytes: 100,
+    rawBytes: 300,
+    lineCount: 10,
+    truncated: false,
+  })
+  const list = [
+    mk('cla_1', 'proj-a', 'web', 'proj-a-web-1'),
+    mk('cla_2', 'proj-b', 'web', 'proj-b-web-1'),
+    mk('cla_3', '', '', 'standalone-1'),
+  ]
+
+  // Project-scoped target key omits project name; global view includes project prefix to distinguish same service names.
+  assert.equal(archiveTargetKey(list[0], false), 'web')
+  assert.equal(archiveTargetKey(list[0], true), 'proj-a/web')
+  assert.equal(archiveTargetKey(list[2], true), 'standalone-1')
+
+  assert.deepEqual(archiveTargets(list, true), ['proj-a/web', 'proj-b/web', 'standalone-1'])
+  assert.deepEqual(filterArchivesByTarget(list, 'proj-b/web', true).map((a) => a.id), ['cla_2'])
+  assert.deepEqual(filterArchivesByTarget(list, '', true).map((a) => a.id), ['cla_1', 'cla_2', 'cla_3'])
+
+  assert.equal(nextArchiveAfterDelete(list, 'cla_1', 'cla_1'), 'cla_2')
+  assert.equal(nextArchiveAfterDelete(list, 'cla_2', 'cla_1'), 'cla_1')
+  assert.equal(nextArchiveAfterDelete([list[0]], 'cla_1', 'cla_1'), '')
 })

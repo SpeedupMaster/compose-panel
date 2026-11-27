@@ -101,8 +101,20 @@ export function formatArchiveShortTime(tsSec: number): string {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
-export function formatArchiveOption(a: LogArchiveItem, includeTarget = false): string {
-  const target = a.service || a.containerName
+export function archiveTargetKey(a: LogArchiveItem, showProject = false): string {
+  const leaf = a.service || a.containerName
+  if (showProject && a.project) {
+    return `${a.project}/${leaf}`
+  }
+  return leaf
+}
+
+export function archiveTargets(archives: LogArchiveItem[], showProject = false): string[] {
+  return [...new Set(archives.map((a) => archiveTargetKey(a, showProject)).filter(Boolean))].sort((a, b) => a.localeCompare(b))
+}
+
+export function formatArchiveOption(a: LogArchiveItem, includeTarget = false, showProject = false): string {
+  const target = archiveTargetKey(a, showProject)
   const prefix = includeTarget && target ? `${target} · ` : ''
   return `${prefix}${archiveReasonLabel(a.reason)} · ${formatArchiveShortTime(a.archivedAt)}（${a.lineCount} 行）`
 }
@@ -111,9 +123,9 @@ export function stripDockerTimestamp(line: string): string {
   return line.replace(/^\d{4}-\d\d-\d\dT[\d:.]+(?:Z|[+-]\d\d:\d\d)\s?/, '')
 }
 
-export function filterArchivesByTarget(archives: LogArchiveItem[], target: string): LogArchiveItem[] {
+export function filterArchivesByTarget(archives: LogArchiveItem[], target: string, showProject = false): LogArchiveItem[] {
   if (!target) return archives
-  return archives.filter((a) => (a.service || a.containerName) === target)
+  return archives.filter((a) => archiveTargetKey(a, showProject) === target)
 }
 
 export function nextArchiveAfterDelete(archives: LogArchiveItem[], deletedId: string, currentId: string): string {

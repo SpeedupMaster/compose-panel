@@ -5,6 +5,8 @@ import { useCan } from '../auth'
 import { Card, Combobox, ComboOption, Confirm, Empty, ErrorBox, Field, Icon, Loading, Modal, Page, Status, Tabs, useLoad, useToast } from '../components/ui'
 import { portsText } from '../components/shared'
 import { FileBrowser } from '../components/files'
+import { LogArchivesModal } from '../components/LogArchivesModal'
+import type { LogArchiveItem } from '../components/logStream'
 import { MobileCard, ResponsiveTable } from '../components/ResponsiveList'
 
 type Tab = 'containers' | 'images' | 'volumes' | 'networks' | 'registries'
@@ -93,13 +95,22 @@ export default function DockerResources() {
 
 function Containers() {
   const { data, error } = useLoad(() => get<any[]>('/containers'), [], 10000)
+  const { data: logArchives, reload: reloadLogArchives } = useLoad(() => get<LogArchiveItem[]>('/log-archives'), [], 30000)
   const nav = useNavigate()
   const [q, setQ] = useState('')
+  const [showArchives, setShowArchives] = useState(false)
   if (!data) return error ? <ErrorBox error={error} /> : <Loading />
   const list = data.filter((c) => !q || c.name.includes(q) || c.image.includes(q) || c.project.includes(q))
   return (
     <section className="card">
-      <div className="card-head"><input className="input filter-input" placeholder="搜索容器、镜像、项目" aria-label="搜索容器" value={q} onChange={(e) => setQ(e.target.value)} /></div>
+      <div className="card-head">
+        <input className="input filter-input" placeholder="搜索容器、镜像、项目" aria-label="搜索容器" value={q} onChange={(e) => setQ(e.target.value)} />
+        {logArchives && logArchives.length > 0 && (
+          <button className="btn btn-sm" onClick={() => setShowArchives(true)}>
+            <Icon name="logs" size={14} />历史日志 ({logArchives.length})
+          </button>
+        )}
+      </div>
       <ResponsiveTable
         table={
           <div className="table-wrap">
@@ -139,6 +150,15 @@ function Containers() {
           )
         })}
       />
+      {showArchives && (
+        <LogArchivesModal
+          title="容器历史日志归档"
+          archives={logArchives || []}
+          showProject
+          onClose={() => setShowArchives(false)}
+          onChanged={reloadLogArchives}
+        />
+      )}
     </section>
   )
 }

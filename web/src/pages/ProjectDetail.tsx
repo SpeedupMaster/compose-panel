@@ -8,6 +8,8 @@ import { MobileCard, ResponsiveTable, joinInline } from '../components/Responsiv
 import { portsText, sourceName, triggerName } from '../components/shared'
 import { CronTasks, ImagesTab, SaveTemplateModal } from './ProjectExtras'
 import { ProjectMetrics } from '../components/charts'
+import { LogArchivesModal } from '../components/LogArchivesModal'
+import type { LogArchiveItem } from '../components/logStream'
 
 type Tab = 'overview' | 'metrics' | 'deployments' | 'config' | 'files' | 'images' | 'cron' | 'settings'
 
@@ -115,6 +117,12 @@ function OverviewTab({ data, onAction, onRecreate }: { data: any; onAction: (a: 
   const { data: stats } = useLoad(() => get<Record<string, any>>('/containers/stats'), [], 10000)
   const p = data.project
   const isDB = p.kind === 'database'
+  const { data: logArchives, reload: reloadLogArchives } = useLoad(
+    () => get<LogArchiveItem[]>(`/projects/${p.id}/log-archives`),
+    [p.id],
+    30000,
+  )
+  const [showArchives, setShowArchives] = useState(false)
   return (
     <>
       <div className="grid">
@@ -139,7 +147,17 @@ function OverviewTab({ data, onAction, onRecreate }: { data: any; onAction: (a: 
           {p.source === 'git' && <span className="label mono" style={{ overflowWrap: 'anywhere' }}>{p.gitUrl} @ {p.gitBranch}</span>}
         </div>
       </div>
-      <Card title="容器" pad={false}>
+      <Card
+        title="容器"
+        pad={false}
+        actions={
+          logArchives && logArchives.length > 0 ? (
+            <button className="btn btn-sm" onClick={() => setShowArchives(true)}>
+              <Icon name="logs" size={14} />历史日志 ({logArchives.length})
+            </button>
+          ) : undefined
+        }
+      >
         {data.containers.length === 0 ? (
           <Empty>还没有容器。点击「部署」启动这个项目。</Empty>
         ) : (
@@ -205,6 +223,14 @@ function OverviewTab({ data, onAction, onRecreate }: { data: any; onAction: (a: 
           />
         )}
       </Card>
+      {showArchives && (
+        <LogArchivesModal
+          title={`${p.name} · 历史日志归档`}
+          archives={logArchives || []}
+          onClose={() => setShowArchives(false)}
+          onChanged={reloadLogArchives}
+        />
+      )}
     </>
   )
 }
